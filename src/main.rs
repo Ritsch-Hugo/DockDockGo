@@ -1,6 +1,6 @@
 // Import des modules nécessaires
 use std::convert::Infallible; // Pour gérer les erreurs impossibles dans Hyper
-use std::path::Path;           // Gestion des chemins de fichiers
+//use std::path::Path;           // Gestion des chemins de fichiers
 use tokio::fs;                  // Accès aux fichiers de manière asynchrone
 use hyper::{Body, Request, Response, Server, StatusCode}; // Serveur et types HTTP
 use hyper::service::{make_service_fn, service_fn};        // Création de services Hyper
@@ -45,6 +45,7 @@ async fn proxy(req: Request<Body>, client: Client) -> Result<Response<Body>> {
     // Vérifie si le fichier existe déjà en cache
     if fs::metadata(&cache_file).await.is_ok() {
         let data = fs::read(&cache_file).await?;   // Lecture du cache
+        println!("En Cache");
         return Ok(Response::new(Body::from(data))); // Renvoie directement au client
     }
 
