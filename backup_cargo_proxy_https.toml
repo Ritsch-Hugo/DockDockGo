@@ -1,0 +1,23 @@
+[package]
+name = "docker_proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serveur HTTP
+hyper = { version = "0.14", features = ["full"] }
+
+# Client HTTP pour contacter Docker Hub
+reqwest = { version = "0.11", features = ["json", "gzip", "brotli", "deflate", "rustls-tls"] }
+
+# Sérialisation JSON
+serde = { version = "1", features = ["derive"] }
+
+# Gestion propre d'erreurs
+anyhow = "1"
+
+# Utilitaires pour fichiers (nécessaire pour tokio::fs)
+tokio-util = "0.7"

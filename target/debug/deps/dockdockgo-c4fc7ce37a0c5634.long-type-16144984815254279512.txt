@@ -1,0 +1,1 @@
+impl Iterator<Item = Result<rustls_pki_types::CertificateDer<'static>, std::io::Error>> + '_

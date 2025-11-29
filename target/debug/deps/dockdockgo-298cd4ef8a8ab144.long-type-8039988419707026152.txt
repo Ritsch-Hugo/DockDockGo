@@ -1,0 +1,1 @@
+std::iter::Map<std::slice::Iter<'_, TrustAnchor<'_>>, {closure@src/main.rs:155:51: 155:55}>

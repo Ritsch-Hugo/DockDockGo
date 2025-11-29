@@ -1,0 +1,7 @@
+/home/camille/Bureau/Master_Projet_DockDockGo/DockDockGo/target/debug/deps/webpki_roots-f5856a91bcb3941d.d: /home/camille/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webpki-roots-1.0.4/src/lib.rs
+
+/home/camille/Bureau/Master_Projet_DockDockGo/DockDockGo/target/debug/deps/libwebpki_roots-f5856a91bcb3941d.rlib: /home/camille/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webpki-roots-1.0.4/src/lib.rs
+
+/home/camille/Bureau/Master_Projet_DockDockGo/DockDockGo/target/debug/deps/libwebpki_roots-f5856a91bcb3941d.rmeta: /home/camille/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webpki-roots-1.0.4/src/lib.rs
+
+/home/camille/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webpki-roots-1.0.4/src/lib.rs:

@@ -1,1 +1,1 @@
-/home/camille/Bureau/Master_Projet_DockDockGo/DocDockGo/target/debug/app: /home/camille/Bureau/Master_Projet_DockDockGo/DocDockGo/src/main.rs
+/home/camille/Bureau/Master_Projet_DockDockGo/DockDockGo/target/debug/app: /home/camille/Bureau/Master_Projet_DockDockGo/DockDockGo/src/main.rs

@@ -1,8 +1,11 @@
+//Ce code ne gère pas les tunels HTTPS : CONNECT
+
 // Import des modules nécessaires
 use std::convert::Infallible; // Pour gérer les erreurs impossibles dans Hyper
 use std::path::Path;           // Gestion des chemins de fichiers
 use tokio::fs;                  // Accès aux fichiers de manière asynchrone
 use hyper::{Body, Request, Response, Server, StatusCode}; // Serveur et types HTTP
+use hyper::header::{CONTENT_TYPE};
 use hyper::service::{make_service_fn, service_fn};        // Création de services Hyper
 use reqwest::Client;            // Client HTTP pour appeler Docker Hub
 use anyhow::Result;             // Gestion simplifiée des erreurs
@@ -11,11 +14,26 @@ use serde::Deserialize;         // Pour désérialiser du JSON
 // URL du registre Docker officiel
 static UPSTREAM: &str = "https://registry-1.docker.io";
 
+struct Scan_images_struct {
+    image: String,
+    scan_is_done: bool,
+}
+fn is_scanned(repo: &str) -> bool {
+    // TODO: Remplacer par vrai contrôle du scan
+    true 
+}
+
 // Fonction pour générer un chemin de fichier de cache à partir d'une URL
 fn cache_path(path: &str) -> String {
     // Supprime le '/' initial et remplace tous les '/' par '_'
     // Exemple: /v2/library/hello-world → cache/v2_library_hello-world
     format!("cache/{}", path.trim_start_matches('/').replace("/", "_"))
+}
+
+fn quarantaine_path(path: &str) -> String {
+    // Supprime le '/' initial et remplace tous les '/' par '_'
+    // Exemple: /v2/library/hello-world → quarantaine/v2_library_hello-world
+    format!("quarantaine/{}", path.trim_start_matches('/').replace("/", "_"))
 }
 
 // Structure pour désérialiser la réponse JSON du token Docker
@@ -38,48 +56,75 @@ async fn get_docker_token(client: &Client, repo: &str) -> Result<String> {
 }
 
 // Fonction asynchrone qui gère une requête entrante et agit comme un proxy
-async fn proxy(req: Request<Body>, client: Client) -> Result<Response<Body>> {
-    let path = req.uri().path();           // Récupère le chemin demandé par le client
-    let cache_file = cache_path(path);     // Génère le chemin de fichier de cache
 
-    // Vérifie si le fichier existe déjà en cache
+pub async fn proxy(req: Request<Body>, client: Client) -> Result<Response<Body>> {
+
+    
+    let path = req.uri().path();
+    let cache_file = cache_path(path);
+    let quarantaine_file = quarantaine_path(path);
+
+    // 1️⃣ Si l'image est en cache, on renvoie directement
     if fs::metadata(&cache_file).await.is_ok() {
-        let data = fs::read(&cache_file).await?;   // Lecture du cache
-        return Ok(Response::new(Body::from(data))); // Renvoie directement au client
+        let data = fs::read(&cache_file).await?;
+        return Ok(Response::new(Body::from(data)));
     }
 
-    // Extraction du repository depuis l'URL
+    // 2️⃣ Extraction du repository (ex: library/hello-world)
     let repo = path
-        .trim_start_matches("/v2/")          // Supprime le préfixe "/v2/"
-        .split('/')                          // Sépare par '/'
-        .take(2)                             // Prend les deux premiers segments (ex: library/hello-world)
+        .trim_start_matches("/v2/")
+        .split('/')
+        .take(2)
         .collect::<Vec<_>>()
         .join("/");
 
-    // Récupération du token Docker pour ce repository
-    let token = get_docker_token(&client, &repo).await?;
+    println!("Repository demandé : {}", repo);
 
-    // Construction de l'URL complète vers Docker Hub
-    let url = format!("{}{}", UPSTREAM, path);
-    println!("Proxy vers : {}", url);        // Affiche la redirection dans la console
+    // 3️⃣ Vérifie si l'image a été scannée
+    if path.contains("/manifests/") || path.contains("/blobs/") || path.contains("/tags/list") || path.contains("/v2/")
+    {
 
-    // Appel HTTP vers Docker Hub avec authentification Bearer
-    let resp = client
-        .get(&url)
-        .bearer_auth(token)
-        .send()
-        .await?;
+        if !is_scanned(&repo) {
+            println!("L'image {} n'a pas encore été scannée.", repo);
 
-    let bytes = resp.bytes().await?; // Lecture des données brutes
+            // Crée le dossier quarantaine si inexistant et y écrit le nom de l'image
+            fs::create_dir_all("quarantaine").await.ok();
+            fs::write(&quarantaine_file, repo.as_bytes()).await?;
+            println!("L'image {} a été placée en quarantaine.", repo);
 
-    // Mise en cache seulement si ce n'est pas une réponse d'erreur JSON
-    if !bytes.starts_with(b"{\"errors\"") {
-        fs::create_dir_all("cache").await.ok();  // Crée le dossier cache si inexistant
-        fs::write(&cache_file, &bytes).await?;   // Écrit le fichier dans le cache
+            // Retour immédiat au client Docker
+            let resp = Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("Image en quarantaine, en attente de scan"))
+                .unwrap();
+
+
+            return Ok(Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"errors":[{"code":"FORBIDDEN","message":"Image en quarantaine, pull impossible"}]}"#))
+                .unwrap());
+
+        }
     }
 
-    Ok(Response::new(Body::from(bytes)))        // Retourne la réponse au client
+    // 4️⃣ Si scan terminé, on récupère le manifest ou blob depuis Docker Hub
+    let token = get_docker_token(&client, &repo).await?;
+    let url = format!("{}{}", UPSTREAM, path);
+    let resp = client.get(&url).bearer_auth(token).send().await?;
+    let bytes = resp.bytes().await?;
+
+    // 5️⃣ Mise en cache si ce n'est pas une erreur
+    if !bytes.starts_with(b"{\"errors\"") {
+        fs::create_dir_all("cache").await.ok();
+        fs::write(&cache_file, &bytes).await?;
+    }
+
+    Ok(Response::new(Body::from(bytes)))
 }
+
+
+
 
 // Fonction principale qui lance le serveur Hyper asynchrone
 #[tokio::main]
@@ -94,6 +139,23 @@ async fn main() -> Result<()> {
                 let client = client.clone();
                 async move {
                     // Appelle la fonction proxy pour gérer la requête
+                    //println!("Connexion entrante | req : {:?}", req);
+
+
+                    println!("--- Nouvelle requête ---\n");
+
+                    println!("Method       : {:?}", req.method());
+                    println!("URI          : {:?}", req.uri());
+                    println!("client addr : {:?}", req.extensions().get::<hyper::server::conn::AddrStream>());
+                    println!("Version      : {:?}", req.version()); // HTTP/1.1, HTTP/2
+                    println!("Headers      : {:?}", req.headers()); // tous les headers
+                    println!("Host         : {:?}", req.headers().get("host"));
+                    println!("Content-Type : {:?}", req.headers().get("content-type"));
+                    println!("User-Agent   : {:?}", req.headers().get("user-agent"));
+                    println!("Authorization: {:?}", req.headers().get("authorization"));
+                    println!("Cookies      : {:?}", req.headers().get("cookie"));
+
+
                     match proxy(req, client).await {
                         Ok(resp) => Ok::<_, Infallible>(resp), // Renvoie la réponse si succès
                         Err(e) => {                            // Gestion d'erreurs
