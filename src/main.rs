@@ -1,118 +1,233 @@
-// Import des modules nécessaires
-use std::convert::Infallible; // Pour gérer les erreurs impossibles dans Hyper
-//use std::path::Path;           // Gestion des chemins de fichiers
-use tokio::fs;                  // Accès aux fichiers de manière asynchrone
-use hyper::{Body, Request, Response, Server, StatusCode}; // Serveur et types HTTP
-use hyper::service::{make_service_fn, service_fn};        // Création de services Hyper
-use reqwest::Client;            // Client HTTP pour appeler Docker Hub
-use anyhow::Result;             // Gestion simplifiée des erreurs
-use serde::Deserialize;         // Pour désérialiser du JSON
+use std::convert::Infallible;
 
-// URL du registre Docker officiel
-static UPSTREAM: &str = "https://registry-1.docker.io";
+use anyhow::Result;
+use hyper::{
+    service::{make_service_fn, service_fn},
+    upgrade::Upgraded,
+    Body, Method, Request, Response, Server, StatusCode,
+};
+use reqwest::Client;
+use tokio::{
+    io::{self, AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
-// Fonction pour générer un chemin de fichier de cache à partir d'une URL
-fn cache_path(path: &str) -> String {
-    // Supprime le '/' initial et remplace tous les '/' par '_'
-    // Exemple: /v2/library/hello-world → cache/v2_library_hello-world
-    format!("cache/{}", path.trim_start_matches('/').replace("/", "_"))
-}
+/// Décide si on autorise un CONNECT vers host:port
+fn is_allowed_connect(authority: &str) -> bool {
+    println!("[POLICY] CONNECT vers {}", authority);
 
-// Structure pour désérialiser la réponse JSON du token Docker
-#[derive(Deserialize)]
-struct TokenResponse {
-    token: String, // Le token JWT retourné par Docker
-}
-
-// Fonction asynchrone pour récupérer un token Docker Hub pour un repo spécifique
-async fn get_docker_token(client: &Client, repo: &str) -> Result<String> {
-    // Construction de l'URL d'authentification Docker
-    let url = format!(
-        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
-        repo
-    );
-
-    // Requête GET vers Docker Auth et conversion JSON en TokenResponse
-    let resp: TokenResponse = client.get(&url).send().await?.json().await?;
-    Ok(resp.token) // Retour du token
-}
-
-// Fonction asynchrone qui gère une requête entrante et agit comme un proxy
-async fn proxy(req: Request<Body>, client: Client) -> Result<Response<Body>> {
-    let path = req.uri().path();           // Récupère le chemin demandé par le client
-    let cache_file = cache_path(path);     // Génère le chemin de fichier de cache
-
-    // Vérifie si le fichier existe déjà en cache
-    if fs::metadata(&cache_file).await.is_ok() {
-        let data = fs::read(&cache_file).await?;   // Lecture du cache
-        println!("En Cache");
-        return Ok(Response::new(Body::from(data))); // Renvoie directement au client
+    // Bloquer Docker Hub
+    if authority.starts_with("registry-1.docker.io:443")
+        || authority.starts_with("index.docker.io:443")
+        || authority.starts_with("auth.docker.io:443")
+    {
+        println!("[POLICY] BLOQUÉ {}", authority);
+        return false;
     }
 
-    // Extraction du repository depuis l'URL
-    let repo = path
-        .trim_start_matches("/v2/")          // Supprime le préfixe "/v2/"
-        .split('/')                          // Sépare par '/'
-        .take(2)                             // Prend les deux premiers segments (ex: library/hello-world)
-        .collect::<Vec<_>>()
-        .join("/");
-
-    // Récupération du token Docker pour ce repository
-    let token = get_docker_token(&client, &repo).await?;
-
-    // Construction de l'URL complète vers Docker Hub
-    let url = format!("{}{}", UPSTREAM, path);
-    println!("Proxy vers : {}", url);        // Affiche la redirection dans la console
-
-    // Appel HTTP vers Docker Hub avec authentification Bearer
-    let resp = client
-        .get(&url)
-        .bearer_auth(token)
-        .send()
-        .await?;
-
-    let bytes = resp.bytes().await?; // Lecture des données brutes
-
-    // Mise en cache seulement si ce n'est pas une réponse d'erreur JSON
-    if !bytes.starts_with(b"{\"errors\"") {
-        fs::create_dir_all("cache").await.ok();  // Crée le dossier cache si inexistant
-        fs::write(&cache_file, &bytes).await?;   // Écrit le fichier dans le cache
-    }
-
-    Ok(Response::new(Body::from(bytes)))        // Retourne la réponse au client
+    true
 }
 
-// Fonction principale qui lance le serveur Hyper asynchrone
+
+/// Tunnel TCP bidirectionnel pour CONNECT
+async fn tunnel(mut upgraded: Upgraded, addr: String) -> io::Result<()> {
+    let mut server = TcpStream::connect(&addr).await?;
+
+    let (mut client_read, mut client_write) = tokio::io::split(upgraded);
+    let (mut server_read, mut server_write) = tokio::io::split(server);
+
+    let client_to_server = tokio::spawn(async move {
+        io::copy(&mut client_read, &mut server_write).await?;
+        server_write.shutdown().await
+    });
+
+    let server_to_client = tokio::spawn(async move {
+        io::copy(&mut server_read, &mut client_write).await?;
+        client_write.shutdown().await
+    });
+
+    let _ = tokio::try_join!(client_to_server, server_to_client);
+    Ok(())
+}
+
+/// Forward d'une requête HTTP "normale" (non CONNECT)
+async fn forward_http(req: Request<Body>, client: Client) -> Response<Body> {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let headers = req.headers().clone();
+
+    // Construire l'URL complète pour reqwest
+    let url = if uri.scheme().is_some() && uri.authority().is_some() {
+        // Forme absolue déjà (proxy-style): http://example.com/path?query
+        uri.to_string()
+    } else {
+        // Forme origin: /path?query + Host: header
+        let host = match headers.get("host") {
+            Some(h) => match h.to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from("Invalid Host header"))
+                        .unwrap()
+                }
+            },
+            None => {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from("Missing Host header"))
+                    .unwrap()
+            }
+        };
+
+        let path_and_query = uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/");
+
+        format!("http://{}{}", host, path_and_query)
+    };
+
+    println!("[HTTP] {} {}", method, url);
+
+    // Récupérer le body de la requête
+    let body_bytes = match hyper::body::to_bytes(req.into_body()).await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[HTTP] Erreur lecture body client: {}", e);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from("Erreur lecture body client"))
+                .unwrap();
+        }
+    };
+
+    // Construire la requête reqwest
+    let mut rb = client.request(method.clone(), &url);
+
+    for (name, value) in headers.iter() {
+        // On évite de relayer certains headers de connexion
+        if name.as_str().eq_ignore_ascii_case("host")
+            || name.as_str().eq_ignore_ascii_case("connection")
+            || name.as_str().eq_ignore_ascii_case("proxy-connection")
+        {
+            continue;
+        }
+        rb = rb.header(name, value);
+    }
+
+    if !body_bytes.is_empty() {
+        rb = rb.body(body_bytes);
+    }
+
+    // Envoyer la requête upstream
+    let upstream_resp = match rb.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[HTTP] Erreur requête upstream: {}", e);
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::from("Erreur requête upstream"))
+                .unwrap();
+        }
+    };
+
+    let status = upstream_resp.status();
+    let upstream_headers = upstream_resp.headers().clone();
+
+    let bytes = match upstream_resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[HTTP] Erreur lecture body upstream: {}", e);
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::from("Erreur lecture réponse upstream"))
+                .unwrap();
+        }
+    };
+
+    // Construire la réponse pour le client
+    let mut builder = Response::builder().status(status);
+
+    // On propage quelques headers intéressants
+    if let Some(ct) = upstream_headers.get("content-type") {
+        builder = builder.header("content-type", ct);
+    }
+    if let Some(cl) = upstream_headers.get("content-length") {
+        builder = builder.header("content-length", cl);
+    }
+
+    builder.body(Body::from(bytes)).unwrap()
+}
+
+async fn handle(req: Request<Body>, client: Client) -> Response<Body> {
+    let method = req.method().clone();
+
+    // 1) Gestion du CONNECT (HTTPS, typiquement Docker -> registry-1.docker.io:443)
+    if method == Method::CONNECT {
+        let authority = match req.uri().authority() {
+            Some(a) => a.as_str().to_string(),
+            None => {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from("CONNECT sans authority host:port"))
+                    .unwrap();
+            }
+        };
+
+        println!("[CONNECT] {}", authority);
+
+        // Vérifier la politique
+        if !is_allowed_connect(&authority) {
+            println!("[CONNECT] BLOQUÉ {}", authority);
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("Connect bloqué par la politique"))
+                .unwrap();
+        }
+
+        // On démarre le tunnel dans une tâche séparée
+        tokio::spawn(async move {
+            match hyper::upgrade::on(req).await {
+                Ok(upgraded) => {
+                    if let Err(e) = tunnel(upgraded, authority).await {
+                        eprintln!("[CONNECT] Erreur tunnel: {}", e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[CONNECT] Erreur upgrade: {}", e);
+                }
+            }
+        });
+
+        // Réponse 200 Connection Established
+        return Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap();
+    }
+
+    // 2) Autres méthodes HTTP (GET/POST...) → forward HTTP
+    forward_http(req, client).await
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let client = Client::new(); // Création d'un client HTTP réutilisable
+    let client = Client::new();
 
-    // Création du service pour chaque connexion entrante
     let make_svc = make_service_fn(move |_| {
-        let client = client.clone(); // Clone du client pour chaque service
+        let client = client.clone();
         async move {
             Ok::<_, Infallible>(service_fn(move |req| {
                 let client = client.clone();
-                async move {
-                    // Appelle la fonction proxy pour gérer la requête
-                    match proxy(req, client).await {
-                        Ok(resp) => Ok::<_, Infallible>(resp), // Renvoie la réponse si succès
-                        Err(e) => {                            // Gestion d'erreurs
-                            eprintln!("Erreur: {}", e);        // Affiche l'erreur dans la console
-                            Ok(Response::builder()             // Retourne un HTTP 500 au client
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Body::from("Erreur serveur"))
-                                .unwrap())
-                        }
-                    }
-                }
+                async move { Ok::<_, Infallible>(handle(req, client).await) }
             }))
         }
     });
 
-    let addr = ([0, 0, 0, 0], 5000).into(); // Adresse d'écoute : port 5000 sur toutes les interfaces
-    println!("✅ Proxy Docker AVEC authentification sur http://{}", addr);
+    let addr = ([0, 0, 0, 0], 5000).into();
+    println!("✅ Proxy HTTP(S) en écoute sur http://{}", addr);
 
-    Server::bind(&addr).serve(make_svc).await?; // Démarre le serveur Hyper
+    Server::bind(&addr).serve(make_svc).await?;
     Ok(())
 }
