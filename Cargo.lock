@@ -164,7 +164,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "docker_http_proxy"
+name = "docker_proxy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
