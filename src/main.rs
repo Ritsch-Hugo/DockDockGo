@@ -1,100 +1,101 @@
-use std::convert::Infallible;
+use std::{convert::Infallible, fs::File, io::BufReader, sync::Arc};
 
 use anyhow::Result;
 use hyper::{
-    service::{make_service_fn, service_fn},
-    upgrade::Upgraded,
-    Body, Method, Request, Response, Server, StatusCode,
+    body::to_bytes,
+    service::service_fn,
+    Body, Method, Request, Response, StatusCode,
 };
+use hyper::server::conn::Http;
 use reqwest::Client;
-use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
+use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
-/// Décide si on autorise un CONNECT vers host:port
-fn is_allowed_connect(authority: &str) -> bool {
-    println!("[POLICY] CONNECT vers {}", authority);
+// URL réel du registry Docker
+static UPSTREAM: &str = "https://registry-1.docker.io";
 
-    // Bloquer Docker Hub
-    if authority.starts_with("registry-1.docker.io:443")
-        || authority.starts_with("index.docker.io:443")
-        || authority.starts_with("auth.docker.io:443")
-    {
-        println!("[POLICY] BLOQUÉ {}", authority);
-        return false;
-    }
+/// Décision de sécurité sur la réponse upstream (manifest/blobs)
+fn is_allowed(path: &str, body: &[u8]) -> bool {
+    println!("[POLICY] Analyse de {}", path);
+
+    // Exemple 1 : bloquer TOUT pour test
+    // return false;
+
+    // Exemple 2 : bloquer tout sauf alpine
+    // if !path.contains("library/alpine") {
+    //     return false;
+    // }
+
+    // TODO: ici tu peux parser le manifest, regarder les couches, etc.
+    let _ = body; // pour éviter le warning pour l'instant
 
     true
 }
 
-
-/// Tunnel TCP bidirectionnel pour CONNECT
-async fn tunnel(mut upgraded: Upgraded, addr: String) -> io::Result<()> {
-    let mut server = TcpStream::connect(&addr).await?;
-
-    let (mut client_read, mut client_write) = tokio::io::split(upgraded);
-    let (mut server_read, mut server_write) = tokio::io::split(server);
-
-    let client_to_server = tokio::spawn(async move {
-        io::copy(&mut client_read, &mut server_write).await?;
-        server_write.shutdown().await
-    });
-
-    let server_to_client = tokio::spawn(async move {
-        io::copy(&mut server_read, &mut client_write).await?;
-        client_write.shutdown().await
-    });
-
-    let _ = tokio::try_join!(client_to_server, server_to_client);
-    Ok(())
+/// Charge un certificat X.509 (PEM)
+fn load_certs(path: &str) -> Result<Vec<Certificate>> {
+    let certfile = File::open(path)?;
+    let mut reader = BufReader::new(certfile);
+    let certs = certs(&mut reader)?
+        .into_iter()
+        .map(Certificate)
+        .collect();
+    Ok(certs)
 }
 
-/// Forward d'une requête HTTP "normale" (non CONNECT)
-async fn forward_http(req: Request<Body>, client: Client) -> Response<Body> {
+/// Charge une clé privée (PKCS8 ou RSA PEM)
+fn load_private_key(path: &str) -> Result<PrivateKey> {
+    let keyfile = File::open(path)?;
+    let mut reader = BufReader::new(keyfile);
+
+    // On essaie d'abord PKCS8
+    if let Ok(keys) = pkcs8_private_keys(&mut reader) {
+        if let Some(k) = keys.into_iter().next() {
+            return Ok(PrivateKey(k));
+        }
+    }
+
+    // On réouvre pour RSA
+    let keyfile = File::open(path)?;
+    let mut reader = BufReader::new(keyfile);
+    if let Ok(keys) = rsa_private_keys(&mut reader) {
+        if let Some(k) = keys.into_iter().next() {
+            return Ok(PrivateKey(k));
+        }
+    }
+
+    anyhow::bail!("Impossible de charger une clé privée depuis {}", path);
+}
+
+/// Handler d'une requête HTTP décodée par TLS
+async fn handle(req: Request<Body>, client: Client) -> Response<Body> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let headers = req.headers().clone();
 
-    // Construire l'URL complète pour reqwest
-    let url = if uri.scheme().is_some() && uri.authority().is_some() {
-        // Forme absolue déjà (proxy-style): http://example.com/path?query
-        uri.to_string()
-    } else {
-        // Forme origin: /path?query + Host: header
-        let host = match headers.get("host") {
-            Some(h) => match h.to_str() {
-                Ok(s) => s,
-                Err(_) => {
-                    return Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from("Invalid Host header"))
-                        .unwrap()
-                }
-            },
-            None => {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from("Missing Host header"))
-                    .unwrap()
-            }
-        };
+    let path = uri.path().to_string();
+    println!("[REQ] {} {}", method, path);
 
-        let path_and_query = uri
-            .path_and_query()
-            .map(|pq| pq.as_str())
-            .unwrap_or("/");
+    // On ne traite que /v2/... pour l'instant, le reste passe tel quel
+    if !path.starts_with("/v2/") {
+        println!("[INFO] Chemin hors /v2/, on passe tel quel");
+    }
 
-        format!("http://{}{}", host, path_and_query)
-    };
+    // Construction de l'URL complète vers le vrai registry
+    let path_and_query = uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
 
-    println!("[HTTP] {} {}", method, url);
+    let upstream_url = format!("{}{}", UPSTREAM, path_and_query);
 
-    // Récupérer le body de la requête
-    let body_bytes = match hyper::body::to_bytes(req.into_body()).await {
+    // Récupérer le body client (rarement utilisé par Docker en GET)
+    let body_bytes = match to_bytes(req.into_body()).await {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("[HTTP] Erreur lecture body client: {}", e);
+            eprintln!("[ERR] Lecture body client: {}", e);
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(Body::from("Erreur lecture body client"))
@@ -102,11 +103,11 @@ async fn forward_http(req: Request<Body>, client: Client) -> Response<Body> {
         }
     };
 
-    // Construire la requête reqwest
-    let mut rb = client.request(method.clone(), &url);
+    // Construire requête upstream avec reqwest
+    let mut rb = client.request(method.clone(), &upstream_url);
 
     for (name, value) in headers.iter() {
-        // On évite de relayer certains headers de connexion
+        // On filtre quelques headers de connexion
         if name.as_str().eq_ignore_ascii_case("host")
             || name.as_str().eq_ignore_ascii_case("connection")
             || name.as_str().eq_ignore_ascii_case("proxy-connection")
@@ -120,14 +121,15 @@ async fn forward_http(req: Request<Body>, client: Client) -> Response<Body> {
         rb = rb.body(body_bytes);
     }
 
-    // Envoyer la requête upstream
+    println!("[UP] → {}", upstream_url);
+
     let upstream_resp = match rb.send().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[HTTP] Erreur requête upstream: {}", e);
+            eprintln!("[ERR] requête upstream: {}", e);
             return Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from("Erreur requête upstream"))
+                .body(Body::from("Erreur requête vers registry-1.docker.io"))
                 .unwrap();
         }
     };
@@ -138,96 +140,96 @@ async fn forward_http(req: Request<Body>, client: Client) -> Response<Body> {
     let bytes = match upstream_resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("[HTTP] Erreur lecture body upstream: {}", e);
+            eprintln!("[ERR] lecture body upstream: {}", e);
             return Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from("Erreur lecture réponse upstream"))
+                .body(Body::from("Erreur lecture réponse registry"))
                 .unwrap();
         }
     };
 
-    // Construire la réponse pour le client
+    // Décision sécurité ici : on a le path + les octets de la réponse
+    if !is_allowed(&path, &bytes) {
+        println!("[POLICY] ❌ BLOQUÉ {}", path);
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::from("Image / ressource bloquée par la politique MITM"))
+            .unwrap();
+    }
+
+    // Si autorisé : on propage status + body + TOUS les headers utiles
     let mut builder = Response::builder().status(status);
 
-    // On propage quelques headers intéressants
-    if let Some(ct) = upstream_headers.get("content-type") {
-        builder = builder.header("content-type", ct);
+    // Propager tous les headers upstream, sauf quelques hop-by-hop
+    for (name, value) in upstream_headers.iter() {
+        if name == hyper::header::CONNECTION
+            || name == hyper::header::TRANSFER_ENCODING
+            || name.as_str().eq_ignore_ascii_case("keep-alive")
+            || name.as_str().eq_ignore_ascii_case("proxy-authenticate")
+            || name.as_str().eq_ignore_ascii_case("proxy-authorization")
+            || name.as_str().eq_ignore_ascii_case("te")
+            || name.as_str().eq_ignore_ascii_case("trailers")
+            || name.as_str().eq_ignore_ascii_case("upgrade")
+        {
+            continue;
+        }
+
+        builder = builder.header(name, value);
     }
-    if let Some(cl) = upstream_headers.get("content-length") {
-        builder = builder.header("content-length", cl);
-    }
+
+    println!("[POLICY] ✅ AUTORISÉ {}", path);
 
     builder.body(Body::from(bytes)).unwrap()
 }
 
-async fn handle(req: Request<Body>, client: Client) -> Response<Body> {
-    let method = req.method().clone();
-
-    // 1) Gestion du CONNECT (HTTPS, typiquement Docker -> registry-1.docker.io:443)
-    if method == Method::CONNECT {
-        let authority = match req.uri().authority() {
-            Some(a) => a.as_str().to_string(),
-            None => {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from("CONNECT sans authority host:port"))
-                    .unwrap();
-            }
-        };
-
-        println!("[CONNECT] {}", authority);
-
-        // Vérifier la politique
-        if !is_allowed_connect(&authority) {
-            println!("[CONNECT] BLOQUÉ {}", authority);
-            return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(Body::from("Connect bloqué par la politique"))
-                .unwrap();
-        }
-
-        // On démarre le tunnel dans une tâche séparée
-        tokio::spawn(async move {
-            match hyper::upgrade::on(req).await {
-                Ok(upgraded) => {
-                    if let Err(e) = tunnel(upgraded, authority).await {
-                        eprintln!("[CONNECT] Erreur tunnel: {}", e);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[CONNECT] Erreur upgrade: {}", e);
-                }
-            }
-        });
-
-        // Réponse 200 Connection Established
-        return Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::empty())
-            .unwrap();
-    }
-
-    // 2) Autres méthodes HTTP (GET/POST...) → forward HTTP
-    forward_http(req, client).await
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    let client = Client::new();
+    // ⚠️ adapte les chemins vers tes fichiers
+    let certs = load_certs("registry-1.docker.io.crt")?;
+    let key = load_private_key("registry-1.docker.io.key")?;
 
-    let make_svc = make_service_fn(move |_| {
+    let tls_config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+
+    let tls_config = Arc::new(tls_config);
+    let acceptor = TlsAcceptor::from(tls_config);
+
+    let listener = TcpListener::bind(("0.0.0.0", 443)).await?;
+    println!("✅ MITM Docker registry en écoute sur https://registry-1.docker.io:443");
+
+    // client HTTPS vers le vrai registry
+    let client = Client::builder()
+        .use_rustls_tls()
+        .build()?;
+
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        let acceptor = acceptor.clone();
         let client = client.clone();
-        async move {
-            Ok::<_, Infallible>(service_fn(move |req| {
+
+        tokio::spawn(async move {
+            println!("[CONN] Client {:?}", addr);
+            let tls_stream = match acceptor.accept(stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[ERR] handshake TLS: {}", e);
+                    return;
+                }
+            };
+
+            let service = service_fn(move |req| {
                 let client = client.clone();
                 async move { Ok::<_, Infallible>(handle(req, client).await) }
-            }))
-        }
-    });
+            });
 
-    let addr = ([0, 0, 0, 0], 5000).into();
-    println!("✅ Proxy HTTP(S) en écoute sur http://{}", addr);
-
-    Server::bind(&addr).serve(make_svc).await?;
-    Ok(())
+            if let Err(e) = Http::new()
+                .serve_connection(tls_stream, service)
+                .await
+            {
+                eprintln!("[ERR] serve_connection: {}", e);
+            }
+        });
+    }
 }
