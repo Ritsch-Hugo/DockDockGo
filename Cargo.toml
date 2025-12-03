@@ -1,23 +1,13 @@
 [package]
-name = "docker-mitm-proxy"
+name = "docker-mitm"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "0.14", features = ["full"] }
-reqwest = { version = "0.11", features = ["json", "gzip", "brotli", "deflate", "rustls-tls"] }
-serde = { version = "1", features = ["derive"] }
-anyhow = "1"
-
-# TLS MITM
-rcgen = "0.12"
-tokio-rustls = "0.24"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 rustls = "0.21"
+tokio-rustls = "0.24"
 rustls-pemfile = "1.0"
-
-# Debug TLS
-webpki = "0.22"
-base64 = "0.22"
-
-tokio-util = "0.7"
+anyhow = "1.0"
