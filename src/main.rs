@@ -16,23 +16,71 @@ use tokio_rustls::TlsAcceptor;
 // URL réel du registry Docker
 static UPSTREAM: &str = "https://registry-1.docker.io";
 
-/// Décision de sécurité sur la réponse upstream (manifest/blobs)
-fn is_allowed(path: &str, body: &[u8]) -> bool {
-    println!("[POLICY] Analyse de {}", path);
+const CONFIG_PATH: &str = "/tmp/docker-mitm.conf";
 
-    // Exemple 1 : bloquer TOUT pour test
-    // return false;
 
-    // Exemple 2 : bloquer tout sauf alpine
-    // if !path.contains("library/alpine") {
-    //     return false;
-    // }
+//==================PARTIE RECUP INFO DASHBOARD===========================
 
-    // TODO: ici tu peux parser le manifest, regarder les couches, etc.
-    let _ = body; // pour éviter le warning pour l'instant
-
+/// 1er caractère non-espace : '0' => false, sinon => true.
+fn parse_bool_from_str(s: &str) -> bool {
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        return ch != '0';
+    }
+    // si vide ou que des espaces, on considère "true"
     true
 }
+
+/// Lit le mode global dans /tmp/docker-mitm.conf.
+/// true = mode PASSANT, false = mode BLOQUANT.
+fn read_policy_toggle() -> bool {
+    if let Ok(content) = std::fs::read_to_string(CONFIG_PATH) {
+        parse_bool_from_str(&content)
+    } else {
+        // si pas de fichier -> par défaut on laisse passer
+        true
+    }
+}
+
+
+//============================================================================
+
+/// Décision de sécurité sur la réponse upstream (manifest/blobs)
+fn is_allowed(path: &str, body: &[u8]) -> bool {
+    // lire le mode global (mis à jour par script.rs)
+    let global_allowed = read_policy_toggle();
+
+    let mode_str = if global_allowed { "PASSANT" } else { "BLOQUANT" };
+    println!("[POLICY] Mode global = {mode_str}, path = {path}");
+
+    // si mode global BLOQUANT -> on bloque tout
+    if !global_allowed {
+        println!("[POLICY] -> BLOQUÉ (mode global)");
+        return false;
+    }
+
+    // Ici tu peux ajouter ta logique fine (par image, par repo, etc.)
+    // Exemple 1 : tout passer en mode PASSANT
+    let allowed = true;
+
+    // Exemple 2 : bloquer tout sauf alpine quand on est en mode PASSANT
+    // if !path.contains("library/alpine") {
+    //     allowed = false;
+    // }
+
+    let _ = body; // pour l'instant on ne s'en sert pas
+
+    if allowed {
+        println!("[POLICY] -> AUTORISÉ");
+    } else {
+        println!("[POLICY] -> BLOQUÉ (règle spécifique)");
+    }
+
+    allowed
+}
+
 
 /// Charge un certificat X.509 (PEM)
 fn load_certs(path: &str) -> Result<Vec<Certificate>> {
@@ -233,3 +281,4 @@ async fn main() -> Result<()> {
         });
     }
 }
+

@@ -11,3 +11,7 @@ rustls = "0.21"
 tokio-rustls = "0.24"
 rustls-pemfile = "1.0"
 anyhow = "1.0"
+
+[[bin]]
+name = "script"
+path = "src/script.rs"
