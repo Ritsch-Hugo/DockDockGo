@@ -1,0 +1,14 @@
+# Rust
+/target/
+
+# llama.cpp build artifacts
+/runtime/llama.cpp/build/
+/runtime/llama.cpp/*.o
+/runtime/llama.cpp/server
+/runtime/llama.cpp/main
+
+# Models (très important)
+runtime/models/
+
+# Env
+.env
