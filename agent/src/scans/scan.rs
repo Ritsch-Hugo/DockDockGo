@@ -1,10 +1,14 @@
+// Import de l'état global de l'agent.
 use crate::state::AgentState;
+
+// Import du résultat d'un scan.
 use crate::scans::result::ScanResult;
 
+// Définition du contrat commun à tous les scans.
 pub trait Scan {
-    /// Nom lisible du scan (pour logs/debug)
+    /// Retourne un nom lisible et stable pour identifier ce scan.
     fn name(&self) -> &'static str;
 
-    /// Exécute le scan et modifie l’état si nécessaire
+    /// Exécute le scan.
     fn run(&self, state: &mut AgentState) -> ScanResult;
 }

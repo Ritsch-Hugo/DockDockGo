@@ -1,4 +1,8 @@
+// Ils permettent de convertir automatiquement les structs/enums vers du JSON et inversement.
 use serde::{Deserialize, Serialize};
+
+// Value représente un JSON "brut" (objet, tableau, string, etc.)
+// On l'utilise aux frontières du système (LLM, API, MCP).
 use serde_json::Value;
 
 /// Etat global d'une analyse DockDockGo (1 run = 1 AgentState).
