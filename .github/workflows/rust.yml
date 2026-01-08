@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ "main", "dev_proxy_2" ]
+    branches: [ "dev_proxy_2" ]
   pull_request:
     branches: [ "main" ]
 
