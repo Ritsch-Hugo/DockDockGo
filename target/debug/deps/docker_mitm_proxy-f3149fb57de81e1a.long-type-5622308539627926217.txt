@@ -1,3 +1,0 @@
-&tokio_rustls::server::TlsStream<hyper::upgrade::Upgraded>
-&tokio_rustls::server::TlsStream<hyper::upgrade::Upgraded>: AsyncRead
-&tokio_rustls::server::TlsStream<hyper::upgrade::Upgraded>: AsyncWrite
