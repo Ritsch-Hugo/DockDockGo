@@ -1,0 +1,21 @@
+{
+  "meta": { "image_ref": "example/forbidden-bins:latest" },
+  "config": {
+    "user": "1000",
+    "env": {},
+    "labels": {
+      "org.opencontainers.image.source": "https://github.com/example/forbidden-bins",
+      "org.opencontainers.image.revision": "abc123"
+    },
+    "entrypoint": [],
+    "cmd": [],
+    "working_dir": null,
+    "exposed_ports": [],
+    "volumes": []
+  },
+  "fs_paths": [
+    "/usr/sbin/sshd",
+    "/bin/nc",
+    "/usr/bin/make"
+  ]
+}

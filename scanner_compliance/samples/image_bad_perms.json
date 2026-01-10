@@ -1,0 +1,20 @@
+{
+  "meta": { "image_ref": "example/bad-perms:latest" },
+  "config": {
+    "user": "1000",
+    "env": {},
+    "labels": {
+      "org.opencontainers.image.source": "https://github.com/example/bad-perms",
+      "org.opencontainers.image.revision": "abc123"
+    },
+    "entrypoint": [],
+    "cmd": [],
+    "working_dir": null,
+    "exposed_ports": [],
+    "volumes": []
+  },
+  "fs_entries": [
+    { "path": "/usr/bin/runme", "mode": 511, "kind": "file" },
+    { "path": "/usr/bin/passwd", "mode": 2541, "kind": "file" }
+  ]
+}
