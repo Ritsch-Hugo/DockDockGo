@@ -280,35 +280,33 @@ pub fn run_rules(image: &ImageData, rules: &[Box<dyn Rule>]) -> Report {
     }
 }
 
+fn load_image_from_json(path: &str) -> Result<ImageData, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {path}: {e}"))?;
+
+    serde_json::from_str::<ImageData>(&content)
+        .map_err(|e| format!("failed to parse JSON {path}: {e}"))
+}
+
+fn usage() -> String {
+    "Usage:\n  cargo run -- <input.json>\nExample:\n  cargo run -- samples/image_ok.json\n".to_string()
+}
+
 fn main() {
-    // Test en dur pour Step 3 (pas de samples pour l'instant)
-    let mut env = HashMap::new();
-    env.insert("APP_ENV".to_string(), "prod".to_string());
-    env.insert("API_TOKEN".to_string(), "supersecretvalue".to_string()); // => FAIL SensitiveEnvRule
+    let args: Vec<String> = std::env::args().collect();
 
-    let mut labels = HashMap::new();
-    labels.insert(
-        "org.opencontainers.image.source".to_string(),
-        "https://github.com/example/app".to_string(),
-    );
-    // revision manquant => WARN RequiredLabelsRule
+    if args.len() < 2 {
+        eprintln!("{}", usage());
+        std::process::exit(2);
+    }
 
-    let image = ImageData {
-        meta: ImageMeta {
-            image_ref: "example/app:1.0".to_string(),
-            digest: Some("sha256:deadbeef".to_string()),
-        },
-        config: ImageConfig {
-            user: Some("1000".to_string()), // PASS non-root
-            env,
-            labels,
-            entrypoint: vec!["/app/server".to_string()],
-            cmd: vec!["--port".to_string(), "8080".to_string()],
-            working_dir: Some("/app".to_string()),
-            exposed_ports: vec!["8080/tcp".to_string()],
-            volumes: vec![],
-        },
-        fs_paths: vec![],
+    let input_path = &args[1];
+    let image = match load_image_from_json(input_path) {
+        Ok(img) => img,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
     };
 
     let rules: Vec<Box<dyn Rule>> = vec![
@@ -321,4 +319,10 @@ fn main() {
 
     let json = serde_json::to_string_pretty(&report).expect("serialize report");
     println!("{json}");
+
+    // Exit code simple (utile plus tard en CI)
+    // 0 = aucun FAIL, 1 = au moins un FAIL
+    if report.summary.fail > 0 {
+        std::process::exit(1);
+    }
 }

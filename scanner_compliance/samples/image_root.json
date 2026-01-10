@@ -1,0 +1,17 @@
+{
+  "meta": { "image_ref": "example/root:latest" },
+  "config": {
+    "user": "root",
+    "env": { "APP_ENV": "prod" },
+    "labels": {
+      "org.opencontainers.image.source": "https://github.com/example/root",
+      "org.opencontainers.image.revision": "abc123"
+    },
+    "entrypoint": ["/app/server"],
+    "cmd": [],
+    "working_dir": "/app",
+    "exposed_ports": [],
+    "volumes": []
+  },
+  "fs_paths": []
+}

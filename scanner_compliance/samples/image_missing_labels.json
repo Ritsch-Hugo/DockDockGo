@@ -1,0 +1,14 @@
+{
+  "meta": { "image_ref": "example/nolabels:latest" },
+  "config": {
+    "user": "1000",
+    "env": { "APP_ENV": "prod" },
+    "labels": {},
+    "entrypoint": [],
+    "cmd": [],
+    "working_dir": null,
+    "exposed_ports": [],
+    "volumes": []
+  },
+  "fs_paths": []
+}

@@ -1,0 +1,17 @@
+{
+  "meta": { "image_ref": "example/app:1.0", "digest": "sha256:deadbeef" },
+  "config": {
+    "user": "1000",
+    "env": { "APP_ENV": "prod" },
+    "labels": {
+      "org.opencontainers.image.source": "https://github.com/example/app",
+      "org.opencontainers.image.revision": "abc123"
+    },
+    "entrypoint": ["/app/server"],
+    "cmd": ["--port", "8080"],
+    "working_dir": "/app",
+    "exposed_ports": ["8080/tcp"],
+    "volumes": []
+  },
+  "fs_paths": ["/app/server", "/etc/passwd"]
+}
