@@ -1,0 +1,25 @@
+{
+  "meta": { "image_ref": "example/weird-manifest:latest" },
+  "manifest": {
+    "media_type": "application/unknown",
+    "layers_count": 42,
+    "annotations": {}
+  },
+  "config": {
+    "user": "1000",
+    "env": {},
+    "labels": {
+      "org.opencontainers.image.source": "https://github.com/example/weird",
+      "org.opencontainers.image.revision": "abc123"
+    },
+    "entrypoint": ["/app/server"],
+    "cmd": [],
+    "working_dir": "/app",
+    "exposed_ports": [],
+    "volumes": []
+  },
+  "fs_paths": [
+    "/var/cache/apt/pkgcache.bin",
+    "/etc/ssh/sshd_config"
+  ]
+}

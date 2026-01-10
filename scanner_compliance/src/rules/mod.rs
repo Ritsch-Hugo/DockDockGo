@@ -8,6 +8,11 @@ pub mod entrypoint_cmd;
 pub mod exposed_ports;
 pub mod working_dir;
 pub mod volumes;
+pub mod manifest_media_types;
+pub mod manifest_layers;
+pub mod manifest_annotations;
+pub mod fs_hygiene;
+pub mod fs_weak_configs;
 
 pub use non_root_user::NonRootUserRule;
 pub use required_labels::RequiredLabelsRule;
@@ -19,4 +24,8 @@ pub use entrypoint_cmd::EntrypointCmdRule;
 pub use exposed_ports::ExposedPortsRule;
 pub use working_dir::WorkingDirRule;
 pub use volumes::VolumesRule;
-
+pub use manifest_media_types::ManifestMediaTypeRule;
+pub use manifest_layers::ManifestLayersCountRule;
+pub use manifest_annotations::ManifestAnnotationsRule;
+pub use fs_hygiene::FsHygieneRule;
+pub use fs_weak_configs::FsWeakConfigsRule;

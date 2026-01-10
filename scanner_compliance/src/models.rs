@@ -11,6 +11,9 @@ pub struct ImageData {
 
     #[serde(default)]
     pub fs_entries: Vec<FsEntry>,
+
+    #[serde(default)]
+    pub manifest: Option<ManifestData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,4 +96,16 @@ pub enum Status {
     WARN,
     FAIL,
     SKIP,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestData {
+    #[serde(default)]
+    pub media_type: Option<String>,
+
+    #[serde(default)]
+    pub layers_count: Option<u32>,
+
+    #[serde(default)]
+    pub annotations: HashMap<String, String>,
 }

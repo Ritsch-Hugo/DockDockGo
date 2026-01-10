@@ -47,6 +47,11 @@ fn main() {
         Box::new(ExposedPortsRule),
         Box::new(WorkingDirRule),
         Box::new(VolumesRule),
+        Box::new(ManifestMediaTypeRule),
+        Box::new(ManifestLayersCountRule),
+        Box::new(ManifestAnnotationsRule),
+        Box::new(FsHygieneRule),
+        Box::new(FsWeakConfigsRule),
 ];
 
     let report = run_rules(&image, &rules);
