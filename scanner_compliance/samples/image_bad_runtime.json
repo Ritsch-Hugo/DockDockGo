@@ -1,0 +1,17 @@
+{
+  "meta": { "image_ref": "example/bad-runtime:latest" },
+  "config": {
+    "user": "1000",
+    "env": {},
+    "labels": {
+      "org.opencontainers.image.source": "https://github.com/example/bad-runtime",
+      "org.opencontainers.image.revision": "abc123"
+    },
+    "entrypoint": [],
+    "cmd": [],
+    "working_dir": null,
+    "exposed_ports": ["22/tcp", "8080/tcp"],
+    "volumes": ["/data"]
+  },
+  "fs_paths": []
+}

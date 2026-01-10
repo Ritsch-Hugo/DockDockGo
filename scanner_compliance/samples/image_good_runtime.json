@@ -1,0 +1,17 @@
+{
+  "meta": { "image_ref": "example/good-runtime:latest" },
+  "config": {
+    "user": "1000",
+    "env": {},
+    "labels": {
+      "org.opencontainers.image.source": "https://github.com/example/good-runtime",
+      "org.opencontainers.image.revision": "abc123"
+    },
+    "entrypoint": ["/app/server"],
+    "cmd": ["--port", "8080"],
+    "working_dir": "/app",
+    "exposed_ports": ["8080/tcp"],
+    "volumes": []
+  },
+  "fs_paths": []
+}

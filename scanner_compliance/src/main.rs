@@ -43,7 +43,11 @@ fn main() {
         Box::new(FsSecretsRule),
         Box::new(ForbiddenBinariesRule),
         Box::new(DangerousPermissionsRule),
-    ];
+        Box::new(EntrypointCmdRule),
+        Box::new(ExposedPortsRule),
+        Box::new(WorkingDirRule),
+        Box::new(VolumesRule),
+];
 
     let report = run_rules(&image, &rules);
 
