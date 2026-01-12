@@ -1,40 +1,34 @@
 use std::{convert::Infallible, fs::File, io::BufReader, sync::Arc};
 
 use anyhow::Result;
-use hyper::{
-    body::to_bytes,
-    service::service_fn,
-    Body, Method, Request, Response, StatusCode,
-};
 use hyper::server::conn::Http;
+use hyper::{body::to_bytes, service::service_fn, Body, Method, Request, Response, StatusCode};
 use reqwest::Client;
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
-use std::fs::{self, create_dir_all};
 use sha2::{Digest, Sha256};
+use std::fs::{self, create_dir_all};
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex};
+use std::sync::Mutex;
 
 use serde_json::Value;
 
 use uuid::Uuid;
 
 #[derive(Clone)]
-struct PullContext 
-{
+struct PullContext {
     client_ip: String, // IP du client
     client_id: Uuid,
     repo: String,
     tag: Option<String>,
-
 }
 struct ImageState {
-    blobs_expected: HashSet<String>,  // tous les blobs attendus pour l'image
-    blobs_downloaded: HashSet<String> // blobs déjà téléchargés
+    blobs_expected: HashSet<String>, // tous les blobs attendus pour l'image
+    blobs_downloaded: HashSet<String>, // blobs déjà téléchargés
 }
 
 type SharedState = Arc<Mutex<HashMap<String, ImageState>>>;
@@ -69,7 +63,6 @@ fn is_allowed(path: &str, body: &[u8]) -> bool {
 fn last_request(path: &str, bytes: &[u8], state: &SharedState) -> bool {
     use serde_json::Value;
 
-
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
     if parts.len() < 4 {
         return false; // path invalide, impossible de savoir
@@ -77,7 +70,10 @@ fn last_request(path: &str, bytes: &[u8], state: &SharedState) -> bool {
 
     let repo = format!("{}/{}", parts[0], parts[1]);
 
-    println!("[LAST_REQUEST LOG] path: {}, parts: {:?}, repo: {}", path, parts, repo);
+    println!(
+        "[LAST_REQUEST LOG] path: {}, parts: {:?}, repo: {}",
+        path, parts, repo
+    );
 
     // ----- Cas manifest -----
     if parts[2] == "manifests" && !bytes.is_empty() {
@@ -93,10 +89,13 @@ fn last_request(path: &str, bytes: &[u8], state: &SharedState) -> bool {
             println!("[LAST_REQUEST] blobs_expected for {}: {:?}", repo, blobs);
 
             let mut state_lock = state.lock().unwrap();
-            state_lock.insert(repo.clone(), ImageState {
-                blobs_expected: blobs,
-                blobs_downloaded: HashSet::new(),
-            });
+            state_lock.insert(
+                repo.clone(),
+                ImageState {
+                    blobs_expected: blobs,
+                    blobs_downloaded: HashSet::new(),
+                },
+            );
         }
         return false; // manifest n'est jamais "dernier"
     }
@@ -108,17 +107,24 @@ fn last_request(path: &str, bytes: &[u8], state: &SharedState) -> bool {
 
         if let Some(image_state) = state_lock.get_mut(&repo) {
             image_state.blobs_downloaded.insert(digest.clone());
-            println!("[LAST_REQUEST] blobs_downloaded: {:?}", image_state.blobs_downloaded);
-            println!("[LAST_REQUEST] blobs_expected: {:?}", image_state.blobs_expected);
+            println!(
+                "[LAST_REQUEST] blobs_downloaded: {:?}",
+                image_state.blobs_downloaded
+            );
+            println!(
+                "[LAST_REQUEST] blobs_expected: {:?}",
+                image_state.blobs_expected
+            );
 
-            if image_state.blobs_expected.is_subset(&image_state.blobs_downloaded) {
+            if image_state
+                .blobs_expected
+                .is_subset(&image_state.blobs_downloaded)
+            {
                 println!("[LAST_REQUEST] All expected blobs downloaded for {}", repo);
                 return true;
             }
-
         }
     }
-
 
     false
 }
@@ -184,22 +190,19 @@ fn try_serve_from_cache(req: &Request<Body>, context: &PullContext) -> Option<Re
     println!("[CACHE] Recherche de {} dans {}", path, repo);
 
     //On doit laisser passer les requetues GET a chaques fois jusqu'au dernier blob meme si l'image n'est pas en cache
-    if req.method() == Method::GET
-    {
+    if req.method() == Method::GET {
         // ===== MANIFEST =====
-        if parts[2] == "manifests" 
-        {
+        if parts[2] == "manifests" {
             let name = parts[3].trim_start_matches("sha256:");
             let file = format!("cache/{}/{}/manifests/{}.json", repo, tag, name);
             //si le fichier demandé par la requete existe et a pu etre lu
-            if let Ok(data) = fs::read(&file) 
-            {
+            if let Ok(data) = fs::read(&file) {
                 println!("data: {}", String::from_utf8_lossy(&data));
                 if data.len() < 20 {
                     return None;
                 }
-                
-                let digest = sha256_hex(&data);//calcul du digest sha256 du manifest
+
+                let digest = sha256_hex(&data); //calcul du digest sha256 du manifest
 
                 //construction de la reponse HTTP conforme au standard Docker Registry v2
                 return Some(
@@ -212,10 +215,13 @@ fn try_serve_from_cache(req: &Request<Body>, context: &PullContext) -> Option<Re
                         )
                         .header("Docker-Content-Digest", format!("sha256:{digest}"))
                         .header("Content-Length", data.len())
-                        .body(if is_head { Body::empty() } else { Body::from(data) })
+                        .body(if is_head {
+                            Body::empty()
+                        } else {
+                            Body::from(data)
+                        })
                         .unwrap(),
                 );
-            
             }
         }
 
@@ -233,14 +239,17 @@ fn try_serve_from_cache(req: &Request<Body>, context: &PullContext) -> Option<Re
                         .header("Content-Type", "application/octet-stream")
                         .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
                         .header("Content-Length", data.len())
-                        .body(if is_head { Body::empty() } else { Body::from(data) })
+                        .body(if is_head {
+                            Body::empty()
+                        } else {
+                            Body::from(data)
+                        })
                         .unwrap(),
                 );
             }
         }
-        
-        if parts[2] == "referrers" && parts[3].starts_with("sha256:") 
-        {
+
+        if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
             let digest = parts[3].trim_start_matches("sha256:");
             let file = format!("cache/{}/{}/referrers/{}.json", repo, tag, digest);
 
@@ -256,7 +265,11 @@ fn try_serve_from_cache(req: &Request<Body>, context: &PullContext) -> Option<Re
                         .header("Docker-Distribution-API-Version", "registry/2.0")
                         .header("Content-Type", "application/vnd.oci.image.index.v1+json")
                         .header("Content-Length", data.len())
-                        .body(if is_head { Body::empty() } else { Body::from(data) })
+                        .body(if is_head {
+                            Body::empty()
+                        } else {
+                            Body::from(data)
+                        })
                         .unwrap(),
                 );
             }
@@ -301,10 +314,12 @@ fn manifest_list_has_linux_amd64(bytes: &[u8]) -> bool {
     false
 }
 
-
-
-fn get_pull_context(req: &Request<Body>, parts: &[&str], client_ip: &str, pull_map: &PullMap) -> PullContext 
-{
+fn get_pull_context(
+    req: &Request<Body>,
+    parts: &[&str],
+    client_ip: &str,
+    pull_map: &PullMap,
+) -> PullContext {
     // Sécurité minimale
     if parts.len() < 2 {
         return PullContext {
@@ -328,17 +343,19 @@ fn get_pull_context(req: &Request<Body>, parts: &[&str], client_ip: &str, pull_m
     });
 
     // Mise à jour du tag UNIQUEMENT sur HEAD manifest tag
-    if req.method() == Method::HEAD
-        && parts.len() > 3
-        && !parts[3].starts_with("sha256:")
-    {
+    if req.method() == Method::HEAD && parts.len() > 3 && !parts[3].starts_with("sha256:") {
         entry.tag = Some(parts[3].to_string());
     }
 
     entry.clone()
 }
 
-async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map: PullMap) -> Response<Body> {
+async fn handle(
+    req: Request<Body>,
+    client: Client,
+    state: SharedState,
+    pull_map: PullMap,
+) -> Response<Body> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
@@ -348,21 +365,22 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
 
     // Ping registry
     if path == "/v2/" {
-        return Response::builder().status(StatusCode::OK).body(Body::empty()).unwrap();
+        return Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap();
     }
-
 
     // Découper le path pour extraire repo, tag, digest
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
 
-    
-    //recupère l'ip du client 
+    //recupère l'ip du client
     let client_ip = req
-    .extensions()
-    .get::<std::net::SocketAddr>()
-    .unwrap()
-    .ip()
-    .to_string();
+        .extensions()
+        .get::<std::net::SocketAddr>()
+        .unwrap()
+        .ip()
+        .to_string();
 
     /*if parts.len() > 3 {
     println!("Requête HEAD sur tag : {}", parts[3]);
@@ -374,24 +392,21 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     //log
     println!(
         "[PULL CONTEXT] client={} uuid={} repo={} tag={:?} client_ip={}",
-        client_ip,
-        context.client_id,
-        context.repo,
-        context.tag,
-        context.client_ip
+        client_ip, context.client_id, context.repo, context.tag, context.client_ip
     );
-
 
     let requested_repo = format!("{}/{}", parts[0], parts[1]);
 
     //Verification du contexte de requete
-    // /!\Produit une erreure si differents pulls sont mélangés 
+    // /!\Produit une erreure si differents pulls sont mélangés
     // Solution -> Utiliser un Uuid de session de pull commun a chaques requetes d'un meme pull
-    if client_ip != context.client_ip || requested_repo != context.repo{
+    if client_ip != context.client_ip || requested_repo != context.repo {
         println!("[ERROR] IP du client ne correspond pas au contexte PullContext");
         return Response::builder()
             .status(StatusCode::FORBIDDEN)
-            .body(Body::from("IP du client ne correspond pas au contexte PullContext"))
+            .body(Body::from(
+                "IP du client ne correspond pas au contexte PullContext",
+            ))
             .unwrap();
     }
     // Tenter de servir depuis le cache local
@@ -399,11 +414,9 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     if let Some(resp) = try_serve_from_cache(&req, &context) {
         println!("[LOCAL REGISTRY] {}", path);
         return resp;
-    }
-    else if req.method() == Method::GET
-    {
+    } else if req.method() == Method::GET {
         println!("Image pas trouvée dans le cache | Bloquage");
-        /*loop 
+        /*loop
         {
 
         }*/
@@ -448,10 +461,7 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
     // Vérification architecture UNIQUEMENT sur GET manifest
-    if method == Method::GET
-        && path.contains("/manifests/")
-        && !bytes.is_empty()
-    {
+    if method == Method::GET && path.contains("/manifests/") && !bytes.is_empty() {
         // Si c'est une manifest list (présence du champ "manifests")
         let is_manifest_list = serde_json::from_slice::<serde_json::Value>(&bytes)
             .ok()
@@ -463,13 +473,10 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
 
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from(
-                    "No matching manifest for linux/amd64"
-                ))
+                .body(Body::from("No matching manifest for linux/amd64"))
                 .unwrap();
         }
     }
-
 
     // === POLICY CHECK ===
     if !is_allowed(&path, &bytes) {
@@ -482,20 +489,21 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
 
     // Sauvegarder les manifests et blobs GET valides dans la quarantaine
     if method == Method::GET && !bytes.is_empty() {
-        if path.contains("/manifests/") || path.contains("/blobs/") || path.contains("/referrers/") {
+        if path.contains("/manifests/") || path.contains("/blobs/") || path.contains("/referrers/")
+        {
             save_to_quarantine(&path, &bytes, &context);
         }
     }
     // Vérifier si c'est la dernière requête à traiter pour cette image
     // /!\Attention /!\ L'erreure est gènérée lors du dernier blob téléchargé donc les autres blobs et manifests sont bien téléchargés
-    //Il faudra changer la logique pour intercepter uniquement les premiers HEAD pour conniatre l'image ciblé, 
+    //Il faudra changer la logique pour intercepter uniquement les premiers HEAD pour conniatre l'image ciblé,
     //bloquer le pull et faire la requete docker pull depuis le server proxy pour mettre en cache
     if last_request(&path, &bytes, &state) == true {
         println!("Dernière requête pour cette image traitée.");
         return Response::builder()
-        .status(StatusCode::FORBIDDEN)
-        .body(Body::from("Image mise en quarantaine"))
-        .unwrap();
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::from("Image mise en quarantaine"))
+            .unwrap();
     }
 
     // Construire la réponse finale pour le client
@@ -505,9 +513,7 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     }
 
     resp.body(Body::from(bytes)).unwrap()
-
 }
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -538,29 +544,25 @@ async fn main() -> Result<()> {
         let client = client.clone();
         let state = state.clone(); // Arc<Mutex<SharedState>>
         let pull_map = pull_map.clone(); // <-- clone pour cette itération
-        
+
         tokio::spawn(async move {
             println!("[CONN] Client {:?}", addr);
-            if let Ok(tls) = acceptor.accept(stream).await 
-            {
-                
+            if let Ok(tls) = acceptor.accept(stream).await {
                 let client = client.clone();
                 let state = state.clone();
                 let pull_map = pull_map.clone(); // <-- clone pour service_fn
 
-                let service = service_fn(move |mut req| 
-                    {
-                        let client = client.clone();
-                        let state = state.clone();
-                        let pull_map = pull_map.clone(); // clone pour handle
-                        let addr = addr; // passer addr
-                        async move 
-                        { 
-                            // stocker addr dans la requête pour handle
-                            req.extensions_mut().insert(addr);
-                            Ok::<_, Infallible>(handle(req, client, state, pull_map).await) 
-                        }
-                    });
+                let service = service_fn(move |mut req| {
+                    let client = client.clone();
+                    let state = state.clone();
+                    let pull_map = pull_map.clone(); // clone pour handle
+                    let addr = addr; // passer addr
+                    async move {
+                        // stocker addr dans la requête pour handle
+                        req.extensions_mut().insert(addr);
+                        Ok::<_, Infallible>(handle(req, client, state, pull_map).await)
+                    }
+                });
                 let _ = Http::new().serve_connection(tls, service).await;
             }
         });
@@ -571,10 +573,7 @@ async fn main() -> Result<()> {
 fn load_certs(path: &str) -> Result<Vec<Certificate>> {
     let certfile = File::open(path)?;
     let mut reader = BufReader::new(certfile);
-    let certs = certs(&mut reader)?
-        .into_iter()
-        .map(Certificate)
-        .collect();
+    let certs = certs(&mut reader)?.into_iter().map(Certificate).collect();
     Ok(certs)
 }
 
