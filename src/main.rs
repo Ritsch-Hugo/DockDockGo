@@ -488,17 +488,20 @@ async fn handle(
     }
 
     // Sauvegarder les manifests et blobs GET valides dans la quarantaine
-    if method == Method::GET && !bytes.is_empty() {
-        if path.contains("/manifests/") || path.contains("/blobs/") || path.contains("/referrers/")
-        {
-            save_to_quarantine(&path, &bytes, &context);
-        }
+    if method == Method::GET
+        && !bytes.is_empty()
+        && (path.contains("/manifests/")
+            || path.contains("/blobs/")
+            || path.contains("/referrers/"))
+    {
+        save_to_quarantine(&path, &bytes, &context);
     }
+
     // Vérifier si c'est la dernière requête à traiter pour cette image
     // /!\Attention /!\ L'erreure est gènérée lors du dernier blob téléchargé donc les autres blobs et manifests sont bien téléchargés
     //Il faudra changer la logique pour intercepter uniquement les premiers HEAD pour conniatre l'image ciblé,
     //bloquer le pull et faire la requete docker pull depuis le server proxy pour mettre en cache
-    if last_request(&path, &bytes, &state) == true {
+    if last_request(&path, &bytes, &state) {
         println!("Dernière requête pour cette image traitée.");
         return Response::builder()
             .status(StatusCode::FORBIDDEN)
