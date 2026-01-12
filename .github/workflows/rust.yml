@@ -33,18 +33,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Format
-        working-directory: DockDockGo
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        working-directory: DockDockGo
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build
         run: cargo build --verbose --all-features
 
       - name: Tests
-        working-directory: DockDockGo
         run: cargo test --all-features
 
       - name: Docs
@@ -58,6 +55,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       
       - name: Cargo check
-        working-directory: DockDockGo
         run: cargo check --all-features
 
