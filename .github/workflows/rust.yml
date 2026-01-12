@@ -2,23 +2,64 @@ name: Rust (proxy)
 
 on:
   push:
-    branches: [ "proxy" ]
+    branches: ["proxy"]
   pull_request:
-    branches: [ "proxy" ]
+    branches: ["proxy"]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# Permissions minimales par défaut
+permissions:
+  contents: read
 
+concurrency:
+  group: rust-proxy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build
-        run: cargo build --verbose
+      # Toolchain stable + composants
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Run tests
-        run: cargo test --verbose
+      # Cache cargo (rapide et fiable)
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format (rustfmt)
+        run: cargo fmt --all -- --check
+
+      - name: Lint (clippy)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --verbose --all-features
+
+      - name: Tests
+        run: cargo test --verbose --all-features
+
+      - name: Docs
+        run: cargo doc --no-deps --all-features
+
+  security_deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # RustSec advisories
+      - name: cargo-audit
+        uses: actions-rust-lang/audit@v1
+
+      # cargo-deny (licences, advisories, sources, yanked)
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v1
