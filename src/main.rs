@@ -15,8 +15,6 @@ use std::fs::{self, create_dir_all};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use serde_json::Value;
-
 use uuid::Uuid;
 
 #[derive(Clone)]
