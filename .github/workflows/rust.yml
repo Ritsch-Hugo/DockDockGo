@@ -50,10 +50,20 @@ jobs:
   security_deps:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: DockDockGo
+  
       - uses: dtolnay/rust-toolchain@stable
-      
+        with:
+          components: rustfmt, clippy
+  
       - uses: Swatinem/rust-cache@v2
-      
+        with:
+          workspaces: |
+            DockDockGo -> target
+  
       - name: Cargo check
+        working-directory: DockDockGo
         run: cargo check --all-features
 
