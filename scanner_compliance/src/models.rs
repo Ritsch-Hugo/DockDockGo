@@ -37,6 +37,9 @@ pub struct ImageData {
     /// Manifest "résumé" (pas le raw)
     #[serde(default)]
     pub manifest: Option<ManifestData>,
+
+    #[serde(default)]
+pub missing_artifacts: Vec<MissingArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +109,9 @@ pub struct InputsSummary {
 
     #[serde(default)]
     pub layers_total: u32,
+    
+    #[serde(default)]
+pub layers_received: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +141,10 @@ pub struct Report {
 
     pub summary: Summary,
     pub findings: Vec<Finding>,
+
+    #[serde(default)]
+pub missing_artifacts: Vec<MissingArtifact>,
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -174,6 +184,12 @@ pub struct ManifestData {
 
     #[serde(default)]
     pub annotations: HashMap<String, String>,
+
+     #[serde(default)]
+    pub config_digest: Option<String>,
+
+    #[serde(default)]
+    pub layer_digests: Vec<String>,
 }
 
 /// --- NOUVEAU : contrat d’entrée raw (Étape 1: manifest-only) ---
@@ -212,3 +228,17 @@ pub struct RawBlob {
     #[serde(default)]
     pub path: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissingArtifact {
+    pub kind: MissingArtifactKind,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingArtifactKind {
+    Config,
+    Layer,
+}
+

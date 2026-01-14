@@ -26,11 +26,12 @@ pub fn run_rules(image: &ImageData, rules: &[Box<dyn Rule>]) -> Report {
     }
 
     Report {
-        meta: image.meta.clone(),
-        scan: image.scan.clone(),
-        summary,
-        findings,
-    }
+    meta: image.meta.clone(),
+    scan: image.scan.clone(),
+    missing_artifacts: image.missing_artifacts.clone(),
+    summary,
+    findings,
+}
 }
 
 /// Retourne la liste des chemins du filesystem.

@@ -1,0 +1,9 @@
+{
+  "stage": "manifest_config",
+  "image_ref": "demo:latest",
+  "manifest_raw": "{\n  \"schemaVersion\": 2,\n  \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\",\n  \"config\": {\"mediaType\": \"application/vnd.oci.image.config.v1+json\", \"digest\": \"sha256:deadbeef\", \"size\": 123},\n  \"layers\": [\n    {\"mediaType\": \"application/vnd.oci.image.layer.v1.tar+gzip\", \"digest\": \"sha256:aaa\", \"size\": 1},\n    {\"mediaType\": \"application/vnd.oci.image.layer.v1.tar+gzip\", \"digest\": \"sha256:bbb\", \"size\": 2}\n  ],\n  \"annotations\": {\"org.opencontainers.image.title\": \"demo\"}\n}\n",
+  "blobs": [
+    { "digest": "sha256:deadbeef", "media_type": "application/vnd.oci.image.config.v1+json" },
+    { "digest": "sha256:aaa", "media_type": "application/vnd.oci.image.layer.v1.tar+gzip" }
+  ]
+}

@@ -1,3 +1,4 @@
+mod availability;
 mod engine;
 mod models;
 mod rules;
@@ -31,22 +32,36 @@ fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
             if let Some(s) = vv.as_str() {
                 annotations.insert(k.clone(), s.to_string());
             } else {
-                // best-effort: stringify
                 annotations.insert(k.clone(), vv.to_string());
             }
         }
     }
 
-    // layers count (OCI image manifest)
-    let layers_count = v
-        .get("layers")
-        .and_then(|x| x.as_array())
-        .map(|arr| arr.len() as u32);
+    // config.digest
+    let config_digest = v
+        .get("config")
+        .and_then(|c| c.get("digest"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
+
+    // layers digests
+    let mut layer_digests: Vec<String> = Vec::new();
+    if let Some(arr) = v.get("layers").and_then(|x| x.as_array()) {
+        for layer in arr {
+            if let Some(d) = layer.get("digest").and_then(|x| x.as_str()) {
+                layer_digests.push(d.to_string());
+            }
+        }
+    }
+
+    let layers_count = Some(layer_digests.len() as u32);
 
     Ok(ManifestData {
         media_type,
         layers_count,
         annotations,
+        config_digest,
+        layer_digests,
     })
 }
 
@@ -54,10 +69,10 @@ fn load_input(path: &str) -> Result<ImageData, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
 
-    // Détection du format : nouveau ScanRequest si "manifest_raw" présent
     let probe: Value =
         serde_json::from_str(&content).map_err(|e| format!("failed to parse JSON {path}: {e}"))?;
 
+    // Nouveau format si "manifest_raw" + "stage"
     let is_scan_request = probe.get("manifest_raw").is_some() && probe.get("stage").is_some();
 
     if is_scan_request {
@@ -66,26 +81,38 @@ fn load_input(path: &str) -> Result<ImageData, String> {
 
         let manifest = parse_manifest_data(&req.manifest_raw)?;
 
+        // Étape 2: compute availability depuis manifest + blobs reçus
+        let avail = crate::availability::compute_availability(&manifest, &req.blobs);
+
         let image_ref = req.image_ref.unwrap_or_else(|| "unknown".to_string());
 
-        // ImageData minimal : PAS de config/fs à ce stage
-        let mut img = ImageData {
+        // ImageData minimal (FS non dispo en étape 2)
+        let img = ImageData {
             meta: ImageMeta {
                 image_ref,
                 digest: None,
             },
+
+            // important: on dérive has_config de l’availability
             has_manifest: true,
-            has_config: false,
+            has_config: avail.has_config,
             has_fs: false,
+
             scan: ScanInfo {
                 stage: req.stage.clone(),
                 inputs: InputsSummary {
                     has_manifest: true,
-                    has_config: false,
+                    has_config: avail.has_config,
                     has_fs: false,
-                    layers_total: manifest.layers_count.unwrap_or(0),
+                    layers_total: avail.layers_total,
+                    layers_received: avail.layers_received,
                 },
             },
+
+            // Nouveau champ: missing_artifacts (calculé)
+            missing_artifacts: avail.missing.clone(),
+
+            // Config vide pour l’instant (Étape 3 remplira depuis config blob réel)
             config: ImageConfig {
                 user: None,
                 env: HashMap::new(),
@@ -96,16 +123,12 @@ fn load_input(path: &str) -> Result<ImageData, String> {
                 exposed_ports: Vec::new(),
                 volumes: Vec::new(),
             },
+
             fs_paths: Vec::new(),
             fs_entries: Vec::new(),
+
             manifest: Some(manifest),
         };
-
-        // Defensive : si manifest absent => has_manifest false
-        if img.manifest.is_none() {
-            img.has_manifest = false;
-            img.scan.inputs.has_manifest = false;
-        }
 
         Ok(img)
     } else {
@@ -132,6 +155,7 @@ fn main() {
         }
     };
 
+    // ✅ Noms EXACTS depuis src/rules/mod.rs
     let rules: Vec<Box<dyn crate::engine::Rule>> = vec![
         // Config/runtime rules
         Box::new(NonRootUserRule),
