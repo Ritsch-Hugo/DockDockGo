@@ -1,6 +1,6 @@
 /target
-/quarantaine
 /cache
-/certs-mitm
-registry-1.docker.io*
+/quarantaine
+registry-1.docker.io.*
+/test-conteneur
 EOF
