@@ -12,7 +12,7 @@ impl Rule for ManifestAnnotationsRule {
     fn evaluate(&self, image: &ImageData) -> Finding {
         let manifest = match &image.manifest {
             Some(m) => m,
-            None => {
+            none => {
                 return Finding {
                     rule_id: self.id().to_string(),
                     status: Status::SKIP,

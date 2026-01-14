@@ -27,6 +27,7 @@ pub fn run_rules(image: &ImageData, rules: &[Box<dyn Rule>]) -> Report {
 
     Report {
         meta: image.meta.clone(),
+        scan: image.scan.clone(),
         summary,
         findings,
     }

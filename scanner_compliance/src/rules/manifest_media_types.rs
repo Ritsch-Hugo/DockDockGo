@@ -10,9 +10,22 @@ impl Rule for ManifestMediaTypeRule {
     }
 
     fn evaluate(&self, image: &ImageData) -> Finding {
+        let m = match &image.manifest {
+    Some(m) if image.has_manifest => m,
+    _ => {
+        return Finding {
+            rule_id: self.id().to_string(),
+            status: Status::SKIP,
+            message: "Manifest not available".to_string(),
+            evidence: HashMap::new(),
+        }
+    }
+};
+
+
         let manifest = match &image.manifest {
             Some(m) => m,
-            None => {
+            none => {
                 return Finding {
                     rule_id: self.id().to_string(),
                     status: Status::SKIP,
@@ -24,7 +37,7 @@ impl Rule for ManifestMediaTypeRule {
 
         let mt = match &manifest.media_type {
             Some(v) => v,
-            None => {
+            none => {
                 return Finding {
                     rule_id: self.id().to_string(),
                     status: Status::SKIP,
