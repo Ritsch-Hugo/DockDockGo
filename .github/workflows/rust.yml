@@ -62,14 +62,29 @@ jobs:
         working-directory: DockDockGo
         run: cargo check --all-features
 
+  rustsec_audit:
+    name: RustSec (cargo audit)
+    runs-on: ubuntu-latest
+    needs: [checks]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: RustSec audit
+        run: cargo audit
+
   docker_image:
     name: Build, scan & push Docker image
     runs-on: ubuntu-latest
-    needs: [checks]
+    needs: [checks, rustsec_audit]
     permissions:
       contents: read
       packages: write
-      security-events: write   # pour publier dans l'onglet "Security"
+      security-events: write
     steps:
       - uses: actions/checkout@v4
 
@@ -96,7 +111,6 @@ jobs:
             type=raw,value=latest
             type=sha
 
-      # 1) Build local (pas de push) pour scanner
       - name: Build image locally for scan
         uses: docker/build-push-action@v6
         with:
@@ -108,7 +122,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 2) Scan vulnérabilités
       - name: Trivy scan (fail on CRITICAL/HIGH)
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -119,7 +132,6 @@ jobs:
           ignore-unfixed: true
           exit-code: '1'
 
-      # (optionnel) Export SARIF dans l'onglet Security
       - name: Trivy scan (SARIF)
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -136,7 +148,6 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
-      # 3) Si scan OK, on push (uniquement sur push)
       - name: Build and push
         if: github.event_name == 'push'
         uses: docker/build-push-action@v6
