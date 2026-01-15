@@ -63,13 +63,13 @@ jobs:
         run: cargo check --all-features
 
   docker_image:
-    name: Build & push Docker image
+    name: Build, scan & push Docker image
     runs-on: ubuntu-latest
     needs: [checks]
-    # build sur PR, mais PUSH seulement sur push (pas PR)
     permissions:
       contents: read
       packages: write
+      security-events: write   # pour publier dans l'onglet "Security"
     steps:
       - uses: actions/checkout@v4
 
@@ -96,15 +96,55 @@ jobs:
             type=raw,value=latest
             type=sha
 
-      - name: Build (and push on push)
+      # 1) Build local (pas de push) pour scanner
+      - name: Build image locally for scan
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event_name == 'push' }}
+          push: false
+          load: true
+          tags: local/proxy-scan:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 2) Scan vulnérabilités
+      - name: Trivy scan (fail on CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: local/proxy-scan:ci
+          format: table
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      # (optionnel) Export SARIF dans l'onglet Security
+      - name: Trivy scan (SARIF)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: local/proxy-scan:ci
+          format: sarif
+          output: trivy.sarif
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+
+      # 3) Si scan OK, on push (uniquement sur push)
+      - name: Build and push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # si tu veux multi-arch:
-          # platforms: linux/amd64,linux/arm64
