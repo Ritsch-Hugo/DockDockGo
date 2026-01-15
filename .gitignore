@@ -3,4 +3,7 @@
 /quarantaine
 registry-1.docker.io.*
 /test-conteneur
+*.key
+*.crt
+certs-mitm/
 EOF
