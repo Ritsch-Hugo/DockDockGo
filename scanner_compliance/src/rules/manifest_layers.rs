@@ -12,7 +12,7 @@ impl Rule for ManifestLayersCountRule {
     fn evaluate(&self, image: &ImageData) -> Finding {
         let manifest = match &image.manifest {
             Some(m) => m,
-            none => {
+            _none => {
                 return Finding {
                     rule_id: self.id().to_string(),
                     status: Status::SKIP,
@@ -24,7 +24,7 @@ impl Rule for ManifestLayersCountRule {
 
         let count = match manifest.layers_count {
             Some(c) => c,
-            none => {
+            _none => {
                 return Finding {
                     rule_id: self.id().to_string(),
                     status: Status::SKIP,

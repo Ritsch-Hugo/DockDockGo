@@ -10,7 +10,7 @@ impl Rule for ManifestMediaTypeRule {
     }
 
     fn evaluate(&self, image: &ImageData) -> Finding {
-        let m = match &image.manifest {
+        let _m = match &image.manifest {
     Some(m) if image.has_manifest => m,
     _ => {
         return Finding {
@@ -25,7 +25,7 @@ impl Rule for ManifestMediaTypeRule {
 
         let manifest = match &image.manifest {
             Some(m) => m,
-            none => {
+            _none => {
                 return Finding {
                     rule_id: self.id().to_string(),
                     status: Status::SKIP,
@@ -37,7 +37,7 @@ impl Rule for ManifestMediaTypeRule {
 
         let mt = match &manifest.media_type {
             Some(v) => v,
-            none => {
+            _none => {
                 return Finding {
                     rule_id: self.id().to_string(),
                     status: Status::SKIP,

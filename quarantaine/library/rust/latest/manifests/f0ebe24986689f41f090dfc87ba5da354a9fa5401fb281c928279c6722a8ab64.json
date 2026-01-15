@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "digest": "sha256:7cbf30674629ee6ea8b48f0cf7a2bf1bf2361307ba50c630e8e5d25ce8de4c31",
+    "size": 4870
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:281b80c799ded5b9a390d2e8c59930db01ee395ab809dd34259897c660751f4e",
+      "size": 49289587
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:15f14138abe4f09d3ef3953105144728056046ae469ae21e8e42749bacd67cca",
+      "size": 25613989
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:378c64c4458002be86f2d86c5768ae9ec0cff69afac7d1444e50206dc4566fa9",
+      "size": 67777233
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:02e37abc533a09f86edcf3602251a61a6208ddaa131e1a1d5757e5f94a54d645",
+      "size": 235979646
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:460f1c71128c3559bfd2fec77857a2d88e102106d285b75abadd9c3739c11c97",
+      "size": 213216801
+    }
+  ],
+  "annotations": {
+    "com.docker.official-images.bashbrew.arch": "amd64",
+    "org.opencontainers.image.base.digest": "sha256:89f23a128637039e9590189e920d318065a0592eaf9d4f653e501243a9696bab",
+    "org.opencontainers.image.base.name": "buildpack-deps:trixie",
+    "org.opencontainers.image.created": "2025-12-30T04:04:51Z",
+    "org.opencontainers.image.revision": "c2c1f6504026242abc852c0ac82b3c30b4770dc5",
+    "org.opencontainers.image.source": "https://github.com/rust-lang/docker-rust.git#c2c1f6504026242abc852c0ac82b3c30b4770dc5:stable/trixie",
+    "org.opencontainers.image.url": "https://hub.docker.com/_/rust",
+    "org.opencontainers.image.version": "1-trixie"
+  }
+}

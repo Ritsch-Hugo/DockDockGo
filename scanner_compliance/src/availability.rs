@@ -9,16 +9,27 @@ pub struct Availability {
     pub missing: Vec<MissingArtifact>,
 }
 
+/// Un blob est "présent" uniquement si le contenu est accessible.
+/// Étape 3 (path-only) : contenu accessible si `path` est présent.
+fn has_content(b: &RawBlob) -> bool {
+    b.path.is_some()
+}
+
 pub fn compute_availability(manifest: &ManifestData, blobs: &[RawBlob]) -> Availability {
-    let present: HashSet<&str> = blobs.iter().map(|b| b.digest.as_str()).collect();
+    let present: HashSet<&str> = blobs
+        .iter()
+        .filter(|b| has_content(b))
+        .map(|b| b.digest.as_str())
+        .collect();
 
     let mut missing: Vec<MissingArtifact> = Vec::new();
 
-    // Config
+    // ----- Config -----
     let has_config = match manifest.config_digest.as_deref() {
         Some(cfg) => present.contains(cfg),
-        none => false,
+        None => false,
     };
+
     if let Some(cfg) = manifest.config_digest.as_deref() {
         if !present.contains(cfg) {
             missing.push(MissingArtifact {
@@ -28,7 +39,7 @@ pub fn compute_availability(manifest: &ManifestData, blobs: &[RawBlob]) -> Avail
         }
     }
 
-    // Layers
+    // ----- Layers -----
     let layers_total = manifest.layer_digests.len() as u32;
     let mut layers_received: u32 = 0;
 
