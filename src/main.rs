@@ -19,6 +19,7 @@ use sha2::{Digest as Sha2Digest, Sha256};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex};//blocage de concurence -> a changer en mutex tokio
+use tokio::sync::Mutex as TokioMutex;
 
 use serde_json::Value;
 
@@ -29,6 +30,7 @@ use std::io::Write;
 use uuid::Uuid;
 use tokio::time::{sleep, Duration};
 
+use std::time::Instant;//pour le timeout des pull context 2
 
 #[derive(Clone)]
 struct PullContext 
@@ -61,7 +63,21 @@ struct PullContext2 {
     manifest_racine_digest: Option<Digest>,
     digests_possible: Vec<Digest>,
 
+    last_activity: Instant,
+
 }
+
+
+// Erreurs possibles lors de la récupération du contexte PullContext2
+#[derive(Debug)]
+enum PullContextError {
+    InvalidPath,
+    MissingDigestOrTag,
+    ContextMismatch,
+    DigestNotAllowed,
+    ExpiredContext,
+}
+
 struct ImageState {
     blobs_expected: HashSet<String>,  // tous les blobs attendus pour l'image
     blobs_downloaded: HashSet<String> // blobs déjà téléchargés
@@ -75,8 +91,10 @@ enum DigestOrTag {
 
 type SharedState = Arc<Mutex<HashMap<String, ImageState>>>;
 type PullMap = Arc<Mutex<HashMap<String, PullContext>>>;
-type PullContext2List = Arc<Mutex<Vec<PullContext2>>>;
+type PullContext2List = Arc<TokioMutex<Vec<PullContext2>>>;
 
+// Définir le timeout désiré (ex : 30 secondes)
+const CONTEXT_TIMEOUT: Duration = Duration::from_secs(15);
 
 static UPSTREAM: &str = "https://registry-1.docker.io";
 
@@ -121,6 +139,7 @@ impl PullContext2 {
             referrers_digests: Vec::new(),
             digests_possible: Vec::new(),
             manifest_racine_digest: None,
+            last_activity: Instant::now(),
         }
     }
 
@@ -440,12 +459,25 @@ fn get_pull_context(req: &Request<Body>, parts: &[&str], client_ip: &str, pull_m
     entry.clone()
 }
 
-fn get_pull_context2(
+async fn get_pull_context2(
     req: &Request<Body>,
     parts: &[&str],
     client_ip: &str,
     pull_contexts: &PullContext2List,
-) {
+)-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
+{
+    // 🔹 Nettoyer les contextes expirés avec timeout
+    {
+        let mut list = pull_contexts.lock().await;
+        list.retain(|ctx| {
+            let alive = ctx.last_activity.elapsed() < CONTEXT_TIMEOUT;
+            if !alive {
+                println!("[PullContext2] Contexte expiré supprimé | uuid={}", ctx.uuid);
+            }
+            alive
+        });
+    } // ⬅️ le lock est relâché automatiquement ici
+
     // 🔹 Construire les variables principales à partir de parts
     let registry = "registry-1.docker.io".to_string(); // Par défaut pour Docker Hub
 
@@ -458,13 +490,13 @@ fn get_pull_context2(
         ("referrers", i)
     } else {
         println!("[PullContext2] Type de ressource inconnu, aucun traitement possible");
-        return;
+        return Err(PullContextError::InvalidPath);
     };
 
     // 🔹 Vérifier que l'index est valide pour accéder à la valeur suivante (digest ou tag)
     if idx + 1 >= parts.len() {
         println!("[PullContext2] Path invalide, digest ou tag manquant");
-        return;
+        return Err(PullContextError::InvalidPath);
     }
 
     // 🔹 Extraire la valeur (digest ou tag)
@@ -494,7 +526,7 @@ fn get_pull_context2(
         // Vérifier que l'index trouvé est valide pour accéder au digest ou tag
         if idx + 1 >= parts.len() {
             println!("[PullContext2] Path invalide, digest ou tag manquant");
-            return;
+            return Err(PullContextError::MissingDigestOrTag);
         }
 
         // Extraire la valeur suivante : digest ou tag selon le type
@@ -526,6 +558,7 @@ fn get_pull_context2(
             else 
             {
                 eprintln!("[PullContext2] Échec de la commande docker buildx imagetools inspect");
+                return Err(PullContextError::MissingDigestOrTag);
             }
         }
 
@@ -540,11 +573,15 @@ fn get_pull_context2(
         let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, uuid_input.as_bytes());
 
         // 🔹 Vérifier si l'UUID existe déjà
-        let mut list = pull_contexts.lock().unwrap();
+        let mut list = pull_contexts.lock().await;
         if list.iter().any(|c| c.uuid == uuid) {
             println!("[PullContext2] UUID déjà présent, pas de création d'un nouveau contexte");
-            return;
+            return Ok(Some(uuid));//retourner l'uuid existant
         }
+        
+
+
+
 
         // 🔹 Création du contexte PullContext2
         let mut ctx = PullContext2::new(
@@ -555,7 +592,9 @@ fn get_pull_context2(
             tag_ou_digest.to_string(),//ici c'est le tag
         );
 
-        // 🔹 Ajouter le digest possible dans le champ digests_possible et dans le champ manifest_digests + manifest_racine_digest
+        ctx.last_activity = Instant::now();//initialisation du timer d'activité
+
+        // 🔹 Ajouter les digests possibles dans le champ digests_possible et dans le champ manifest_digests + manifest_racine_digest
         if let Some(d) = manifest_racine_digest //si le digest racine a été récupéré
         {
             let digest_clean = d.trim_start_matches("sha256:").to_string();
@@ -564,8 +603,11 @@ fn get_pull_context2(
                 value: digest_clean.clone(),
             };
 
-            // Ajouter dans digests_possible
-            ctx.digests_possible.push(digest_struct.clone());
+            // Ajouter dans digests_possible uniquement s'il n'est pas déjà présent
+            if !ctx.digests_possible.contains(&digest_struct) {
+                ctx.digests_possible.push(digest_struct.clone());
+            }
+
 
             // Ajouter dans manifest_racine_digest 
             ctx.manifest_racine_digest = Some(digest_struct);
@@ -586,12 +628,13 @@ fn get_pull_context2(
                 .arg(cmd)
                 .output()
             {
+                //si la commande shell a réussi
                 if output.status.success() 
                 {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     for line in stdout.lines() {
                         let line_clean = line.trim_start_matches("sha256:").to_string();
-                        if !line_clean.is_empty() {
+                        if !line_clean.is_empty() {//si la ligne n'est pas vide
                             let digest = Digest {
                                 algorithm: "sha256".to_string(),
                                 value: line_clean,
@@ -606,8 +649,14 @@ fn get_pull_context2(
                 else 
                 {
                     eprintln!("[PullContext2] Échec de la commande curl/jq pour récupérer les digests");
+                    return Err(PullContextError::MissingDigestOrTag);
                 }
             }
+        }
+        else
+        {
+            eprintln!("[PullContext2] Aucun digest racine récupéré, impossible de créer le contexte");
+            return Err(PullContextError::MissingDigestOrTag);
         }
 
 
@@ -635,32 +684,24 @@ fn get_pull_context2(
             );
         }
         println!("=========================================");
+
+        return Ok(Some(uuid));
     }
 
     // 🔹 GET → vérifier un digest existant
-    else if req.method() == Method::GET {
-
+    else if req.method() == Method::GET 
+    {
 
         // Extraire le digest de la requête
         let digest_str = parts[idx + 1];
         if !digest_str.starts_with("sha256:") {
-            return;
+            return Err(PullContextError::DigestNotAllowed);
         }
         let digest_value = digest_str.trim_start_matches("sha256:").to_string();
-
-        // Construire l’UUID de la même manière que pour HEAD pour voir si il y a une correspondance
-        /*let repository = parts[..idx].join("/");
-        let uuid_input = format!(
-            "{}|{}|{}|{}",
-            registry,
-            repository,
-            digest_value,
-            ip_client
-        );*/
         
         // 🔹 Rechercher le contexte correspondant et vérifier le digest
         //Verifier si l'uuid existe dans la liste 
-        let mut list = pull_contexts.lock().unwrap();
+        let mut list = pull_contexts.lock().await;
         for ctx in list.iter_mut() 
         {
             //Verifier si le contexte correspond au client ip, registry, repository et digest possible
@@ -669,12 +710,14 @@ fn get_pull_context2(
                 && ctx.repository == repository
                 && ctx.digests_possible.iter().any(|d| d.value == digest_value)
             {
+                ctx.last_activity = Instant::now(); // Mettre à jour l'activité pour le timeout
+
                 println!("[PullContext2] Correspondance trouvée pour le digest GET | uuid={}", ctx.uuid);
                 //Verifier si le digest actuel correspond au digest racine
                 if let Some(racine) = &ctx.manifest_racine_digest //si le digest racine est defini
                 {
-                    //si le digest racine est different du digest de la requete GET
-                   if racine.value != digest_value 
+                //si le digest de la requete n'est pas le digest racine -> ajouter les digests contenus dans le manifest demandé
+                    if racine.value != digest_value 
                     {
                         //On ajoute les digests contenus dans le manifest courant qui a été demandé
                         println!("[PullContext2] Digest du GET différent du digest racine → récupération des digests du manifest demandé");
@@ -722,20 +765,25 @@ fn get_pull_context2(
                             else 
                             {
                                 eprintln!("[PullContext2] Échec de la récupération des digests via curl");
+                                return Err(PullContextError::DigestNotAllowed);
                             }
                         } 
                         else 
                         {
                             eprintln!("[PullContext2] Impossible d'exécuter la commande shell");
+                            return Err(PullContextError::DigestNotAllowed);
                         }
                     }
-
+                    else {
+                        //cas ou le digest GET est le digest racine (normal, ne rien faire)
+                        return Ok(Some(ctx.uuid));
+                    }
                 } 
                 //si le digest racine n'est pas defini
                 else 
                 {
                     println!("[PullContext2] Aucun digest racine défini pour ce contexte → bloqué");
-                    return;
+                    return Err(PullContextError::DigestNotAllowed);
                 }
 
                 // Ici tu es sûr :
@@ -743,15 +791,16 @@ fn get_pull_context2(
                 // - bon registry
                 // - bon repository
                 // - bon digest GET existant
-                break;
+                return Ok(Some(ctx.uuid));
             }
-            else
-            {
-                return;
-            }
-
         }
+        // Aucun contexte trouvé en parcourant la liste
+        println!("[PullContext2] Aucun contexte trouvé pour le digest GET demandé");
+        return Err(PullContextError::ContextMismatch);
     }
+
+    //Methode ne correspond pas a HEAD ou GET
+    return Err(PullContextError::ContextMismatch);
 }
 
 
@@ -759,7 +808,7 @@ fn get_pull_context2(
 
 
 
-async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map: PullMap, pull_contexts2: PullContext2List) -> Response<Body> {
+async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map: PullMap, pull_contexts2: PullContext2List, ) -> Response<Body> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
@@ -809,7 +858,34 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     //recupère le contexte du pull en cours
 
     //let context = get_pull_context(&req, &parts, &client_ip, &pull_map);
-    let context2 = get_pull_context2(&req, &parts, &client_ip, &pull_contexts2);
+    let context2 = match get_pull_context2(&req, &parts, &client_ip, &pull_contexts2).await {
+        Ok(Some(uuid)) => {
+            println!("[Main] Contexte trouvé / créé avec UUID: {}", uuid);
+            uuid // tu peux continuer à utiliser uuid
+        },
+        Ok(None) => {
+            eprintln!("[Main] Pas d'UUID retourné → pull échoué");
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("PullContext non trouvé"))
+                .unwrap();
+        },
+        Err(PullContextError::ExpiredContext) => {
+            eprintln!("[Main] Pull bloqué car déjà en cours pour la même image dans les 15s");
+            return Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .body(Body::from("Pull récent pour la même image, attendre 15 secondes"))
+                .unwrap();
+        },
+        Err(e) => {
+            eprintln!("[Main] Erreur lors de la récupération du contexte: {:?}", e);
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("Erreur PullContext"))
+                .unwrap();
+        }
+
+    };
 
     //log
     /*println!(
@@ -1003,7 +1079,7 @@ async fn main() -> Result<()> {
 
     // State partagé pour suivre les blobs/manifests
     let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
-    let pull_contexts2: PullContext2List = Arc::new(Mutex::new(Vec::new()));
+    let pull_contexts2: PullContext2List = Arc::new(TokioMutex::new(Vec::new()));
 
 
     println!("✅ MITM Docker registry en écoute sur https://registry-1.docker.io:443");
