@@ -700,7 +700,6 @@ async fn get_pull_context2(
         let digest_value = digest_str.trim_start_matches("sha256:").to_string();
         
         // 🔹 Rechercher le contexte correspondant et vérifier le digest
-        //Verifier si l'uuid existe dans la liste 
         let mut list = pull_contexts.lock().await;
         for ctx in list.iter_mut() 
         {
@@ -711,12 +710,46 @@ async fn get_pull_context2(
                 && ctx.digests_possible.iter().any(|d| d.value == digest_value)
             {
                 ctx.last_activity = Instant::now(); // Mettre à jour l'activité pour le timeout
-
                 println!("[PullContext2] Correspondance trouvée pour le digest GET | uuid={}", ctx.uuid);
+
+
+                // Déterminer dans quel vecteur stocker le digest selon le type de ressource
+                let digest_struct = Digest {
+                    algorithm: "sha256".to_string(),
+                    value: digest_value.clone(),
+                };
+
+                // Ajouter le digest dans le vecteur approprié en garantissant l'unicité
+                match resource_type {
+                    "manifests" => {
+                        if !ctx.manifest_digests.contains(&digest_struct) {
+                            ctx.manifest_digests.push(digest_struct.clone());
+                            println!("[PullContext2] Digest ajouté à manifest_digests: {}", digest_struct.as_str());
+                        }
+                    }
+                    "blobs" => {
+                        if !ctx.blob_digests.contains(&digest_struct) {
+                            ctx.blob_digests.push(digest_struct.clone());
+                            println!("[PullContext2] Digest ajouté à blob_digests: {}", digest_struct.as_str());
+                        }
+                    }
+                    "referrers" => {
+                        if !ctx.referrers_digests.contains(&digest_struct) {
+                            ctx.referrers_digests.push(digest_struct.clone());
+                            println!("[PullContext2] Digest ajouté à referrers_digests: {}", digest_struct.as_str());
+                        }
+                    }
+                    _ => {
+                        println!("[PullContext2] Type de ressource inconnu pour stockage des digests");
+                    }
+                }
+
+
+
                 //Verifier si le digest actuel correspond au digest racine
                 if let Some(racine) = &ctx.manifest_racine_digest //si le digest racine est defini
                 {
-                //si le digest de la requete n'est pas le digest racine -> ajouter les digests contenus dans le manifest demandé
+                    //si le digest de la requete n'est pas le digest racine -> ajouter les digests contenus dans le manifest demandé
                     if racine.value != digest_value 
                     {
                         //On ajoute les digests contenus dans le manifest courant qui a été demandé
@@ -779,7 +812,7 @@ async fn get_pull_context2(
                         return Ok(Some(ctx.uuid));
                     }
                 } 
-                //si le digest racine n'est pas defini
+                //si le digest racine n'est pas defini  
                 else 
                 {
                     println!("[PullContext2] Aucun digest racine défini pour ce contexte → bloqué");
