@@ -29,27 +29,19 @@ use std::io::Write;
 
 use uuid::Uuid;
 use tokio::time::{sleep, Duration};
+use serde::{Serialize, Deserialize};
 
 use std::time::Instant;//pour le timeout des pull context 2
 
-#[derive(Clone)]
-struct PullContext 
-{
-    client_ip: String, // IP du client
-    client_id: Uuid,
-    repo: String,
-    tag: Option<String>,
 
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct Digest {
     algorithm: String, // ex: "sha256"
     value: String,     // hex
 }
 
-#[derive(Debug, Clone)]
-struct PullContext2 {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PullContext {
     uuid: Uuid,
     ip_client: String,
     registry: String, //ex: "registry-1.docker.io"
@@ -63,6 +55,7 @@ struct PullContext2 {
     manifest_racine_digest: Option<Digest>,
     digests_possible: Vec<Digest>,
 
+    #[serde(skip_serializing, skip_deserializing, default = "Instant::now")]
     last_activity: Instant,
 
 }
@@ -83,15 +76,7 @@ struct ImageState {
     blobs_downloaded: HashSet<String> // blobs déjà téléchargés
 }
 
-#[derive(Debug)]
-enum DigestOrTag {
-    Digest(String), // GET → sha256:...
-    Tag(String),    // HEAD → tag
-}
-
-type SharedState = Arc<Mutex<HashMap<String, ImageState>>>;
-type PullMap = Arc<Mutex<HashMap<String, PullContext>>>;
-type PullContext2List = Arc<TokioMutex<Vec<PullContext2>>>;
+type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
 // Définir le timeout désiré (ex : 30 secondes)
 const CONTEXT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -126,7 +111,7 @@ impl Digest {
     }
 }
 
-impl PullContext2 {
+impl PullContext {
     fn new(uuid: Uuid, ip_client: String, registry: String, repository: String, tag: String) -> Self {
         Self {
             uuid,
@@ -164,83 +149,7 @@ impl PullContext2 {
 
 
 /// 🔐 Politique de sécurité
-fn is_allowed(path: &str, body: &[u8]) -> bool {
-    //println!("[POLICY] Analyse de {}", path);
-
-    // Toujours autoriser le ping registry
-    if path == "/v2/" {
-        return true;
-    }
-
-    // Toujours autoriser les blobs
-    if path.contains("/blobs/") {
-        return true;
-    }
-
-    // Toujours autoriser les manifests déjà stockés
-    if path.contains("/manifests/") && !body.is_empty() {
-        return true;
-    }
-
-    // 🔒 Exemple : bloquer tout le reste
-    true
-}
-
-/// last_request: retourne true si la requête courante est la dernière à traiter pour l'image
-fn last_request(path: &str, bytes: &[u8], state: &SharedState) -> bool {
-    use serde_json::Value;
-
-
-    let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
-    if parts.len() < 4 {
-        return false; // path invalide, impossible de savoir
-    }
-
-    let repo = format!("{}/{}", parts[0], parts[1]);
-
-    //println!("[LAST_REQUEST LOG] path: {}, parts: {:?}, repo: {}", path, parts, repo);
-
-    // ----- Cas manifest -----
-    if parts[2] == "manifests" && !bytes.is_empty() {
-        if let Ok(manifest_json) = serde_json::from_slice::<Value>(bytes) {
-            let mut blobs = HashSet::new();
-            if let Some(layers) = manifest_json.get("layers").and_then(|l| l.as_array()) {
-                for layer in layers {
-                    if let Some(digest) = layer.get("digest").and_then(|d| d.as_str()) {
-                        blobs.insert(digest.to_string());
-                    }
-                }
-            }
-            //println!("[LAST_REQUEST] blobs_expected for {}: {:?}", repo, blobs);
-
-            let mut state_lock = state.lock().unwrap();
-            state_lock.insert(repo.clone(), ImageState {
-                blobs_expected: blobs,
-                blobs_downloaded: HashSet::new(),
-            });
-        }
-        return false; // manifest n'est jamais "dernier"
-    }
-
-    // ----- Cas blobs -----
-    if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
-        let digest = parts[3].to_string(); // garder "sha256:..."
-        let mut state_lock = state.lock().unwrap();
-
-        if let Some(image_state) = state_lock.get_mut(&repo) {
-            image_state.blobs_downloaded.insert(digest.clone());
-            //println!("[LAST_REQUEST] blobs_downloaded: {:?}", image_state.blobs_downloaded);
-            //println!("[LAST_REQUEST] blobs_expected: {:?}", image_state.blobs_expected);
-
-            if image_state.blobs_expected.is_subset(&image_state.blobs_downloaded) {
-                println!("[LAST_REQUEST] All expected blobs downloaded for {}", repo);
-                return true;
-            }
-
-        }
-    }
-
-
+fn is_allowed() -> bool {
     false
 }
 
@@ -252,42 +161,104 @@ fn sha256_hex(data: &[u8]) -> String {
 }
 
 /// 💾 Sauvegarde en quarantaine
-fn save_to_quarantine(path: &str, bytes: &[u8], context: &PullContext) {
+fn save_to_quarantine(
+    path: &str,
+    bytes: &[u8],
+    ctx: &PullContext,
+) {
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
     if parts.len() < 4 {
         return;
     }
 
-    let tag = context.tag.as_deref().unwrap_or("unknown");
-    println!("[CACHE] Tag : {}", tag);
-    let repo = format!("{}/{}", parts[0], parts[1]);
+    let base_dir = format!(
+        "quarantaine/{}/{}",
+        ctx.registry,
+        ctx.repository
+    );
 
-    // MANIFEST
-    if parts[2] == "manifests" {
-        let name = parts[3].trim_start_matches("sha256:");
-        let dir = format!("quarantaine/{}/{}/manifests", repo, tag);
+    // Helper pour écrire un digest
+    fn write_digest(
+        base_dir: &str,
+        category: &str,
+        digest: &Digest,
+        bytes: &[u8],
+        ext: Option<&str>,
+    ) {
+        let dir = format!("{}/{}/{}/{}", base_dir, category, digest.algorithm, "");
         create_dir_all(&dir).ok();
-        fs::write(format!("{}/{}.json", dir, name), bytes).ok();
+
+        let filename = match ext {
+            Some(e) => format!("{}/{}.{}", dir, digest.value, e),
+            None => format!("{}/{}", dir, digest.value),
+        };
+
+        // Écriture idempotente
+        if !std::path::Path::new(&filename).exists() {
+            fs::write(&filename, bytes).ok();
+        }
     }
 
-    // BLOB
-    if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
-        let digest = parts[3].trim_start_matches("sha256:");
-        let dir = format!("quarantaine/{}/{}/blobs/sha256", repo, tag);
-        create_dir_all(&dir).ok();
-        fs::write(format!("{}/{}", dir, digest), bytes).ok();
+    // ===== MANIFEST =====
+    if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
+        let digest_value = parts[3].trim_start_matches("sha256:");
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
+
+        write_digest(
+            &base_dir,
+            "manifests",
+            &digest,
+            bytes,
+            Some("json"),
+        );
     }
-    // REFERRERS
-    if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
-        let digest = parts[3].trim_start_matches("sha256:");
-        let dir = format!("quarantaine/{}/{}/referrers", repo, tag);
-        create_dir_all(&dir).ok();
-        fs::write(format!("{}/{}.json", dir, digest), bytes).ok();
+
+    // ===== BLOB =====
+    else if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
+        let digest_value = parts[3].trim_start_matches("sha256:");
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
+
+        write_digest(
+            &base_dir,
+            "blobs",
+            &digest,
+            bytes,
+            None,
+        );
+    }
+
+    // ===== REFERRERS =====
+    else if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
+        let digest_value = parts[3].trim_start_matches("sha256:");
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
+
+        write_digest(
+            &base_dir,
+            "referrers",
+            &digest,
+            bytes,
+            Some("json"),
+        );
     }
 }
 
+
+
+
 /// 📦 Sert depuis le cache qui contient les images préalablement scannées
-fn try_serve_from_cache(req: &Request<Body>, context: &PullContext) -> Option<Response<Body>> {
+fn try_serve_from_cache(
+    req: &Request<Body>,
+    ctx: &PullContext,
+) -> Option<Response<Body>> {
     let path = req.uri().path();
     let is_head = req.method() == Method::HEAD;
 
@@ -296,96 +267,99 @@ fn try_serve_from_cache(req: &Request<Body>, context: &PullContext) -> Option<Re
         return None;
     }
 
-    //decapsuler le tag du contexte
-    let tag = context.tag.as_deref().unwrap_or("unknown");
-    //println!("[CACHE] Tag : {}", tag);
+    // Base dir conforme à la nouvelle arborescence
+    let base_dir = format!(
+        "cache/{}/{}",
+        ctx.registry,
+        ctx.repository
+    );
 
-    let repo = format!("{}/{}", parts[0], parts[1]);
+    if req.method() != Method::GET {
+        return None;
+    }
 
-    //println!("[CACHE] Recherche de {} dans {}", path, repo);
+    // ================= MANIFEST =================
+    if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
+        let digest = parts[3].trim_start_matches("sha256:");
+        let file = format!(
+            "{}/manifests/sha256/{}.json",
+            base_dir, digest
+        );
 
-    //On doit laisser passer les requetues GET a chaques fois jusqu'au dernier blob meme si l'image n'est pas en cache
-    if req.method() == Method::GET
-    {
-        // ===== MANIFEST =====
-        if parts[2] == "manifests" 
-        {
-            let name = parts[3].trim_start_matches("sha256:");
-            let file = format!("cache/{}/{}/manifests/{}.json", repo, tag, name);
-            //si le fichier demandé par la requete existe et a pu etre lu
-            if let Ok(data) = fs::read(&file) 
-            {
-                println!("data: {}", String::from_utf8_lossy(&data));
-                if data.len() < 20 {
-                    return None;
-                }
-                
-                let digest = sha256_hex(&data);//calcul du digest sha256 du manifest
-
-                //construction de la reponse HTTP conforme au standard Docker Registry v2
-                return Some(
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Docker-Distribution-API-Version", "registry/2.0")
-                        .header(
-                            "Content-Type",
-                            "application/vnd.docker.distribution.manifest.v2+json",
-                        )
-                        .header("Docker-Content-Digest", format!("sha256:{digest}"))
-                        .header("Content-Length", data.len())
-                        .body(if is_head { Body::empty() } else { Body::from(data) })
-                        .unwrap(),
-                );
-            
+        if let Ok(data) = fs::read(&file) {
+            if data.len() < 20 {
+                return None;
             }
+
+            let real_digest = sha256_hex(&data);
+
+            return Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Docker-Distribution-API-Version", "registry/2.0")
+                    .header(
+                        "Content-Type",
+                        "application/vnd.docker.distribution.manifest.v2+json",
+                    )
+                    .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
+                    .header("Content-Length", data.len())
+                    .body(if is_head { Body::empty() } else { Body::from(data) })
+                    .unwrap(),
+            );
         }
+    }
 
-        // ===== BLOB =====
-        if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
-            let digest = parts[3].trim_start_matches("sha256:");
-            let file = format!("cache/{}/{}/blobs/sha256/{}", repo, tag, digest);
+    // ================= BLOB =================
+    if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
+        let digest = parts[3].trim_start_matches("sha256:");
+        let file = format!(
+            "{}/blobs/sha256/{}",
+            base_dir, digest
+        );
 
-            if let Ok(data) = fs::read(&file) {
-                let real_digest = sha256_hex(&data);
+        if let Ok(data) = fs::read(&file) {
+            let real_digest = sha256_hex(&data);
 
-                return Some(
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "application/octet-stream")
-                        .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
-                        .header("Content-Length", data.len())
-                        .body(if is_head { Body::empty() } else { Body::from(data) })
-                        .unwrap(),
-                );
-            }
+            return Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/octet-stream")
+                    .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
+                    .header("Content-Length", data.len())
+                    .body(if is_head { Body::empty() } else { Body::from(data) })
+                    .unwrap(),
+            );
         }
-        
-        if parts[2] == "referrers" && parts[3].starts_with("sha256:") 
-        {
-            let digest = parts[3].trim_start_matches("sha256:");
-            let file = format!("cache/{}/{}/referrers/{}.json", repo, tag, digest);
+    }
 
-            if let Ok(data) = fs::read(&file) {
-                // Sécurité minimale : referrers non vide et JSON plausible
-                if data.len() < 20 {
-                    return None; // image incomplète → blocage
-                }
+    // ================= REFERRERS =================
+    if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
+        let digest = parts[3].trim_start_matches("sha256:");
+        let file = format!(
+            "{}/referrers/sha256/{}.json",
+            base_dir, digest
+        );
 
-                return Some(
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Docker-Distribution-API-Version", "registry/2.0")
-                        .header("Content-Type", "application/vnd.oci.image.index.v1+json")
-                        .header("Content-Length", data.len())
-                        .body(if is_head { Body::empty() } else { Body::from(data) })
-                        .unwrap(),
-                );
+        if let Ok(data) = fs::read(&file) {
+            if data.len() < 20 {
+                return None;
             }
+
+            return Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Docker-Distribution-API-Version", "registry/2.0")
+                    .header("Content-Type", "application/vnd.oci.image.index.v1+json")
+                    .header("Content-Length", data.len())
+                    .body(if is_head { Body::empty() } else { Body::from(data) })
+                    .unwrap(),
+            );
         }
     }
 
     None
 }
+
 
 fn manifest_list_has_linux_amd64(bytes: &[u8]) -> bool {
     let v: serde_json::Value = match serde_json::from_slice(bytes) {
@@ -423,47 +397,12 @@ fn manifest_list_has_linux_amd64(bytes: &[u8]) -> bool {
 }
 
 
-
-fn get_pull_context(req: &Request<Body>, parts: &[&str], client_ip: &str, pull_map: &PullMap) -> PullContext 
-{
-    // Sécurité minimale
-    if parts.len() < 2 {
-        return PullContext {
-            client_ip: client_ip.to_string(),
-            client_id: Uuid::new_v4(),
-            repo: "unknown".to_string(),
-            tag: None,
-        };
-    }
-
-    let repo = format!("{}/{}", parts[0], parts[1]);
-    let key = format!("{}|{}", client_ip, repo);
-
-    let mut map = pull_map.lock().unwrap();
-    // Récupération ou création du contexte PullContext
-    let entry = map.entry(key).or_insert_with(|| PullContext {
-        client_ip: client_ip.to_string(),
-        client_id: Uuid::new_v4(),
-        repo: repo.clone(),
-        tag: None,
-    });
-
-    // Mise à jour du tag UNIQUEMENT sur HEAD manifest tag
-    if req.method() == Method::HEAD
-        && parts.len() > 3
-        && !parts[3].starts_with("sha256:")
-    {
-        entry.tag = Some(parts[3].to_string());
-    }
-
-    entry.clone()
-}
-
-async fn get_pull_context2(
+/// 🔄 Récupération ou création du contexte PullContext
+async fn get_pull_context(
     req: &Request<Body>,
     parts: &[&str],
     client_ip: &str,
-    pull_contexts: &PullContext2List,
+    pull_contexts: &PullContextList,
 )-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
     // 🔹 Nettoyer les contextes expirés avec timeout
@@ -557,7 +496,7 @@ async fn get_pull_context2(
             }
             else 
             {
-                eprintln!("[PullContext2] Échec de la commande docker buildx imagetools inspect");
+                eprintln!("[PullContext] Échec de la commande docker buildx imagetools inspect");
                 return Err(PullContextError::MissingDigestOrTag);
             }
         }
@@ -575,7 +514,7 @@ async fn get_pull_context2(
         // 🔹 Vérifier si l'UUID existe déjà
         let mut list = pull_contexts.lock().await;
         if list.iter().any(|c| c.uuid == uuid) {
-            println!("[PullContext2] UUID déjà présent, pas de création d'un nouveau contexte");
+            println!("[PullContext] UUID déjà présent, pas de création d'un nouveau contexte");
             return Ok(Some(uuid));//retourner l'uuid existant
         }
         
@@ -583,8 +522,8 @@ async fn get_pull_context2(
 
 
 
-        // 🔹 Création du contexte PullContext2
-        let mut ctx = PullContext2::new(
+        // 🔹 Création du contexte PullContext
+        let mut ctx = PullContext::new(
             uuid,
             ip_client.clone(),
             registry.clone(),
@@ -666,7 +605,7 @@ async fn get_pull_context2(
         list.push(ctx);
 
         // 🔎 Affichage de toute la liste
-        println!("========== PULL CONTEXT 2 LIST ==========");
+        /*println!("========== PULL CONTEXT 2 LIST ==========");
         for (i, c) in list.iter().enumerate() {
             println!(
                 "[{}]\n\
@@ -683,7 +622,9 @@ async fn get_pull_context2(
                 c.manifest_racine_digest, c.blob_digests, c.referrers_digests, c.digests_possible
             );
         }
-        println!("=========================================");
+        println!("=========================================");*/
+
+        //Ici Appel API pour envoyer données de contexte HEAD au scan haut niveau 
 
         return Ok(Some(uuid));
     }
@@ -710,7 +651,7 @@ async fn get_pull_context2(
                 && ctx.digests_possible.iter().any(|d| d.value == digest_value)
             {
                 ctx.last_activity = Instant::now(); // Mettre à jour l'activité pour le timeout
-                println!("[PullContext2] Correspondance trouvée pour le digest GET | uuid={}", ctx.uuid);
+                println!("[PullContext] Correspondance trouvée pour le digest GET | uuid={}", ctx.uuid);
 
 
                 // Déterminer dans quel vecteur stocker le digest selon le type de ressource
@@ -724,23 +665,23 @@ async fn get_pull_context2(
                     "manifests" => {
                         if !ctx.manifest_digests.contains(&digest_struct) {
                             ctx.manifest_digests.push(digest_struct.clone());
-                            println!("[PullContext2] Digest ajouté à manifest_digests: {}", digest_struct.as_str());
+                            println!("[PullContext] Digest ajouté à manifest_digests: {}", digest_struct.as_str());
                         }
                     }
                     "blobs" => {
                         if !ctx.blob_digests.contains(&digest_struct) {
                             ctx.blob_digests.push(digest_struct.clone());
-                            println!("[PullContext2] Digest ajouté à blob_digests: {}", digest_struct.as_str());
+                            println!("[PullContext] Digest ajouté à blob_digests: {}", digest_struct.as_str());
                         }
                     }
                     "referrers" => {
                         if !ctx.referrers_digests.contains(&digest_struct) {
                             ctx.referrers_digests.push(digest_struct.clone());
-                            println!("[PullContext2] Digest ajouté à referrers_digests: {}", digest_struct.as_str());
+                            println!("[PullContext] Digest ajouté à referrers_digests: {}", digest_struct.as_str());
                         }
                     }
                     _ => {
-                        println!("[PullContext2] Type de ressource inconnu pour stockage des digests");
+                        println!("[PullContext] Type de ressource inconnu pour stockage des digests");
                     }
                 }
 
@@ -753,7 +694,7 @@ async fn get_pull_context2(
                     if racine.value != digest_value 
                     {
                         //On ajoute les digests contenus dans le manifest courant qui a été demandé
-                        println!("[PullContext2] Digest du GET différent du digest racine → récupération des digests du manifest demandé");
+                        println!("[PullContext] Digest du GET différent du digest racine → récupération des digests du manifest demandé");
 
                         // Construire la commande TOKEN + curl
                         let repo = &ctx.repository;
@@ -789,7 +730,7 @@ async fn get_pull_context2(
                                         if !ctx.digests_possible.contains(&digest_struct) 
                                         {
                                             ctx.digests_possible.push(digest_struct.clone());
-                                            println!("[PullContext2] Nouveau digest ajouté: {}", digest_struct.as_str());
+                                            println!("[PullContext] Nouveau digest ajouté: {}", digest_struct.as_str());
 
                                         }
                                     }
@@ -797,13 +738,13 @@ async fn get_pull_context2(
                             } 
                             else 
                             {
-                                eprintln!("[PullContext2] Échec de la récupération des digests via curl");
+                                eprintln!("[PullContext] Échec de la récupération des digests via curl");
                                 return Err(PullContextError::DigestNotAllowed);
                             }
                         } 
                         else 
                         {
-                            eprintln!("[PullContext2] Impossible d'exécuter la commande shell");
+                            eprintln!("[PullContext] Impossible d'exécuter la commande shell");
                             return Err(PullContextError::DigestNotAllowed);
                         }
                     }
@@ -815,7 +756,7 @@ async fn get_pull_context2(
                 //si le digest racine n'est pas defini  
                 else 
                 {
-                    println!("[PullContext2] Aucun digest racine défini pour ce contexte → bloqué");
+                    println!("[PullContext] Aucun digest racine défini pour ce contexte → bloqué");
                     return Err(PullContextError::DigestNotAllowed);
                 }
 
@@ -828,7 +769,7 @@ async fn get_pull_context2(
             }
         }
         // Aucun contexte trouvé en parcourant la liste
-        println!("[PullContext2] Aucun contexte trouvé pour le digest GET demandé");
+        println!("[PullContext] Aucun contexte trouvé pour le digest GET demandé");
         return Err(PullContextError::ContextMismatch);
     }
 
@@ -841,7 +782,7 @@ async fn get_pull_context2(
 
 
 
-async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map: PullMap, pull_contexts2: PullContext2List, ) -> Response<Body> {
+async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextList, ) -> Response<Body> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
@@ -862,19 +803,6 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     if req.method() == Method::POST {
         println!("[POST] Requête POST non supportée");
     }
-    /*if req.method() == Method::GET && parts.len() > 3 && parts[3].starts_with("sha256:") {
-        parse_digest(
-            DigestOrTag::Digest(parts[3].to_string()),
-            &req,
-        );
-    }
-    if req.method() == Method::HEAD && parts.len() > 3 && !parts[3].starts_with("sha256:") {
-        parse_digest(
-            DigestOrTag::Tag(parts[3].to_string()),
-            &req,
-        );
-    }*/
-
     
     //recupère l'ip du client 
     let client_ip = req
@@ -884,14 +812,10 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     .ip()
     .to_string();
 
-    /*if parts.len() > 3 {
-    println!("Requête HEAD sur tag : {}", parts[3]);
-    }*/
-
     //recupère le contexte du pull en cours
 
     //let context = get_pull_context(&req, &parts, &client_ip, &pull_map);
-    let context2 = match get_pull_context2(&req, &parts, &client_ip, &pull_contexts2).await {
+    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts).await {
         Ok(Some(uuid)) => {
             println!("[Main] Contexte trouvé / créé avec UUID: {}", uuid);
             uuid // tu peux continuer à utiliser uuid
@@ -920,77 +844,76 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
 
     };
 
-    //log
-    /*println!(
-        "[PULL CONTEXT] client={} uuid={} repo={} tag={:?} client_ip={}",
-        client_ip,
-        context.client_id,
-        context.repo,
-        context.tag,
-        context.client_ip
-    );*/
-
-    /* 
-    // Affichage de TOUTE la liste des PullContext2
-    let list = pull_contexts2.lock().unwrap().clone();
-    println!("========== PULL CONTEXT 2 LIST ==========");
-    for (i, c) in list.iter().enumerate() {
-        println!(
-            "[{}]\n\
-            uuid={}\n\
-            ip={}\n\
-            registry={}\n\
-            repository={}\n\
-            image={}\n\
-            tag={}\n\
-            manifest_digests={:?}\n\
-            blob_digests={:?}\n\
-            referrers_digests={:?}\n",
-            i,
-            c.uuid,
-            c.ip_client,
-            c.registry,
-            c.repository,
-            c.image,
-            c.tag,
-            c.manifest_digests,
-            c.blob_digests,
-            c.referrers_digests,
-        );
-    }
-    println!("=========================================");
-    */
-
-
-    //sleep(Duration::from_secs(1000)).await; 
-
-    let context = get_pull_context(&req, &parts, &client_ip, &pull_map);
-    let requested_repo = format!("{}/{}", parts[0], parts[1]);
-
-    //Verification du contexte de requete
-    // /!\Produit une erreure si differents pulls sont mélangés 
-    // Solution -> Utiliser un Uuid de session de pull commun a chaques requetes d'un meme pull
-    if client_ip != context.client_ip || requested_repo != context.repo{
-        println!("[ERROR] IP du client ne correspond pas au contexte PullContext");
-        return Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body(Body::from("IP du client ne correspond pas au contexte PullContext"))
-            .unwrap();
-    }
-    // Tenter de servir depuis le cache local
-    //Si la fonction try_serve_from_cache retourne une reponse (Some)
-    if let Some(resp) = try_serve_from_cache(&req, &context) {
-        //println!("[LOCAL REGISTRY] {}", path);
-        return resp;
-    }
-    else if req.method() == Method::GET
+    // Vérifier si le manifest racine est dans la blacklist
     {
-        println!("Image pas trouvée dans le cache | Bloquage");
-        /*loop 
+        if method == Method::HEAD 
         {
+            let list = pull_contexts.lock().await;
+            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                if let Some(racine_digest) = &ctx.manifest_racine_digest {
+                    let blacklist_path = "blacklist.json";
+                    if std::path::Path::new(blacklist_path).exists() {
+                        if let Ok(content) = std::fs::read_to_string(blacklist_path) {
+                            if let Ok(blacklist) = serde_json::from_str::<Vec<PullContext>>(&content) {
+                                if blacklist.iter().any(|b| {
+                                    if let Some(b_racine) = &b.manifest_racine_digest {
+                                        b_racine.value == racine_digest.value
+                                    } else {
+                                        false
+                                    }
+                                }) {
+                                    println!(
+                                        "[BLACKLIST CHECK] Manifest racine {} présent dans blacklist -> pull refusé",
+                                        racine_digest.value
+                                    );
 
-        }*/
+                                    // 🔹 Libérer le contexte
+                                    drop(list); // libérer le lock
+                                    let mut list = pull_contexts.lock().await;
+                                    list.retain(|c| c.uuid != context_uuid);
+                                    println!(
+                                        "[PullContext] Contexte libéré car blacklisté | uuid={}",
+                                        context_uuid
+                                    );
+
+                                    // 🔹 Retourner FORBIDDEN
+                                    return Response::builder()
+                                        .status(StatusCode::FORBIDDEN)
+                                        .body(Body::from("Image présente dans blacklist"))
+                                        .unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+
+
+    // Vérifier le cache avant d'aller en upstream
+    {
+        if req.method() == Method::GET 
+        {
+            let list = pull_contexts.lock().await;
+            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                if let Some(resp) = try_serve_from_cache(&req, ctx) {//Si le digest est dans le cache on retourne a partir du digest stocké
+                    return resp;
+                }
+                else 
+                {
+                    println!("Image pas trouvée dans le cache -> GET upstream -> quarantine ->  Scan");
+                }
+
+            }
+        }
+    }
+
+
+
+
+
+
 
     // Construire l'URL upstream
     let upstream_url = format!(
@@ -1054,33 +977,89 @@ async fn handle(req: Request<Body>, client: Client, state: SharedState, pull_map
     }
 
 
-    // === POLICY CHECK ===
-    if !is_allowed(&path, &bytes) {
-        save_to_quarantine(&path, &bytes, &context); // stocke la ressource dans la quarantaine
+
+    // Sauvegarde en quarantaine pour analyse
+    if method == Method::GET && !bytes.is_empty() 
+    {
+        if path.contains("/manifests/")
+            || path.contains("/blobs/")
+            || path.contains("/referrers/")
+        {
+            let list = pull_contexts.lock().await;
+            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                save_to_quarantine(&path, &bytes, ctx);
+            }
+        }
+    }
+
+    //Appeler ici l'API pour envoyer les données au scan de sécurité
+
+    // On continue ou on stop le pull en fonction du scan de sécurité
+    if method == Method::GET && !is_allowed() //On laisse passer tout les HEAD et bloque les GET non conformes
+    {
+        println!("[SECURITY CHECK] Image non conforme -> bloquage du pull");
+
+
+        // Ajouter le contexte dans la blacklist.json
+
+        // 🔹 Récupérer le contexte courant
+        let blocked_context = {
+            let list = pull_contexts.lock().await;
+            list.iter()
+                .find(|c| c.uuid == context_uuid)
+                .cloned()
+        };
+
+        if let Some(ctx) = blocked_context 
+        {
+            use serde::{Serialize, Deserialize};
+            use std::fs;
+            use std::path::Path;
+
+            let blacklist_path = "blacklist.json";
+
+            // 🔹 Charger la blacklist existante ou créer une nouvelle liste
+            let mut blacklist: Vec<PullContext> = if Path::new(blacklist_path).exists() {
+                fs::read_to_string(blacklist_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            // 🔹 Ajouter le contexte courant
+            blacklist.push(ctx);
+
+            // 🔹 Écriture dans le fichier
+            if let Ok(json) = serde_json::to_string_pretty(&blacklist) {
+                let _ = fs::write(blacklist_path, json);
+                println!("[BLACKLIST] Contexte ajouté dans blacklist.json");
+            }
+        }
+
+
+
+        // 🔹 Libérer le contexte PullContext
+        {
+            let mut list = pull_contexts.lock().await;
+            list.retain(|c| c.uuid != context_uuid);
+            println!(
+                "[PullContext] Contexte libéré après scan non conforme | uuid={}",
+                context_uuid
+            );
+        }
+
         return Response::builder()
             .status(StatusCode::FORBIDDEN)
-            .body(Body::from("Image mise en quarantaine"))
+            .body(Body::from("Image refusée par le scan de sécurité"))
             .unwrap();
     }
 
-    // Sauvegarder les manifests et blobs GET valides dans la quarantaine
-    if method == Method::GET && !bytes.is_empty() {
-        if path.contains("/manifests/") || path.contains("/blobs/") || path.contains("/referrers/") {
-            save_to_quarantine(&path, &bytes, &context);
-        }
-    }
-    // Vérifier si c'est la dernière requête à traiter pour cette image
-    // /!\Attention /!\ L'erreure est gènérée lors du dernier blob téléchargé donc les autres blobs et manifests sont bien téléchargés
-    //Il faudra changer la logique pour intercepter uniquement les premiers HEAD pour conniatre l'image ciblé, 
-    //bloquer le pull et faire la requete docker pull depuis le server proxy pour mettre en cache
-    if last_request(&path, &bytes, &state) == true {
-        println!("Dernière requête pour cette image traitée.");
-        return Response::builder()
-        .status(StatusCode::FORBIDDEN)
-        .body(Body::from("Image mise en quarantaine"))
-        .unwrap();
-    }
 
+
+
+    //Si image pas dans le cache mais scan OK -> on laisse passer la réponse upstream
     // Construire la réponse finale pour le client
     let mut resp = Response::builder().status(status);
     for (k, v) in headers.iter() {
@@ -1107,12 +1086,8 @@ async fn main() -> Result<()> {
 
     let client = Client::builder().use_rustls_tls().build()?;
 
-    // State partagé pour suivre les pulls en cours
-    let pull_map: PullMap = Arc::new(Mutex::new(HashMap::new()));
-
     // State partagé pour suivre les blobs/manifests
-    let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
-    let pull_contexts2: PullContext2List = Arc::new(TokioMutex::new(Vec::new()));
+    let pull_context: PullContextList = Arc::new(TokioMutex::new(Vec::new()));
 
 
     println!("✅ MITM Docker registry en écoute sur https://registry-1.docker.io:443");
@@ -1121,9 +1096,7 @@ async fn main() -> Result<()> {
         let (stream, addr) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let client = client.clone();
-        let state = state.clone(); // Arc<Mutex<SharedState>>
-        let pull_map = pull_map.clone(); // <-- clone pour cette itération
-        let pull_contexts2 = pull_contexts2.clone();
+        let pull_contexts = pull_context.clone();
 
         
         tokio::spawn(async move {
@@ -1132,23 +1105,19 @@ async fn main() -> Result<()> {
             {
                 
                 let client = client.clone();
-                let state = state.clone();
-                let pull_map = pull_map.clone(); // <-- clone pour service_fn
-                let pull_contexts2 = pull_contexts2.clone();
+                let pull_contexts = pull_contexts.clone();
 
 
                 let service = service_fn(move |mut req| 
                     {
                         let client = client.clone();
-                        let state = state.clone();
-                        let pull_map = pull_map.clone(); // clone pour handle
                         let addr = addr; // passer addr
-                        let pull_contexts2 = pull_contexts2.clone();
+                        let pull_contexts = pull_contexts.clone();
                         async move 
                         { 
                             // stocker addr dans la requête pour handle
                             req.extensions_mut().insert(addr);
-                            Ok::<_, Infallible>(handle(req, client, state, pull_map, pull_contexts2).await) 
+                            Ok::<_, Infallible>(handle(req, client,pull_contexts).await) 
                         }
                     });
                 let _ = Http::new().serve_connection(tls, service).await;
