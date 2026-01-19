@@ -40,10 +40,11 @@ pub fn compute_availability(manifest: &ManifestData, blobs: &[RawBlob]) -> Avail
     }
 
     // ----- Layers -----
-    let layers_total = manifest.layer_digests.len() as u32;
+    let layers_total = manifest.layers.len() as u32;
     let mut layers_received: u32 = 0;
 
-    for d in &manifest.layer_digests {
+    for l in manifest.layers.iter() {
+    let d = &l.digest;
         if present.contains(d.as_str()) {
             layers_received += 1;
         } else {

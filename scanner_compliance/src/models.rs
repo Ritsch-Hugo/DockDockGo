@@ -174,23 +174,21 @@ pub enum Status {
     SKIP,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManifestData {
-    #[serde(default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ManifestLayer {
+    pub digest: String,
     pub media_type: Option<String>,
-
-    #[serde(default)]
-    pub layers_count: Option<u32>,
-
-    #[serde(default)]
-    pub annotations: HashMap<String, String>,
-
-     #[serde(default)]
-    pub config_digest: Option<String>,
-
-    #[serde(default)]
-    pub layer_digests: Vec<String>,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ManifestData {
+    pub media_type: Option<String>,
+    pub layers_count: Option<u32>,
+    pub annotations: HashMap<String, String>,
+    pub config_digest: Option<String>,
+    pub layers: Vec<ManifestLayer>,
+}
+
 
 /// --- NOUVEAU : contrat d’entrée raw (Étape 1: manifest-only) ---
 

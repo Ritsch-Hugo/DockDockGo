@@ -1,9 +1,12 @@
 mod availability;
-mod blob_reader;
-mod config_parser;
 mod engine;
 mod models;
 mod rules;
+
+mod config_parser;
+mod blob_reader;
+
+mod fs;
 
 use crate::engine::run_rules;
 use crate::models::*;
@@ -13,12 +16,10 @@ use std::collections::HashMap;
 use std::process;
 
 fn usage() -> String {
-    "Usage:\n  cargo run -- <input.json>\nExample:\n  cargo run -- samples/request_manifest_only.json\n"
+    "Usage:\n  cargo run --bin scanner_compliance -- <input.json>\nExample:\n  cargo run --bin scanner_compliance -- samples/request_manifest_only.json\n"
         .to_string()
 }
 
-/// Parse le manifest brut et extrait ce qui est utile à la compliance image-level.
-/// V1: on extrait mediaType, annotations, config.digest, layers[].digest
 fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
     let v: Value =
         serde_json::from_str(manifest_raw).map_err(|e| format!("invalid manifest_raw JSON: {e}"))?;
@@ -48,24 +49,39 @@ fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
         .and_then(|x| x.as_str())
         .map(|s| s.to_string());
 
-    // layers digests
-    let mut layer_digests: Vec<String> = Vec::new();
+    // layers: digest + mediaType
+    let mut layers: Vec<ManifestLayer> = Vec::new();
     if let Some(arr) = v.get("layers").and_then(|x| x.as_array()) {
         for layer in arr {
-            if let Some(d) = layer.get("digest").and_then(|x| x.as_str()) {
-                layer_digests.push(d.to_string());
+            let digest = layer
+                .get("digest")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+
+            if digest.is_none() {
+                continue;
             }
+
+            let layer_media_type = layer
+                .get("mediaType")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+
+            layers.push(ManifestLayer {
+                digest: digest.unwrap(),
+                media_type: layer_media_type,
+            });
         }
     }
 
-    let layers_count = Some(layer_digests.len() as u32);
+    let layers_count = Some(layers.len() as u32);
 
     Ok(ManifestData {
         media_type,
         layers_count,
         annotations,
         config_digest,
-        layer_digests,
+        layers,
     })
 }
 
@@ -82,9 +98,6 @@ fn empty_config() -> ImageConfig {
     }
 }
 
-/// Charge l’input JSON.
-/// - Si c'est un ScanRequest (manifest_raw + stage), on construit un ImageData minimal et progressif.
-/// - Sinon, on parse l’ancien ImageData (legacy) pour ne pas casser l’existant.
 fn load_input(path: &str) -> Result<ImageData, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
@@ -92,86 +105,110 @@ fn load_input(path: &str) -> Result<ImageData, String> {
     let probe: Value =
         serde_json::from_str(&content).map_err(|e| format!("failed to parse JSON {path}: {e}"))?;
 
+    // Nouveau format si "manifest_raw" + "stage"
     let is_scan_request = probe.get("manifest_raw").is_some() && probe.get("stage").is_some();
 
-    if is_scan_request {
-        let req: ScanRequest =
-            serde_json::from_value(probe).map_err(|e| format!("invalid ScanRequest: {e}"))?;
+    if !is_scan_request {
+        // Ancien format : ImageData complet
+        return serde_json::from_str::<ImageData>(&content)
+            .map_err(|e| format!("failed to parse legacy ImageData {path}: {e}"));
+    }
 
-        let manifest = parse_manifest_data(&req.manifest_raw)?;
+    // --- Nouveau format : ScanRequest ---
+    let req: ScanRequest =
+        serde_json::from_value(probe).map_err(|e| format!("invalid ScanRequest: {e}"))?;
 
-        // Étape 2 : availability = config/layers présents (content-aware)
-        let avail = crate::availability::compute_availability(&manifest, &req.blobs);
+    let manifest = parse_manifest_data(&req.manifest_raw)?;
 
-        // Étape 3 : si config content dispo → parse config blob réel
-        let mut parsed_config = empty_config();
-let mut config_parsed_ok = false;
+    // Étape 2 : compute availability depuis manifest + blobs reçus
+    let avail = crate::availability::compute_availability(&manifest, &req.blobs);
 
-if avail.has_config {
-    if let Some(cfg_digest) = manifest.config_digest.as_deref() {
-        if let Some(blob) = req.blobs.iter().find(|b| b.digest == cfg_digest) {
-            match crate::blob_reader::blob_bytes(blob)
-                .and_then(|bytes| crate::config_parser::parse_oci_config_json(&bytes))
-            {
-                Ok(cfg) => {
-                    parsed_config = cfg;
-                    // ✅ 4.1: même si cfg est "vide", c'est un OCI config valide => has_config=true
-                    config_parsed_ok = true;
-                }
-                Err(e) => {
-                    eprintln!("Config parse error for {}: {}", cfg_digest, e);
+    // --- Étape 3 (4.1): parse config blob best-effort si dispo ---
+    let mut parsed_config = empty_config();
+    let mut config_parsed_ok = false;
+
+    if avail.has_config {
+        if let Some(cfg_digest) = manifest.config_digest.as_deref() {
+            if let Some(blob) = req.blobs.iter().find(|b| b.digest == cfg_digest) {
+                match crate::blob_reader::blob_bytes(blob)
+                    .and_then(|bytes| crate::config_parser::parse_oci_config_json(&bytes))
+                {
+                    Ok(cfg) => {
+                        parsed_config = cfg;
+                        // ✅ config JSON valide même si config:{} vide
+                        config_parsed_ok = true;
+                    }
+                    Err(e) => {
+                        eprintln!("Config parse error for {}: {}", cfg_digest, e);
+                    }
                 }
             }
         }
     }
-}
 
-// ✅ has_config final = blob présent + parse OCI config OK
-let final_has_config = avail.has_config && config_parsed_ok;
-        let image_ref = req.image_ref.unwrap_or_else(|| "unknown".to_string());
+    let final_has_config = avail.has_config && config_parsed_ok;
 
-        // ImageData minimal (FS non dispo à l’étape 3)
-        let img = ImageData {
-            meta: ImageMeta {
-                image_ref,
-                digest: None,
-            },
+    // --- Étape 5.1: parse received filesystem layers (tar/tar.gz) into raw fs_entries ---
+    // IMPORTANT: on ne met PAS has_fs=true ici (pas d'overlay/whiteouts, pas final)
+    let mut fs_entries: Vec<FsEntry> = Vec::new();
 
-            has_manifest: true,
-            has_config: final_has_config,
-            has_fs: false,
+    for layer in manifest.layers.iter() {
+        let mt = layer.media_type.as_deref().unwrap_or("");
 
-            scan: ScanInfo {
-                stage: req.stage.clone(),
-                inputs: InputsSummary {
-                    has_manifest: true,
-                    has_config: final_has_config,
-                    has_fs: false,
-                    layers_total: avail.layers_total,
-                    layers_received: avail.layers_received,
-                },
-            },
+        // Filtrage V1 : ne tenter que les mediaTypes de layer "rootfs diff tar"
+        let looks_like_fs_layer = mt.contains("application/vnd.oci.image.layer")
+            || mt.contains("application/vnd.docker.image.rootfs.diff.tar");
 
-            // Pour aider le MCP
-            missing_artifacts: avail.missing.clone(),
+        if !looks_like_fs_layer {
+            continue;
+        }
 
-            // Runtime config parsée si dispo, sinon vide.
-            config: parsed_config,
-
-            // FS vide tant qu’on n’a pas assemblé le rootfs (étape 5)
-            fs_paths: Vec::new(),
-            fs_entries: Vec::new(),
-
-            // Résumé manifest
-            manifest: Some(manifest),
-        };
-
-        Ok(img)
-    } else {
-        // Legacy ImageData complet (compat)
-        serde_json::from_str::<ImageData>(&content)
-            .map_err(|e| format!("failed to parse legacy ImageData {path}: {e}"))
+        if let Some(b) = req.blobs.iter().find(|x| x.digest == layer.digest) {
+            if let Some(p) = b.path.as_deref() {
+                match crate::fs::layer_reader::read_layer_entries(p) {
+                    Ok(mut entries) => fs_entries.append(&mut entries),
+                    Err(e) => eprintln!("Layer parse error for {}: {}", layer.digest, e),
+                }
+            }
+        }
     }
+
+    let image_ref = req.image_ref.clone().unwrap_or_else(|| "unknown".to_string());
+
+    Ok(ImageData {
+        meta: ImageMeta {
+            image_ref,
+            digest: None,
+        },
+
+        has_manifest: true,
+        has_config: final_has_config,
+        has_fs: false,
+
+        scan: ScanInfo {
+            stage: req.stage.clone(),
+            inputs: InputsSummary {
+                has_manifest: true,
+                has_config: final_has_config,
+                has_fs: false,
+                layers_total: avail.layers_total,
+                layers_received: avail.layers_received,
+            },
+        },
+
+        missing_artifacts: avail.missing.clone(),
+
+        config: if final_has_config {
+            parsed_config
+        } else {
+            empty_config()
+        },
+
+        fs_paths: Vec::new(),
+        fs_entries,
+
+        manifest: Some(manifest),
+    })
 }
 
 fn main() {
@@ -191,7 +228,7 @@ fn main() {
         }
     };
 
-    // ⚠️ Mets ici les noms EXACTS exportés dans src/rules/mod.rs chez toi
+    // ✅ Noms EXACTS depuis src/rules/mod.rs
     let rules: Vec<Box<dyn crate::engine::Rule>> = vec![
         // Config/runtime rules
         Box::new(NonRootUserRule),
@@ -202,7 +239,7 @@ fn main() {
         Box::new(ExposedPortsRule),
         Box::new(VolumesRule),
 
-        // FS rules
+        // FS rules (restent SKIP tant que has_fs=false / fs non assemblé)
         Box::new(ForbiddenBinariesRule),
         Box::new(DangerousPermissionsRule),
         Box::new(FsSecretsRule),
