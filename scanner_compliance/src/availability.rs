@@ -27,7 +27,7 @@ pub fn compute_availability(manifest: &ManifestData, blobs: &[RawBlob]) -> Avail
     // ----- Config -----
     let has_config = match manifest.config_digest.as_deref() {
         Some(cfg) => present.contains(cfg),
-        None => false,
+        _none => false,
     };
 
     if let Some(cfg) = manifest.config_digest.as_deref() {

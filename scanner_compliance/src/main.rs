@@ -105,37 +105,29 @@ fn load_input(path: &str) -> Result<ImageData, String> {
 
         // Étape 3 : si config content dispo → parse config blob réel
         let mut parsed_config = empty_config();
+let mut config_parsed_ok = false;
 
-        if avail.has_config {
-            if let Some(cfg_digest) = manifest.config_digest.as_deref() {
-                if let Some(blob) = req.blobs.iter().find(|b| b.digest == cfg_digest) {
-                    match crate::blob_reader::blob_bytes(blob)
-                        .and_then(|bytes| crate::config_parser::parse_oci_config_json(&bytes))
-                    {
-                        Ok(cfg) => parsed_config = cfg,
-                        Err(e) => {
-                            // V1: ne pas crash. On laisse has_config devenir false (voir final_has_config)
-                            eprintln!("Config parse error for {}: {}", cfg_digest, e);
-                        }
-                    }
+if avail.has_config {
+    if let Some(cfg_digest) = manifest.config_digest.as_deref() {
+        if let Some(blob) = req.blobs.iter().find(|b| b.digest == cfg_digest) {
+            match crate::blob_reader::blob_bytes(blob)
+                .and_then(|bytes| crate::config_parser::parse_oci_config_json(&bytes))
+            {
+                Ok(cfg) => {
+                    parsed_config = cfg;
+                    // ✅ 4.1: même si cfg est "vide", c'est un OCI config valide => has_config=true
+                    config_parsed_ok = true;
+                }
+                Err(e) => {
+                    eprintln!("Config parse error for {}: {}", cfg_digest, e);
                 }
             }
         }
+    }
+}
 
-        // has_config "réel" : parsing a effectivement fourni quelque chose d’exploitable
-        let final_has_config = {
-            let looks_parsed = parsed_config.user.is_some()
-                || !parsed_config.env.is_empty()
-                || !parsed_config.labels.is_empty()
-                || !parsed_config.entrypoint.is_empty()
-                || !parsed_config.cmd.is_empty()
-                || parsed_config.working_dir.is_some()
-                || !parsed_config.exposed_ports.is_empty()
-                || !parsed_config.volumes.is_empty();
-
-            avail.has_config && looks_parsed
-        };
-
+// ✅ has_config final = blob présent + parse OCI config OK
+let final_has_config = avail.has_config && config_parsed_ok;
         let image_ref = req.image_ref.unwrap_or_else(|| "unknown".to_string());
 
         // ImageData minimal (FS non dispo à l’étape 3)

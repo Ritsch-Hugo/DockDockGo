@@ -1,0 +1,19 @@
+{
+  "blobs": [
+    {
+      "digest": "sha256:a772d1c5447d4e48198256edd788609d4e2181de725f5836fccdb84ceb9a6c6b",
+      "path": "/home/hugor/Bureau/Cyber/DocDockGo/compliance/DockDockGo/quarantaine/library/rust/latest/blobs/sha256/a772d1c5447d4e48198256edd788609d4e2181de725f5836fccdb84ceb9a6c6b"
+    },
+    {
+      "digest": "sha256:0b91977bf575985a14bb3e295f0b92166fd45e41083b63f5fcdb3eb1b7dd60aa",
+      "path": "/home/hugor/Bureau/Cyber/DocDockGo/compliance/DockDockGo/quarantaine/library/rust/latest/blobs/sha256/0b91977bf575985a14bb3e295f0b92166fd45e41083b63f5fcdb3eb1b7dd60aa"
+    },
+    {
+      "digest": "sha256:261f96e1037adfdcce858dddb75b6b6149650c47e89eeb0d917a5f7e85cf9098",
+      "path": "/home/hugor/Bureau/Cyber/DocDockGo/compliance/DockDockGo/quarantaine/library/rust/latest/blobs/sha256/261f96e1037adfdcce858dddb75b6b6149650c47e89eeb0d917a5f7e85cf9098"
+    }
+  ],
+  "image_ref": "../quarantaine/library/rust/latest",
+  "manifest_raw": "{\n  \"schemaVersion\": 2,\n  \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\",\n  \"config\": {\n    \"mediaType\": \"application/vnd.oci.image.config.v1+json\",\n    \"digest\": \"sha256:a772d1c5447d4e48198256edd788609d4e2181de725f5836fccdb84ceb9a6c6b\",\n    \"size\": 241\n  },\n  \"layers\": [\n    {\n      \"mediaType\": \"application/vnd.in-toto+json\",\n      \"digest\": \"sha256:0b91977bf575985a14bb3e295f0b92166fd45e41083b63f5fcdb3eb1b7dd60aa\",\n      \"size\": 17210108,\n      \"annotations\": {\n        \"in-toto.io/predicate-type\": \"https://spdx.dev/Document\"\n      }\n    },\n    {\n      \"mediaType\": \"application/vnd.in-toto+json\",\n      \"digest\": \"sha256:261f96e1037adfdcce858dddb75b6b6149650c47e89eeb0d917a5f7e85cf9098\",\n      \"size\": 15396,\n      \"annotations\": {\n        \"in-toto.io/predicate-type\": \"https://slsa.dev/provenance/v0.2\"\n      }\n    }\n  ]\n}",
+  "stage": "partial_layers"
+}
