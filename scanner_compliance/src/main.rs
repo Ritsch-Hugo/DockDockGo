@@ -11,8 +11,10 @@ mod fs;
 use crate::engine::run_rules;
 use crate::models::*;
 use crate::rules::*;
+use crate::fs::overlay::{apply_layer, FsIndex, FsNodeKind};
+
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process;
 
 fn usage() -> String {
@@ -148,30 +150,86 @@ fn load_input(path: &str) -> Result<ImageData, String> {
 
     let final_has_config = avail.has_config && config_parsed_ok;
 
-    // --- Étape 5.1: parse received filesystem layers (tar/tar.gz) into raw fs_entries ---
-    // IMPORTANT: on ne met PAS has_fs=true ici (pas d'overlay/whiteouts, pas final)
-    let mut fs_entries: Vec<FsEntry> = Vec::new();
+    // --- Étape 5.1/5.2: parse layers + overlay (FINAL ONLY) ---
+    // 1) Identifier les layers "filesystem" attendus (selon mediaType).
+    let fs_layers: Vec<&ManifestLayer> = manifest
+        .layers
+        .iter()
+        .filter(|layer| {
+            let mt = layer.media_type.as_deref().unwrap_or("");
+            mt.contains("application/vnd.oci.image.layer")
+                || mt.contains("application/vnd.docker.image.rootfs.diff.tar")
+        })
+        .collect();
 
-    for layer in manifest.layers.iter() {
-        let mt = layer.media_type.as_deref().unwrap_or("");
+    // 2) Présence réelle = blob avec contenu accessible (path présent)
+    let present: HashSet<&str> = req
+        .blobs
+        .iter()
+        .filter(|b| b.path.is_some())
+        .map(|b| b.digest.as_str())
+        .collect();
 
-        // Filtrage V1 : ne tenter que les mediaTypes de layer "rootfs diff tar"
-        let looks_like_fs_layer = mt.contains("application/vnd.oci.image.layer")
-            || mt.contains("application/vnd.docker.image.rootfs.diff.tar");
+    let fs_layers_total = fs_layers.len() as u32;
+    let fs_layers_received = fs_layers
+        .iter()
+        .filter(|l| present.contains(l.digest.as_str()))
+        .count() as u32;
 
-        if !looks_like_fs_layer {
+    // 3) has_fs = true UNIQUEMENT quand tous les layers FS attendus sont reçus
+    let final_has_fs = fs_layers_received == fs_layers_total;
+
+    // 4) Lire les layers reçus dans l'ordre du manifest
+    let mut per_layer_entries: Vec<Vec<FsEntry>> = Vec::new();
+
+    for layer in fs_layers.iter() {
+        if !present.contains(layer.digest.as_str()) {
             continue;
         }
 
         if let Some(b) = req.blobs.iter().find(|x| x.digest == layer.digest) {
             if let Some(p) = b.path.as_deref() {
                 match crate::fs::layer_reader::read_layer_entries(p) {
-                    Ok(mut entries) => fs_entries.append(&mut entries),
+                    Ok(entries) => per_layer_entries.push(entries),
                     Err(e) => eprintln!("Layer parse error for {}: {}", layer.digest, e),
                 }
             }
         }
     }
+
+    // 5) Construire fs_entries :
+    // - si final_has_fs=true => overlay final (whiteouts)
+    // - sinon => concat brut (utile debug), mais les règles FS resteront SKIP
+    let fs_entries: Vec<FsEntry> = if final_has_fs {
+        let mut fs_index: FsIndex = FsIndex::new();
+
+        for entries in per_layer_entries.iter() {
+            apply_layer(&mut fs_index, entries);
+        }
+
+        fs_index
+            .into_iter()
+            .map(|(path, node)| FsEntry {
+                path,
+                mode: node.mode,
+                kind: Some(
+                    match node.kind {
+                        FsNodeKind::File => "file",
+                        FsNodeKind::Dir => "dir",
+                        FsNodeKind::Symlink => "symlink",
+                        FsNodeKind::Other => "other",
+                    }
+                    .to_string(),
+                ),
+            })
+            .collect()
+    } else {
+        let mut out: Vec<FsEntry> = Vec::new();
+        for mut entries in per_layer_entries {
+            out.append(&mut entries);
+        }
+        out
+    };
 
     let image_ref = req.image_ref.clone().unwrap_or_else(|| "unknown".to_string());
 
@@ -183,14 +241,14 @@ fn load_input(path: &str) -> Result<ImageData, String> {
 
         has_manifest: true,
         has_config: final_has_config,
-        has_fs: false,
+        has_fs: final_has_fs,
 
         scan: ScanInfo {
             stage: req.stage.clone(),
             inputs: InputsSummary {
                 has_manifest: true,
                 has_config: final_has_config,
-                has_fs: false,
+                has_fs: final_has_fs,
                 layers_total: avail.layers_total,
                 layers_received: avail.layers_received,
             },
