@@ -33,6 +33,13 @@ use serde::{Serialize, Deserialize};
 
 use std::time::Instant;//pour le timeout des pull context 2
 
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use futures::future::BoxFuture;
+use futures::FutureExt; // pour .boxed()
+
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct Digest {
@@ -70,6 +77,33 @@ enum PullContextError {
     DigestNotAllowed,
     ExpiredContext,
 }
+
+
+
+//Structures pour predict_digests
+
+#[derive(Debug, Deserialize)]
+struct ManifestList {
+    manifests: Vec<ManifestDescriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestDescriptor {
+    digest: String,
+    mediaType: String,
+    platform: Platform,
+    #[serde(default)]
+    annotations: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Platform {
+    os: String,
+    architecture: String,
+}
+
+
+
 
 struct ImageState {
     blobs_expected: HashSet<String>,  // tous les blobs attendus pour l'image
@@ -150,7 +184,7 @@ impl PullContext {
 
 /// 🔐 Politique de sécurité
 fn is_allowed() -> bool {
-    false
+    true
 }
 
 /// 🔑 SHA256 réel (Docker compliant)
@@ -403,6 +437,7 @@ async fn get_pull_context(
     parts: &[&str],
     client_ip: &str,
     pull_contexts: &PullContextList,
+    client: &Client, 
 )-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
     // 🔹 Nettoyer les contextes expirés avec timeout
@@ -517,7 +552,29 @@ async fn get_pull_context(
             println!("[PullContext] UUID déjà présent, pas de création d'un nouveau contexte");
             return Ok(Some(uuid));//retourner l'uuid existant
         }
-        
+
+
+
+
+        //Appeller ici la fonction predict_digests    
+
+        // 🔹 Prédiction des digests à partir du tag
+        let predicted_digests = match predict_digests(
+            &client,                    // reqwest::Client
+            &uuid,                      // UUID du contexte
+            &registry,                  // "registry-1.docker.io"
+            &repository,                // ex: "library/ubuntu"
+            &tag_ou_digest,             // ex: "latest"
+            "linux",                    // OS (actuellement forcé)
+            "amd64",                    // Arch (actuellement forcé)
+        ).await {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("[PullContext] predict_digests failed: {:?}", e);
+                return Err(PullContextError::MissingDigestOrTag);
+            }
+        };
+    
 
 
 
@@ -778,6 +835,355 @@ async fn get_pull_context(
 }
 
 
+// Fonction interne pour parser un manifest et extraire ses digests
+
+fn fetch_and_process_manifest<'a>(
+    client: &'a Client,
+    uuid: &'a Uuid,
+    registry: &'a str,
+    repository: &'a str,
+    digest: &'a str,
+    token: &'a str,
+    digests: &'a mut Vec<Digest>,
+) -> BoxFuture<'a, Result<()>> {
+    async move {
+        // Télécharger le manifest si absent
+        let digest_clean = digest.strip_prefix("sha256:").unwrap_or(digest);
+        let path = format!("tmp/{}/{}.json", uuid, digest_clean);
+
+        if !Path::new(&path).exists() {
+            let url = format!("https://{}/v2/{}/manifests/{}", registry, repository, digest);
+            let resp = client.get(&url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+                .send()
+                .await?;
+            let content = resp.bytes().await?;
+            fs::write(&path, &content)?;
+            println!("[PREDICT] Stored manifest blob: {}", path);
+        }
+
+        // Lire le manifest
+        let content = fs::read(&path)?;
+        let json: serde_json::Value = serde_json::from_slice(&content)?;
+
+        // Ajouter digest du manifest lui-même
+        if !digests.iter().any(|d| d.value == digest_clean) {
+            digests.push(Digest { algorithm: "sha256".into(), value: digest_clean.into() });
+        }
+
+        // Si manifest list → récursion (via BoxFuture)
+        if json.get("manifests").is_some() {
+            let manifest_list: ManifestList = serde_json::from_value(json)?;
+            for m in manifest_list.manifests {
+                fetch_and_process_manifest(client, uuid, registry, repository, &m.digest, token, digests).await?;
+            }
+        } else {
+            // Sinon, config + layers
+            if let Some(config) = json.get("config").and_then(|c| c.get("digest")).and_then(|d| d.as_str()) {
+                let c = config.strip_prefix("sha256").unwrap_or(config);
+                digests.push(Digest { algorithm: "sha256".into(), value: c.into() });
+            }
+            if let Some(layers) = json.get("layers").and_then(|l| l.as_array()) {
+                for layer in layers {
+                    if let Some(d) = layer.get("digest").and_then(|v| v.as_str()) {
+                        let l = d.strip_prefix("sha256").unwrap_or(d);
+                        digests.push(Digest { algorithm: "sha256".into(), value: l.into() });
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }.boxed()
+}
+
+
+
+async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_context
+    client: &Client,
+    uuid: &Uuid,
+    registry: &str,
+    repository: &str,
+    tag: &str,
+    os: &str,
+    arch: &str,
+) -> Result<Vec<Digest>> {
+
+    //Trouver le manifest list pour le repository:tag
+
+    println!(
+        "[PREDICT] Fetch manifest for {}:{}, target={}/{}",
+        repository, tag, os, arch
+    );
+
+    // ============================
+    // 1️⃣ Récupération du token
+    // ============================
+    let token_url = format!(
+        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
+        repository
+    );
+
+    let token_resp = client.get(&token_url).send().await?;
+    let token_json: serde_json::Value = token_resp.json().await?;
+
+    let token = token_json
+        .get("token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Token Docker manquant"))?;
+
+    // ============================
+    // Récupération du manifest (tag)
+    // ============================
+    let manifest_url = format!(
+        "https://{}/v2/{}/manifests/{}",
+        registry,
+        repository,
+        tag
+    );
+
+    let manifest_resp = client
+        .get(&manifest_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header(
+            "Accept",
+            "application/vnd.docker.distribution.manifest.list.v2+json,\
+             application/vnd.docker.distribution.manifest.v2+json"
+        )
+        .send()
+        .await?;
+
+    let status = manifest_resp.status();
+    let headers = manifest_resp.headers().clone();
+    let bytes = manifest_resp.bytes().await?;
+
+
+    // ============================
+    // — Stockage temporaire du manifest
+    // ============================
+
+    // 1️⃣ Récupération du digest du manifest (header HTTP)
+    let manifest_digest = headers
+        .get("Docker-Content-Digest")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| anyhow::anyhow!("Docker-Content-Digest manquant"))?
+        .to_string();
+
+    // Nettoyage "sha256:..."
+    let digest_clean = manifest_digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| anyhow::anyhow!("Digest inattendu"))?;
+
+    // 2️⃣ Création du dossier tmp/<uuid>/
+    let tmp_dir = format!("tmp/{}", uuid);
+
+    if !Path::new(&tmp_dir).exists() {
+        create_dir_all(&tmp_dir)?;
+    }
+
+    // 3️⃣ Fichier = digest.json
+    let filename = format!("{}/{}.json", tmp_dir, digest_clean);
+
+    // 4️⃣ Écriture idempotente
+    if !Path::new(&filename).exists() {
+        fs::write(&filename, &bytes)?;
+        println!(
+            "[PREDICT] Manifest stored: {} ({} bytes)",
+            filename,
+            bytes.len()
+        );
+    } else {
+        println!(
+            "[PREDICT] Manifest already exists: {}",
+            filename
+        );
+    }
+
+
+
+
+
+
+    println!("[PREDICT] Manifest HTTP status: {}", status);
+    println!("[PREDICT] Manifest size: {} bytes", bytes.len());
+
+    // ============================
+    // Détection du type
+    // ============================
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+        if v.get("manifests").is_some() {
+            println!("[PREDICT] Manifest type: MANIFEST LIST (multi-arch)");
+        } else if v.get("config").is_some() {
+            println!("[PREDICT] Manifest type: SINGLE MANIFEST");
+        } else {
+            println!("[PREDICT] Manifest type: UNKNOWN JSON STRUCTURE");
+        }
+    } else {
+        println!("[PREDICT] Manifest is NOT valid JSON");
+    }
+    let mut digests = Vec::new();
+
+
+    // On ajoute toujours le manifest racine
+    let digest_clean = manifest_digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| anyhow::anyhow!("Digest inattendu"))?
+        .to_string();
+
+    digests.push(Digest {
+        algorithm: "sha256".to_string(),
+        value: digest_clean,
+    });
+
+
+    // ============================
+    // Parsing MANIFEST LIST
+    // ============================
+    let json: serde_json::Value = serde_json::from_slice(&bytes)?;
+
+    if let Some(manifests) = json.get("manifests") {
+        println!("[PREDICT] Parsing manifest list");
+
+        let manifest_list: ManifestList = serde_json::from_value(json)?;
+
+        // 1️⃣ D'abord, récupérer le manifest correspondant à notre OS/ARCH
+        let mut main_manifest_digest: Option<String> = None;
+
+        for m in &manifest_list.manifests {
+            if m.platform.os == os && m.platform.architecture == arch {
+                println!(
+                    "[PREDICT] Selected manifest {} for {}/{}",
+                    m.digest, os, arch
+                );
+
+                let digest_clean = m.digest
+                    .strip_prefix("sha256:")
+                    .ok_or_else(|| anyhow::anyhow!("Digest inattendu"))?
+                    .to_string();
+
+                digests.push(Digest {
+                    algorithm: "sha256".to_string(),
+                    value: digest_clean.clone(),
+                });
+
+                // Télécharger et stocker le manifest si absent
+                let manifest_path = format!("tmp/{}/{}.json", uuid, digest_clean);
+                if !Path::new(&manifest_path).exists() {
+                    let manifest_url = format!(
+                        "https://{}/v2/{}/manifests/{}",
+                        registry,
+                        repository,
+                        m.digest
+                    );
+
+                    let resp = client
+                        .get(&manifest_url)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .header(
+                            "Accept",
+                            "application/vnd.docker.distribution.manifest.v2+json",
+                        )
+                        .send()
+                        .await?;
+
+                    let content = resp.bytes().await?;
+                    fs::write(&manifest_path, &content)?;
+
+                    println!(
+                        "[PREDICT] Stored arch-specific manifest: {}",
+                        manifest_path
+                    );
+                }
+
+                main_manifest_digest = Some(m.digest.clone());
+            }
+        }
+
+        // 2️⃣ Ensuite, gérer les manifests “unknown/unknown” qui pointent vers le digest principal
+        for m in &manifest_list.manifests {
+            if m.platform.os == "unknown" && m.platform.architecture == "unknown" {
+                if let Some(annotations) = m.annotations.as_ref() {
+                    if let Some(ref_digest) = annotations.get("vnd.docker.reference.digest") {
+                        if Some(ref_digest) == main_manifest_digest.as_ref() {
+                            println!(
+                                "[PREDICT] Including unknown manifest {} linked to main manifest",
+                                m.digest
+                            );
+
+                            let digest_clean = m.digest
+                                .strip_prefix("sha256:")
+                                .ok_or_else(|| anyhow::anyhow!("Digest inattendu"))?
+                                .to_string();
+
+                            digests.push(Digest {
+                                algorithm: "sha256".to_string(),
+                                value: digest_clean.clone(),
+                            });
+
+                            // Télécharger et stocker
+                            let manifest_path = format!("tmp/{}/{}.json", uuid, digest_clean);
+                            if !Path::new(&manifest_path).exists() {
+                                let manifest_url = format!(
+                                    "https://{}/v2/{}/manifests/{}",
+                                    registry,
+                                    repository,
+                                    m.digest
+                                );
+
+                                let resp = client
+                                    .get(&manifest_url)
+                                    .header("Authorization", format!("Bearer {}", token))
+                                    .header(
+                                        "Accept",
+                                        "application/vnd.docker.distribution.manifest.v2+json",
+                                    )
+                                    .send()
+                                    .await?;
+
+                                let content = resp.bytes().await?;
+                                fs::write(&manifest_path, &content)?;
+
+                                println!(
+                                    "[PREDICT] Stored linked unknown manifest: {}",
+                                    manifest_path
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let manifest_list_digest_clean = manifest_digest
+    .strip_prefix("sha256:")
+    .unwrap_or(&manifest_digest)
+    .to_string();
+
+    // Collecter les digests des manifests téléchargés (arch-specific + unknown)
+    let mut manifests_to_process: Vec<String> = digests.iter()
+        .filter(|d| d.value != manifest_list_digest_clean) // exclure le manifest list racine
+        .map(|d| format!("sha256:{}", d.value))
+        .collect();
+
+    // Parcourir chaque manifest pour extraire config + layers
+    for digest in manifests_to_process {
+        fetch_and_process_manifest(&client, uuid, registry, repository, &digest, token, &mut digests).await?;
+    }
+
+
+    println!("[PREDICT] Collected digests:");
+    for d in &digests {
+        println!(" - {}:{}", d.algorithm, d.value);
+    }
+
+
+    Ok(digests)
+
+} //etape suivante est de faire la fonction last_request qui predit le dernier digest pull en fonction des digests préalablement pull
+
+
 
 
 
@@ -813,9 +1219,8 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     .to_string();
 
     //recupère le contexte du pull en cours
-
     //let context = get_pull_context(&req, &parts, &client_ip, &pull_map);
-    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts).await {
+    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client).await {
         Ok(Some(uuid)) => {
             println!("[Main] Contexte trouvé / créé avec UUID: {}", uuid);
             uuid // tu peux continuer à utiliser uuid
@@ -843,6 +1248,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         }
 
     };
+
 
     // Vérifier si le manifest racine est dans la blacklist
     {
@@ -954,6 +1360,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
     // Vérification architecture UNIQUEMENT sur GET manifest
+    //On regarde si l'architecture linux/amd64 est présente dans la manifest list
     if method == Method::GET
         && path.contains("/manifests/")
         && !bytes.is_empty()
@@ -1073,8 +1480,8 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let certs = load_certs("certs-mitm/registry-1.docker.io.crt")?;
-    let key = load_private_key("certs-mitm/registry-1.docker.io.key")?;
+    let certs = load_certs("certs-mitm2/registry-1.docker.io.crt")?;
+    let key = load_private_key("certs-mitm2/registry-1.docker.io.key")?;
 
     let tls = ServerConfig::builder()
         .with_safe_defaults()
