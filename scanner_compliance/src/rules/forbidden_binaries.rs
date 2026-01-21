@@ -1,4 +1,4 @@
-use crate::engine::{all_paths, Rule};
+use crate::engine::Rule;
 use crate::models::*;
 use std::collections::HashMap;
 
@@ -11,39 +11,37 @@ impl Rule for ForbiddenBinariesRule {
 
     fn evaluate(&self, image: &ImageData) -> Finding {
         if !image.has_fs {
-    return Finding {
-        rule_id: self.id().to_string(),
-        status: Status::SKIP,
-        message: "Filesystem not available yet (layers not assembled)".to_string(),
-        evidence: HashMap::new(),
-    };
-}
+            return Finding {
+                rule_id: self.id().to_string(),
+                status: Status::SKIP,
+                message: "Filesystem not available yet (layers not assembled)".to_string(),
+                evidence: HashMap::new(),
+            };
+        }
 
-        let paths = all_paths(image);
-
-        let forbidden_names = [
-            "sshd",
-            "dropbear",
-            "nc",
-            "netcat",
-            "socat",
-            "telnet",
-            "gcc",
-            "g++",
-            "clang",
-            "make",
-            "perl",
-            "python",
+        // Liste V1 volontairement simple
+        let forbidden = [
+            "/bin/nc",
+            "/usr/bin/nc",
+            "/bin/netcat",
+            "/usr/bin/netcat",
+            "/bin/telnet",
+            "/usr/bin/telnet",
         ];
 
         let mut hits: Vec<String> = Vec::new();
 
-        for p in paths {
-            let base = p.rsplit('/').next().unwrap_or(&p);
-            let b = base.to_ascii_lowercase();
+        for e in &image.fs_entries {
+            // ✅ IMPORTANT : on ignore les symlinks (busybox)
+            let kind = e.kind.as_deref().unwrap_or("other");
+            if kind != "file" {
+                continue;
+            }
 
-            if forbidden_names.iter().any(|name| b == *name) {
-                hits.push(p);
+            let path = format!("/{}", e.path);
+
+            if forbidden.iter().any(|f| path == *f) {
+                hits.push(e.path.clone());
             }
         }
 
@@ -51,13 +49,13 @@ impl Rule for ForbiddenBinariesRule {
             return Finding {
                 rule_id: self.id().to_string(),
                 status: Status::PASS,
-                message: "No forbidden binaries detected (by filename)".to_string(),
+                message: "No forbidden binaries detected".to_string(),
                 evidence: HashMap::new(),
             };
         }
 
         let mut evidence = HashMap::new();
-        for (i, h) in hits.iter().take(25).enumerate() {
+        for (i, h) in hits.iter().take(10).enumerate() {
             evidence.insert(format!("bin_{i}"), h.clone());
         }
 
