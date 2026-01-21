@@ -1,4 +1,4 @@
-use crate::engine::{path_modes, Rule};
+use crate::engine::Rule;
 use crate::models::*;
 use std::collections::HashMap;
 
@@ -11,17 +11,52 @@ impl Rule for DangerousPermissionsRule {
 
     fn evaluate(&self, image: &ImageData) -> Finding {
         if !image.has_fs {
-    return Finding {
-        rule_id: self.id().to_string(),
-        status: Status::SKIP,
-        message: "Filesystem not available yet (layers not assembled)".to_string(),
-        evidence: HashMap::new(),
-    };
-}
+            return Finding {
+                rule_id: self.id().to_string(),
+                status: Status::SKIP,
+                message: "Filesystem not available yet (layers not assembled)".to_string(),
+                evidence: HashMap::new(),
+            };
+        }
 
-        let pairs = path_modes(image);
+        // On itère directement sur fs_entries pour pouvoir utiliser kind
+        let mut world_writable: Vec<String> = Vec::new();
+        let mut suid_sgid: Vec<String> = Vec::new();
 
-        if pairs.is_empty() {
+        let mut any_mode = false;
+
+        for e in &image.fs_entries {
+            let Some(mode) = e.mode else { continue };
+            any_mode = true;
+
+            let kind = e.kind.as_deref().unwrap_or("other");
+
+            // ✅ IMPORTANT: on ignore les symlinks (permissions non pertinentes)
+            if kind == "symlink" {
+                continue;
+            }
+
+            // world-writable : bit o+w (0o002)
+            let is_world_writable = (mode & 0o002) != 0;
+
+            // sticky bit : 0o1000 (ex: /tmp = 1777) -> acceptable si dir
+            let has_sticky = (mode & 0o1000) != 0;
+            let is_dir = kind == "dir";
+
+            if is_world_writable {
+                // Si directory + sticky => on ne flag pas (cas standard /tmp, /var/tmp)
+                if !(is_dir && has_sticky) {
+                    world_writable.push(format!("{} (mode={:#o}, kind={})", e.path, mode, kind));
+                }
+            }
+
+            // suid (0o4000) / sgid (0o2000) -> pertinent pour files/dirs (symlink déjà exclu)
+            if (mode & 0o4000) != 0 || (mode & 0o2000) != 0 {
+                suid_sgid.push(format!("{} (mode={:#o}, kind={})", e.path, mode, kind));
+            }
+        }
+
+        if !any_mode {
             return Finding {
                 rule_id: self.id().to_string(),
                 status: Status::SKIP,
@@ -30,21 +65,6 @@ impl Rule for DangerousPermissionsRule {
                         .to_string(),
                 evidence: HashMap::new(),
             };
-        }
-
-        let mut world_writable: Vec<String> = Vec::new();
-        let mut suid_sgid: Vec<String> = Vec::new();
-
-        for (path, mode) in pairs {
-            // world-writable : bit o+w (0o002)
-            if (mode & 0o002) != 0 {
-                world_writable.push(format!("{path} (mode={:#o})", mode));
-            }
-
-            // suid (0o4000) / sgid (0o2000)
-            if (mode & 0o4000) != 0 || (mode & 0o2000) != 0 {
-                suid_sgid.push(format!("{path} (mode={:#o})", mode));
-            }
         }
 
         if world_writable.is_empty() && suid_sgid.is_empty() {
