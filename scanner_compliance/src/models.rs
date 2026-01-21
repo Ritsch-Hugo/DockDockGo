@@ -114,7 +114,7 @@ pub struct InputsSummary {
 pub layers_received: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     ManifestOnly,
@@ -144,6 +144,10 @@ pub struct Report {
 
     #[serde(default)]
 pub missing_artifacts: Vec<MissingArtifact>,
+
+    /// Pseudo-Dockerfile informatif (FINAL ONLY)
+    #[serde(default)]
+    pub pseudo_dockerfile: Option<String>,
 
 }
 

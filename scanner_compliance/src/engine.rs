@@ -31,6 +31,7 @@ pub fn run_rules(image: &ImageData, rules: &[Box<dyn Rule>]) -> Report {
     missing_artifacts: image.missing_artifacts.clone(),
     summary,
     findings,
+    pseudo_dockerfile: None,
 }
 }
 

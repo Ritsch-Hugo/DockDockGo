@@ -2,6 +2,7 @@ mod availability;
 mod engine;
 mod models;
 mod rules;
+mod dockerfile_hint;
 
 mod config_parser;
 mod blob_reader;
@@ -310,7 +311,8 @@ fn main() {
         Box::new(ManifestAnnotationsRule),
     ];
 
-    let report = run_rules(&image, &rules);
+    let mut report = run_rules(&image, &rules);
+    report.pseudo_dockerfile = crate::dockerfile_hint::generate_pseudo_dockerfile(&image);
 
     let json = serde_json::to_string_pretty(&report).expect("serialize report");
     println!("{json}");
