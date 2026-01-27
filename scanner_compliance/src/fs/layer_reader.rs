@@ -69,7 +69,7 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
 
 
   for e in entries {
-    let mut entry = match e {
+    let entry = match e {
         Ok(en) => en,
         Err(e) => {
             eprintln!("layer tar entry read failed, skipping whole layer: {e}");
