@@ -29,6 +29,7 @@ use std::io::Write;
 
 use uuid::Uuid;
 use tokio::time::{sleep, Duration};
+
 use serde::{Serialize, Deserialize};
 
 use std::time::Instant;//pour le timeout des pull context 2
@@ -933,17 +934,6 @@ async fn get_pull_context(
     client: &Client, 
 )-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
-    // 🔹 Nettoyer les contextes expirés avec timeout
-    /*{
-        let mut list = pull_contexts.lock().await;
-        list.retain(|ctx| {
-            let alive = ctx.last_activity.elapsed() < CONTEXT_TIMEOUT;
-            if !alive {
-                println!("[PullContext2] Contexte expiré supprimé | uuid={}", ctx.uuid);
-            }
-            alive
-        });
-    }*/ // ⬅️ le lock est relâché automatiquement ici
 
     // 🔹 Construire les variables principales à partir de parts
     let registry = "registry-1.docker.io".to_string(); // Par défaut pour Docker Hub
@@ -1044,7 +1034,14 @@ async fn get_pull_context(
         let mut list = pull_contexts.lock().await;
         if list.iter().any(|c| c.uuid == uuid) {
             println!("[PullContext] UUID déjà présent, pas de création d'un nouveau contexte");
+
+            //Met a jour l'activité pour le timer
+            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
+                ctx.last_activity = Instant::now();
+            }
+
             return Ok(Some(uuid));//retourner l'uuid existant
+
         }
     
         // 🔹 Création du contexte PullContext
@@ -1055,8 +1052,6 @@ async fn get_pull_context(
             repository.clone(),
             tag_ou_digest.to_string(),//ici c'est le tag
         );
-
-        ctx.last_activity = Instant::now();//initialisation du timer d'activité
 
         // 🔹 Après création du PullContext et mise à jour du digest racine
         //Si le digest racine n'est pas déjà dans digests_possible, l'ajouter
@@ -1129,6 +1124,9 @@ async fn get_pull_context(
             }
         }
 
+        //mise a jour de l'activité pour le timer (nouveau contexte)
+        ctx.last_activity = Instant::now();
+
         list.push(ctx);
 
 
@@ -1194,8 +1192,10 @@ async fn get_pull_context(
                 && ctx.repository == repository
                 && ctx.digests_possible.iter().any(|d| d.value == digest_value)
             {
-                ctx.last_activity = Instant::now(); // Mettre à jour l'activité pour le timeout
                 println!("[PullContext] Correspondance trouvée pour le digest GET | uuid={}", ctx.uuid);
+
+                //Mise a jour de l'activité pour le timeout
+                ctx.last_activity = Instant::now();
 
 
                 // Déterminer dans quel vecteur stocker le digest selon le type de ressource
@@ -1702,6 +1702,9 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     //Proxy <- API <- Scanner
 
 
+                    //Supprimer dossier temporaire
+                    cleanup_tmp_for_uuid(&ctx.uuid);
+
                     // 🔹 Libérer le contexte PullContext
                     list.retain(|c| c.uuid != context_uuid);
 
@@ -1880,8 +1883,11 @@ async fn main() -> Result<()> {
 
     let client = Client::builder().use_rustls_tls().build()?;
 
-    // State partagé pour suivre les blobs/manifests
+    // State partagé pour la liste de contexte pour chaques pull
     let pull_context: PullContextList = Arc::new(TokioMutex::new(Vec::new()));
+
+    //Ajout de la fonction de timout 
+    check_timout(pull_context.clone());
 
 
     println!("✅ MITM Docker registry en écoute sur https://registry-1.docker.io:443");
@@ -1948,4 +1954,69 @@ fn load_private_key(path: &str) -> Result<PrivateKey> {
     }
 
     Err(anyhow::anyhow!("No private keys found in {}", path))
+}
+
+//Check si aucune requetes envoyé dans le laspe de temps CONTEXT_TIMEOUT
+fn check_timout(pull_contexts: PullContextList) {
+
+    //tache asyncrone qui s'appelles toutes les secondes 
+    tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_secs(1)).await;
+
+            let mut expired_uuids = Vec::new();
+
+            let mut list = pull_contexts.lock().await;
+            let before = list.len();
+
+            //garde 
+            list.retain(|ctx| {
+                //garde les contextes qui ne depassent pas le timout 
+                let alive = ctx.last_activity.elapsed() < CONTEXT_TIMEOUT;
+                if !alive {
+                    println!(
+                        "[Timeout-Reach] Contexte expiré supprimé | uuid={}",
+                        ctx.uuid
+                    );
+                    expired_uuids.push(ctx.uuid);
+                }
+                alive
+            });
+
+            drop(list); // 🔓 libérer le lock avant l'acces au contexte pour supprimer 
+
+            // 🧹 Suppression des dossiers tmp/<uuid>
+            for uuid in expired_uuids 
+            {
+                cleanup_tmp_for_uuid(&uuid);
+            }
+
+            //Si la liste n'a plus la meme taille 
+            if before != pull_contexts.lock().await.len() {
+                println!(
+                    "[Timeout-Reach] Nettoyage effectué: {} → {}",
+                    before,
+                    pull_contexts.lock().await.len()
+                );
+            }
+        }
+    });
+}
+
+fn cleanup_tmp_for_uuid(uuid: &Uuid) {
+    let path = format!("tmp/{}", uuid);
+
+    match fs::remove_dir_all(&path) {
+        Ok(_) => {
+            println!("[CLEANUP] Dossier tmp supprimé pour uuid={}", uuid);
+        }
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "[CLEANUP ERROR] Impossible de supprimer tmp pour uuid={} : {:?}",
+                    uuid, e
+                );
+            }
+        }
+    }
 }
