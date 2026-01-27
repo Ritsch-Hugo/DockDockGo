@@ -51,7 +51,8 @@ struct Digest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PullContext {
+struct PullContext 
+{
     uuid: Uuid,
     ip_client: String,
     registry: String, //ex: "registry-1.docker.io"
@@ -72,7 +73,6 @@ struct PullContext {
     #[serde(skip_serializing, skip_deserializing, default = "Instant::now")]
     last_activity: Instant,
     pull_completed: bool,
-
 }
 
 
@@ -128,7 +128,7 @@ struct ImageState {
 type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
 // Définir le timeout désiré (ex : 30 secondes)
-const CONTEXT_TIMEOUT: Duration = Duration::from_secs(15);
+const CONTEXT_TIMEOUT: Duration = Duration::from_secs(30);
 
 static UPSTREAM: &str = "https://registry-1.docker.io";
 
@@ -159,13 +159,14 @@ impl PullContext {
             arch: "unknown".to_string(),
             pull_completed: false,
         }
+
     }
 }
 
 
 /// 🔐 Politique de sécurité
 fn is_allowed() -> bool {
-    true
+    false
 }
 
 /// 🔑 SHA256 réel (Docker compliant)
@@ -1111,9 +1112,6 @@ async fn get_pull_context(
                         if !ctx.digests_possible.contains(&digest) {
                             ctx.digests_possible.push(digest.clone());
                         }
-                        /*if !ctx.digests_expected.contains(&digest) {
-                            ctx.digests_expected.push(digest);
-                        }*/
                     }
                 }
             } 
@@ -1190,8 +1188,17 @@ async fn get_pull_context(
             if ctx.ip_client == ip_client
                 && ctx.registry == registry
                 && ctx.repository == repository
-                && ctx.digests_possible.iter().any(|d| d.value == digest_value)
+                && (
+                    // Tant qu’on n’a qu’un seul digest attendu → mode tolérant
+                    (ctx.digests_expected.len() <= 1
+                        && ctx.digests_possible.iter().any(|d| d.value == digest_value))
+                    ||
+                    // Dès qu’on a plusieurs digests attendus → mode strict
+                    (ctx.digests_expected.len() > 1
+                        && ctx.digests_expected.iter().any(|d| d.value == digest_value))
+                )
             {
+
                 println!("[PullContext] Correspondance trouvée pour le digest GET | uuid={}", ctx.uuid);
 
                 //Mise a jour de l'activité pour le timeout
@@ -1293,69 +1300,6 @@ async fn get_pull_context(
 
                             //println!("[PullContext] Digests expected : {:?}", ctx.digests_expected);
                         }
-
-
-                        
-                        //Verifier si le bloc ci dessous est necessaire (peu etre double emplois avec predict_digest) -> 
-
-                        let repo = &ctx.repository;
-                        let digest = digest_value.clone(); // digest actuel GET
-
-                        let cmd = format!(
-                            r#"TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull" | jq -r .token) && \
-                            curl -s -H "Authorization: Bearer $TOKEN" \
-                                -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json" \
-                                https://registry-1.docker.io/v2/{repo}/manifests/sha256:{digest} \
-                            | jq -r 'if has("manifests") then .manifests[].digest elif has("config") then .config.digest, (.layers[].digest // empty) else empty end'"#,
-                            repo = repo,
-                            digest = digest
-                        );
-
-                        // Exécuter la commande shell
-                        if let Ok(output) = Command::new("sh")
-                            .arg("-c")
-                            .arg(cmd)
-                            .output()
-                        {
-                            if output.status.success() 
-                            {
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                for line in stdout.lines() {
-                                    let line_clean = line.trim_start_matches("sha256:").to_string();
-                                    if !line_clean.is_empty() {
-                                        let digest_struct = Digest {
-                                            algorithm: "sha256".to_string(),
-                                            value: line_clean,
-                                        };
-                                        // Ajouter uniquement si pas déjà présent
-                                        if !ctx.digests_possible.contains(&digest_struct) 
-                                        {
-                                            ctx.digests_possible.push(digest_struct.clone());
-                                            //println!("[PullContext] Nouveau digest ajouté: {}", digest_struct.as_str());
-
-                                        }
-                                       if !ctx.digests_expected.contains(&digest_struct) 
-                                        {
-                                            ctx.digests_expected.push(digest_struct.clone());
-                                            //println!("[PullContext] Nouveau digest ajouté: {}", digest_struct.as_str());
-
-                                        }
-                                    }
-                                }
-                            } 
-                            else 
-                            {
-                                eprintln!("[PullContext] Échec de la récupération des digests via curl");
-                                return Err(PullContextError::DigestNotAllowed);
-                            }
-                        } 
-                        else 
-                        {
-                            eprintln!("[PullContext] Impossible d'exécuter la commande shell");
-                            return Err(PullContextError::DigestNotAllowed);
-                        }
-
-
 
 
 
@@ -1510,13 +1454,11 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         //gèrer l'erreur du cas ou le scan de haut niveau ne passe pas 
         //Renvoyer erreur + blacklist
 
-
-
     };
 
     //println!("Test1");
      
-     /* 
+         
     // Vérifier si le manifest racine est dans la blacklist
     {
         if method == Method::HEAD 
@@ -1527,15 +1469,12 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         }; // lock libéré ici
 
         if let Some(ctx) = ctx_opt {
-            println!("Test3");
                 if let Some(racine_digest) = &ctx.manifest_racine_digest {
                     let blacklist_path = "blacklist.json";
                     if std::path::Path::new(blacklist_path).exists() {
-                        println!("Testdsfds");
                         if let Ok(content) = std::fs::read_to_string(blacklist_path) {
                             if let Ok(blacklist) = serde_json::from_str::<Vec<PullContext>>(&content) {
                                 if blacklist.iter().any(|b| {
-                                    println!("Test4");
                                     if let Some(b_racine) = &b.manifest_racine_digest {
                                         b_racine.value == racine_digest.value
                                     } else {
@@ -1547,8 +1486,10 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                         racine_digest.value
                                     );
 
+                                    //On supprime le dossier temporaire
+                                    cleanup_tmp_for_uuid(&context_uuid);
+
                                     // 🔹 Libérer le contexte
-                                    //drop(list); // libérer le lock
                                     let mut list = pull_contexts.lock().await;
                                     list.retain(|c| c.uuid != context_uuid);
                                     println!(
@@ -1569,7 +1510,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             }
         }
     }
-    */
+    
 
     // Vérifier le cache avant d'aller en upstream
     //si le digest est present dans le cache on retourne la réponse a partir du cache
@@ -1674,185 +1615,198 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
 
     // 🔹 Vérification finale des digests téléchargés
+    if method == Method::GET
+    {
+        let mut list = pull_contexts.lock().await;
+        if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
 
-    let mut list = pull_contexts.lock().await;
-    if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
+            // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
+            // et que digests_expected contient plus d'un élément car sinon 
+            if method == Method::GET && ctx.digests_expected.len() > 1{
 
-        // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
-        // et que digests_expected contient plus d'un élément car sinon 
-        if method == Method::GET && ctx.digests_expected.len() > 1{
-
-            //On compare les digests expected et ceux réellement téléchargés
-            match verify_downloaded_digests(ctx) {
-                Ok(DigestVerificationState::InProgress) => {
-                    // pull normal, on laisse continuer
-                }
-                Ok(DigestVerificationState::Completed) => 
-                {
-                    println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
-                    //Mettre la variable scan_completed a true
-                    ctx.pull_completed = true;
-
-
-
-                    //[Appel API] : déclencher scan final avec tout les digests 
-
-                    //Proxy -> API -> Scanner
-
-                    //Proxy <- API <- Scanner
-
-
-                    //Supprimer dossier temporaire
-                    cleanup_tmp_for_uuid(&ctx.uuid);
-
-                    // 🔹 Libérer le contexte PullContext
-                    list.retain(|c| c.uuid != context_uuid);
-
-                    //affichage de la liste de contexte restante :    
-                    println!("========== PULL CONTEXT 2 LIST ==========");
-                    for (i, c) in list.iter().enumerate() {
-                        println!(
-                            "[{}]\n\
-                            uuid={}\n\
-                            ip={}\n\
-                            registry={}\n\
-                            repository={}\n\
-                            tag={}\n\
-                            manifest_racine_digests={:?}\n\
-                            blob_digests={:?}\n\
-                            referrers_digests={:?}\n\
-                            digests_possible={:?}\n
-                            digests_expected={:?}\n
-                            os={}, arch={}\n",
-                            i, c.uuid, c.ip_client, c.registry, c.repository, c.tag,
-                            c.manifest_racine_digest, c.blob_digests, c.referrers_digests, c.digests_possible, c.digests_expected, c.os, c.arch
-                        );
+                //On compare les digests expected et ceux réellement téléchargés
+                match verify_downloaded_digests(ctx) {
+                    Ok(DigestVerificationState::InProgress) => {
+                        // pull normal, on laisse continuer
                     }
-                    println!("========================================="); 
-
-                    //Si Image OK on renvoie le dernier digest
-
-                    //Si Image refusée on renvoie FORBIDDEN + Ajout a la blacklist
-
-                }
-                Err(_) => {
-                    eprintln!("[PullContext] Pull invalide");
-                    // Libérer le contexte si nécessaire
-                    list.retain(|c| c.uuid != context_uuid);
-                    return Response::builder()
-                        .status(StatusCode::FORBIDDEN)
-                        .body(Body::from("Digest mismatch detected"))
-                        .unwrap();
-                }
-            }
-        } else {
-            // Si ce n'est pas un GET ou digests_expected <= 1, on ne fait rien
-        }
-    }
+                    Ok(DigestVerificationState::Completed) => 
+                    {
+                        println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
+                        //Mettre la variable scan_completed a true
+                        ctx.pull_completed = true;
 
 
-    //[Appel API] -> pour envoyer les données au scan de sécurité
 
-    //Proxy -> API -> Scanner
-    //Proxy <- API <- Scanner
+                        //[Appel API] : déclencher scan final avec tout les digests 
 
-    // On continue ou on stop le pull en fonction du scan de sécurité
-    if method == Method::GET && !is_allowed() {
-        println!("[SECURITY CHECK] Image non conforme -> bloquage du pull");
+                        //Proxy -> API -> Scanner
 
-        // 🔹 Récupérer le contexte courant
-        //println!("[DEBUG] Tentative de récupérer le contexte UUID={}", context_uuid);
-        match pull_contexts.try_lock() {
-            Ok(mut list) => {
-                if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid).cloned() {
-                    println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
-                } else {
-                    println!("[DEBUG] Aucun contexte trouvé pour UUID={}", context_uuid);
-                }
-            }
-            Err(_) => {
-                println!("[DEBUG] Impossible de prendre le lock, il est déjà verrouillé !");
-            }
-        }
+                        //Proxy <- API <- Scanner
 
-        //Recupèrer le contexte bloqué
-        let blocked_context = {
-            let list = pull_contexts.lock().await;
-            list.iter()
-                .find(|c| c.uuid == context_uuid)
-                .cloned()
-        };
 
-        if blocked_context.is_none() {
-            println!("[DEBUG] Aucun contexte trouvé pour UUID={}", context_uuid);
-        } else {
-            println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
-        }
+                        //Supprimer dossier temporaire
+                        cleanup_tmp_for_uuid(&ctx.uuid);
 
-        //Ajout de l'image refusée dans la blacklist
-        if let Some(ctx) = blocked_context {
-            use serde::{Serialize, Deserialize};
-            use std::fs;
-            use std::path::Path;
+                        // 🔹 Libérer le contexte PullContext
+                        list.retain(|c| c.uuid != context_uuid);
 
-            let blacklist_path = "blacklist.json";
-
-            // 🔹 Charger la blacklist existante ou créer une nouvelle liste
-            println!("[DEBUG] Chargement de la blacklist depuis '{}'", blacklist_path);
-            let mut blacklist: Vec<PullContext> = if Path::new(blacklist_path).exists() {
-                match fs::read_to_string(&blacklist_path) {
-                    Ok(s) => match serde_json::from_str::<Vec<PullContext>>(&s) {
-                        Ok(b) => {
-                            //println!("[DEBUG] {} entrées chargées depuis la blacklist", b.len());
-                            b
+                        //affichage de la liste de contexte restante :    
+                        println!("========== PULL CONTEXT 2 LIST ==========");
+                        for (i, c) in list.iter().enumerate() {
+                            println!(
+                                "[{}]\n\
+                                uuid={}\n\
+                                ip={}\n\
+                                registry={}\n\
+                                repository={}\n\
+                                tag={}\n\
+                                manifest_racine_digests={:?}\n\
+                                blob_digests={:?}\n\
+                                referrers_digests={:?}\n\
+                                digests_possible={:?}\n
+                                digests_expected={:?}\n
+                                os={}, arch={}\n",
+                                i, c.uuid, c.ip_client, c.registry, c.repository, c.tag,
+                                c.manifest_racine_digest, c.blob_digests, c.referrers_digests, c.digests_possible, c.digests_expected, c.os, c.arch
+                            );
                         }
-                        Err(e) => {
-                            //eprintln!("[DEBUG] Erreur parsing blacklist.json: {:?}", e);
-                            Vec::new()
-                        }
-                    },
-                    Err(e) => {
-                        //eprintln!("[DEBUG] Impossible de lire blacklist.json: {:?}", e);
-                        Vec::new()
+                        println!("========================================="); 
+
+                        //Si Image OK on renvoie le dernier digest
+
+                        //Si Image refusée on renvoie FORBIDDEN + Ajout a la blacklist
+
+                    }
+                    Err(_) => {
+                        eprintln!("[PullContext] Pull invalide");
+                        // Libérer le contexte si nécessaire
+                        list.retain(|c| c.uuid != context_uuid);
+                        return Response::builder()
+                            .status(StatusCode::FORBIDDEN)
+                            .body(Body::from("Digest mismatch detected"))
+                            .unwrap();
                     }
                 }
             } else {
-                println!("[DEBUG] blacklist.json n'existe pas encore, création d'une nouvelle liste");
-                Vec::new()
+                // Si ce n'est pas un GET ou digests_expected <= 1, on ne fait rien
+            }
+        }
+
+
+        //[Appel API] -> pour envoyer les données au scan de sécurité
+
+        //Proxy -> API -> Scanner
+        //Proxy <- API <- Scanner
+
+        // On continue ou on stop le pull en fonction du scan de sécurité
+        if method == Method::GET && !is_allowed() {
+            println!("[SECURITY CHECK] Image non conforme -> bloquage du pull");
+
+            //libèrer le mutex
+            drop(list);
+
+            // 🔹 Récupérer le contexte courant
+            //println!("[DEBUG] Tentative de récupérer le contexte UUID={}", context_uuid);
+            match pull_contexts.try_lock() {
+                Ok(mut list) => {
+                    if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid).cloned() {
+                        println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
+                    } else {
+                        println!("[DEBUG] Aucun contexte trouvé pour UUID={}", context_uuid);
+                    }
+                }
+                Err(_) => {
+                    println!("[DEBUG] Impossible de prendre le lock, il est déjà verrouillé !");
+                }
+            }
+
+            //Recupèrer le contexte bloqué
+            let blocked_context = {
+                let list = pull_contexts.lock().await;
+                list.iter()
+                    .find(|c| c.uuid == context_uuid)
+                    .cloned()
             };
 
-            // 🔹 Ajouter le contexte courant
-            println!("[DEBUG] Ajout du contexte UUID={} à la blacklist", ctx.uuid);
-            blacklist.push(ctx);
-
-            // 🔹 Écriture dans le fichier
-            match serde_json::to_string_pretty(&blacklist) {
-                Ok(json) => match fs::write(&blacklist_path, json) {
-                    Ok(_) => println!("[BLACKLIST] Contexte ajouté dans blacklist.json"),
-                    Err(e) => eprintln!("[BLACKLIST ERROR] Impossible d'écrire blacklist.json: {:?}", e),
-                },
-                Err(e) => eprintln!("[BLACKLIST ERROR] Sérialisation impossible: {:?}", e),
+            if blocked_context.is_none() 
+            {
+                println!("[DEBUG] Aucun contexte trouvé pour UUID={}", context_uuid);
+            } 
+            else 
+            {
+                println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
             }
-        } 
-        else 
-        {
-            //println!("[DEBUG] Aucun contexte à ajouter à la blacklist");
-        }
 
-        // 🔹 Libérer le contexte PullContext
-        {
-            let mut list = pull_contexts.lock().await;
-            list.retain(|c| c.uuid != context_uuid);
-            println!(
-                "[PullContext] Contexte libéré après scan non conforme | uuid={}",
-                context_uuid
-            );
-        }
+            //Ajout de l'image refusée dans la blacklist
+            if let Some(ctx) = blocked_context 
+            {
+                use serde::{Serialize, Deserialize};
+                use std::fs;
+                use std::path::Path;
 
-        return Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body(Body::from("Image refusée par le scan de sécurité"))
-            .unwrap();
+                let blacklist_path = "blacklist.json";
+
+                // 🔹 Charger la blacklist existante ou créer une nouvelle liste
+                println!("[DEBUG] Chargement de la blacklist depuis '{}'", blacklist_path);
+                let mut blacklist: Vec<PullContext> = if Path::new(blacklist_path).exists() {
+                    match fs::read_to_string(&blacklist_path) {
+                        Ok(s) => match serde_json::from_str::<Vec<PullContext>>(&s) {
+                            Ok(b) => {
+                                //println!("[DEBUG] {} entrées chargées depuis la blacklist", b.len());
+                                b
+                            }
+                            Err(e) => {
+                                //eprintln!("[DEBUG] Erreur parsing blacklist.json: {:?}", e);
+                                Vec::new()
+                            }
+                        },
+                        Err(e) => {
+                            //eprintln!("[DEBUG] Impossible de lire blacklist.json: {:?}", e);
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    println!("[DEBUG] blacklist.json n'existe pas encore, création d'une nouvelle liste");
+                    Vec::new()
+                };
+
+                // 🔹 Ajouter le contexte courant
+                println!("[DEBUG] Ajout du contexte UUID={} à la blacklist", ctx.uuid);
+                blacklist.push(ctx);
+
+                // 🔹 Écriture dans le fichier
+                match serde_json::to_string_pretty(&blacklist) {
+                    Ok(json) => match fs::write(&blacklist_path, json) {
+                        Ok(_) => println!("[BLACKLIST] Contexte ajouté dans blacklist.json"),
+                        Err(e) => eprintln!("[BLACKLIST ERROR] Impossible d'écrire blacklist.json: {:?}", e),
+                    },
+                    Err(e) => eprintln!("[BLACKLIST ERROR] Sérialisation impossible: {:?}", e),
+                }
+            } 
+            else 
+            {
+                //println!("[DEBUG] Aucun contexte à ajouter à la blacklist");
+            }
+
+            //On supprime le dossier temporaire
+            cleanup_tmp_for_uuid(&context_uuid);
+
+            // 🔹 Libérer le contexte PullContext
+            {
+                let mut list = pull_contexts.lock().await;
+                list.retain(|c| c.uuid != context_uuid);
+                println!(
+                    "[PullContext] Contexte libéré après scan non conforme | uuid={}",
+                    context_uuid
+                );
+            }
+
+            //Cas ou l'image est refusé par le scan de securité 
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("Image refusée par le scan de sécurité"))
+                .unwrap();
+        }
     }
 
 
