@@ -314,6 +314,15 @@ fn main() {
     let mut report = run_rules(&image, &rules);
     report.pseudo_dockerfile = crate::dockerfile_hint::generate_pseudo_dockerfile(&image);
 
+    // --- Étape 7C: rendre le report déterministe ---
+report.findings.sort_by(|a, b| a.rule_id.cmp(&b.rule_id));
+
+report.missing_artifacts.sort_by(|a, b| {
+    let ka = (format!("{:?}", a.kind), a.digest.as_str());
+    let kb = (format!("{:?}", b.kind), b.digest.as_str());
+    ka.cmp(&kb)
+});
+
     let json = serde_json::to_string_pretty(&report).expect("serialize report");
     println!("{json}");
 

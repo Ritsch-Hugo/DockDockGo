@@ -146,7 +146,7 @@ pub struct Report {
 pub missing_artifacts: Vec<MissingArtifact>,
 
     /// Pseudo-Dockerfile informatif (FINAL ONLY)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pseudo_dockerfile: Option<String>,
 
 }
