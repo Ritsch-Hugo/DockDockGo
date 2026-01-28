@@ -8,4 +8,5 @@ registry-1.docker.io.*
 certs-mitm/
 EOF
 blacklist.json
+whitelist.json
 Cargo.lock
