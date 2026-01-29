@@ -167,7 +167,7 @@ impl PullContext {
 
 /// 🔐 Politique de sécurité
 fn is_allowed() -> bool {
-    true
+    false
 }
 
 /// 🔑 SHA256 réel (Docker compliant)
@@ -1452,37 +1452,58 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 .unwrap();
         }
 
-        //gèrer l'erreur du cas ou le scan de haut niveau ne passe pas 
-        //Renvoyer erreur + blacklist
-
     };
 
-    //println!("Test1");
-     
-    //On check whitelist et blacklist qui sur les HEAD
-    if req.method() == Method::HEAD
-    {  
-        // Vérifier la blacklist
-        if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "blacklist").await {
-            return resp; // si dans blacklist, on renvoie la réponse FORBIDDEN
-        }
-        //Verifier dans la whitelist
-        if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "whitelist").await {
-            return resp; // si dans whitelist, on renvoie OK 
-        }
-    }
+
+
+
 
     // Vérifier le cache avant d'aller en upstream
     //si le digest est present dans le cache on retourne la réponse a partir du cache
     {
         if req.method() == Method::GET 
         {
-            let list = pull_contexts.lock().await;
-            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+            let mut list = pull_contexts.lock().await;
+            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
                 if let Some(resp) = try_serve_from_cache(&req, ctx) {//Si le digest est dans le cache on retourne a partir du digest stocké
                     println!("[CACHE] Digest trouvé en cache");
 
                     //Appeler la fonction verify_downloaded_digests pour libèrer le contexte au bon moment 
+
+                    // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
+                    // et que digests_expected contient plus d'un élément
+                    if ctx.digests_expected.len() > 1
+                    {
+
+                        //On compare les digests expected et ceux réellement téléchargés
+                        match verify_downloaded_digests(ctx) {
+                            Ok(DigestVerificationState::InProgress) => {
+                                // pull normal, on laisse continuer
+                            }
+                            Ok(DigestVerificationState::Completed) => 
+                            {
+                                println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
+                                //Mettre la variable scan_completed a true
+                                ctx.pull_completed = true;
+                                //Supprimer dossier temporaire
+                                cleanup_tmp_for_uuid(&ctx.uuid);
+
+                                // 🔹 Libérer le contexte PullContext
+                                list.retain(|c| c.uuid != context_uuid);
+                            }
+                            Err(_) => {
+                                eprintln!("[PullContext] Pull invalide");
+                                // Libérer le contexte si nécessaire
+                                list.retain(|c| c.uuid != context_uuid);
+                                return Response::builder()
+                                    .status(StatusCode::FORBIDDEN)
+                                    .body(Body::from("Digest mismatch detected"))
+                                    .unwrap();
+                            }
+                        }
+
+                    }
+
 
                     return resp;
                 }
@@ -1496,43 +1517,106 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     }
 
 
-    // Construire l'URL upstream
-    let upstream_url = format!(
-        "{}{}",
-        UPSTREAM,
-        uri.path_and_query().map(|p| p.as_str()).unwrap_or("/")
-    );
-    //println!("[UPSTREAM FETCH FOR CACHE] → {}", upstream_url);
 
-    // Lire le corps de la requête
-    let body = to_bytes(req.into_body()).await.unwrap_or_default();
 
-    // Préparer la requête vers l'upstream
-    let mut rb = client.request(method.clone(), &upstream_url);
-    for (k, v) in headers.iter() {
-        if !matches!(k.as_str(), "host" | "connection") {
-            rb = rb.header(k, v);
+
+
+
+     
+    //On check blacklist que sur les HEAD
+    if req.method() == Method::HEAD
+    {  
+        // Vérifier la blacklist
+        if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "blacklist").await {
+            println!("Image dans blacklist");
+            return resp; // si dans blacklist, on renvoie la réponse FORBIDDEN
         }
     }
-    if !body.is_empty() {
-        rb = rb.body(body);
+    //Verifier dans la whitelist
+    if let Some(response) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "whitelist").await {
+        println!("Image dans whitelist");
+
+        //On redirige la requete vers le repo upstream
+        let upstream = match get_response_from_upstream(req, client).await {
+            Ok(resp) => resp,  // upstream ok
+            Err(resp) => return resp, // upstream KO → renvoyer directement la réponse
+        };
+
+        //On extrait la reponse upstream
+        let status = upstream.status();
+        let headers = upstream.headers().clone();
+        let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
+
+        //On laisse tout passer
+        let mut resp = Response::builder().status(status);
+        for (k, v) in headers.iter() {
+            resp = resp.header(k, v);
+        }
+
+        //Ajouter Check si dernière requete 
+        
+        let mut list = pull_contexts.lock().await;
+
+        if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
+        {
+            if ctx.digests_expected.len() > 1
+            {
+
+                //On compare les digests expected et ceux réellement téléchargés
+                match verify_downloaded_digests(ctx) {
+                    Ok(DigestVerificationState::InProgress) => {
+                        // pull normal, on laisse continuer
+                    }
+                    Ok(DigestVerificationState::Completed) => 
+                    {
+                        println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
+                        //Mettre la variable scan_completed a true
+                        ctx.pull_completed = true;
+                        //Supprimer dossier temporaire
+                        cleanup_tmp_for_uuid(&ctx.uuid);
+
+                        // 🔹 Libérer le contexte PullContext
+                        list.retain(|c| c.uuid != context_uuid);
+                    }
+                    Err(_) => {
+                        eprintln!("[PullContext] Pull invalide");
+                        // Libérer le contexte si nécessaire
+                        list.retain(|c| c.uuid != context_uuid);
+                        return Response::builder()
+                            .status(StatusCode::FORBIDDEN)
+                            .body(Body::from("Digest mismatch detected"))
+                            .unwrap();
+                    }
+                }
+            }
+        } 
+
+        
+        //reponse
+        return resp.body(Body::from(bytes)).unwrap();
     }
 
-    // Envoyer la requête upstream
-    let upstream = match rb.send().await {
-        Ok(r) => r,
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from("DockerHub unreachable"))
-                .unwrap();
-        }
+
+
+
+
+
+
+
+    //On redirige la requete vers le repo upstream
+    let upstream = match get_response_from_upstream(req, client).await {
+        Ok(resp) => resp,  // upstream ok
+        Err(resp) => return resp, // upstream KO → renvoyer directement la réponse
     };
 
-    // Extraire status et headers avant de consommer le body
+
+    //On extrait la reponse upstream
     let status = upstream.status();
     let headers = upstream.headers().clone();
     let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
+
+
+
 
     // Vérification architecture
     //On regarde si l'architecture linux/amd64 est présente dans la manifest list
@@ -1586,7 +1670,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
             // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
             // et que digests_expected contient plus d'un élément
-            if method == Method::GET && ctx.digests_expected.len() > 1{
+            if ctx.digests_expected.len() > 1{
 
                 //On compare les digests expected et ceux réellement téléchargés
                 match verify_downloaded_digests(ctx) {
@@ -1615,6 +1699,9 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 
                             }
 
+                            //nettoyer contexte
+                            cleanup_tmp_for_uuid(&ctx.uuid);
+
                             //return reponse client 
                             let mut resp = Response::builder().status(status);
                             for (k, v) in headers.iter() {
@@ -1622,9 +1709,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                             }
 
                             return resp.body(Body::from(bytes)).unwrap();
-
-                            //nettoyer contexte
-                            cleanup_tmp_for_uuid(&ctx.uuid);
                         }
                         //Si Image refusée 
                         else
@@ -1689,6 +1773,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
         //Proxy -> API -> Scanner
         //Proxy <- API <- Scanner
+        
 
         // On continue ou on stop le pull en fonction du scan de sécurité
         if method == Method::GET && !is_allowed() {
@@ -1834,6 +1919,44 @@ async fn main() -> Result<()> {
     }
 }
 
+async fn get_response_from_upstream(
+    req: Request<Body>,
+    client: Client,
+) -> Result<reqwest::Response, Response<Body>> {
+    let uri = req.uri().clone();
+    let method = req.method().clone();
+    let headers = req.headers().clone();
+
+    let upstream_url = format!(
+        "{}{}",
+        UPSTREAM,
+        uri.path_and_query().map(|p| p.as_str()).unwrap_or("/")
+    );
+
+    let body = to_bytes(req.into_body()).await.unwrap_or_default();
+
+    let mut rb = client.request(method, &upstream_url);
+    for (k, v) in headers.iter() {
+        if !matches!(k.as_str(), "host" | "connection") {
+            rb = rb.header(k, v);
+        }
+    }
+    if !body.is_empty() {
+        rb = rb.body(body);
+    }
+
+    match rb.send().await {
+        Ok(resp) => Ok(resp),
+        Err(_) => Err(
+            Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::from("DockerHub unreachable"))
+                .unwrap()
+        ),
+    }
+}
+
+
 
 /// Vérifie si le manifest racine est dans la blacklist ou whitelist
 /// `mode` = "blacklist" ou "whitelist"
@@ -1843,9 +1966,6 @@ pub async fn check_manifest_in_list(
     method: Method,
     mode: &str,
 ) -> Option<Response<Body>> {
-    if method != Method::HEAD {
-        return None; // on ne traite que HEAD ici
-    }
 
     // 🔹 Récupérer le contexte PullContext
     let ctx_opt = {
@@ -1928,7 +2048,6 @@ fn add_context_to_blacklist_or_whitelist(ctx: PullContext, list_type: &str) -> R
                 std::io::ErrorKind::InvalidInput,
                 format!("list_type invalide : '{}', doit être 'whitelist' ou 'blacklist'", list_type),
             ).into());
-
         }
     };
 
@@ -1950,6 +2069,15 @@ fn add_context_to_blacklist_or_whitelist(ctx: PullContext, list_type: &str) -> R
         );
         Vec::new()
     };
+
+    // 🔹 Vérifier si le contexte existe déjà (via UUID)
+    if list.iter().any(|c| c.uuid == ctx.uuid) {
+        println!(
+            "[DEBUG] Contexte UUID={} déjà présent dans {} – ajout ignoré",
+            ctx.uuid, list_type
+        );
+        return Ok(()); // on ne fait rien si le contexte existe déjà
+    }
 
     // 🔹 Ajouter le contexte courant
     println!("[DEBUG] Ajout du contexte UUID={} à la {}", ctx.uuid, list_type);
@@ -1975,6 +2103,7 @@ fn add_context_to_blacklist_or_whitelist(ctx: PullContext, list_type: &str) -> R
 
     Ok(())
 }
+
 
 
 
