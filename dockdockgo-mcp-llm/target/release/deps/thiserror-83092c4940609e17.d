@@ -1,0 +1,14 @@
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/thiserror-83092c4940609e17.d: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/thiserror-46bc52699151122a/out/private.rs
+
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/libthiserror-83092c4940609e17.rlib: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/thiserror-46bc52699151122a/out/private.rs
+
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/libthiserror-83092c4940609e17.rmeta: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/thiserror-46bc52699151122a/out/private.rs
+
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs:
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/thiserror-46bc52699151122a/out/private.rs:
+
+# env-dep:OUT_DIR=/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/thiserror-46bc52699151122a/out

@@ -1,0 +1,2 @@
+(Tool, for<'a> fn(&'a LlmService, {type error}) -> Pin<Box<(dyn Future<Output = Result<rmcp::model::CallToolResult, std::string::String>> + Send + 'a)>> {LlmService::llm_image_opinion})
+(Tool, for<'a> fn(&'a LlmService, {type error}) -> Pin<Box<(dyn Future<Output = Result<rmcp::model::CallToolResult, std::string::String>> + Send + 'a)>> {LlmService::llm_image_opinion}): IntoToolRoute<LlmService, _>

@@ -1,0 +1,14 @@
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/serde-c933d0433c22cc7b.d: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/serde-b51d8e4bab08ad0a/out/private.rs
+
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/libserde-c933d0433c22cc7b.rlib: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/serde-b51d8e4bab08ad0a/out/private.rs
+
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/libserde-c933d0433c22cc7b.rmeta: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/serde-b51d8e4bab08ad0a/out/private.rs
+
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/serde-b51d8e4bab08ad0a/out/private.rs:
+
+# env-dep:OUT_DIR=/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/serde-b51d8e4bab08ad0a/out

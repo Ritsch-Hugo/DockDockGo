@@ -1,0 +1,14 @@
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/ref_cast-ebba946de3b4f966.d: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/custom.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/layout.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/trivial.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/private.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/ref-cast-07fda026de788c0d/out/private.rs
+
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/libref_cast-ebba946de3b4f966.rlib: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/custom.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/layout.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/trivial.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/private.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/ref-cast-07fda026de788c0d/out/private.rs
+
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/deps/libref_cast-ebba946de3b4f966.rmeta: /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/lib.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/custom.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/layout.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/trivial.rs /home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/private.rs /home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/ref-cast-07fda026de788c0d/out/private.rs
+
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/lib.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/custom.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/layout.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/trivial.rs:
+/home/mendy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ref-cast-1.0.25/src/private.rs:
+/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/ref-cast-07fda026de788c0d/out/private.rs:
+
+# env-dep:OUT_DIR=/home/mendy/Documents/DocDockGo/DockDockGo/dockdockgo-mcp-llm/target/release/build/ref-cast-07fda026de788c0d/out

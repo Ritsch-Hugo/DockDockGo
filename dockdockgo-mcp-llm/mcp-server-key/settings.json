@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "dockdockgo-llm": {
+      "command": "./target/release/dockdockgo-mcp-llm",
+      "args": []
+    }
+  },
+  "sversion": 2
+}
