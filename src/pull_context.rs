@@ -231,7 +231,7 @@ pub async fn get_pull_context(
         //Proxy <- API <- Scanner
 
         //Si accepté (pour le moment) on retourne l'uuid
-        if is_allowed() == true || 1==1
+        if is_allowed() == true
         {
             return Ok(Some(uuid));
         }
