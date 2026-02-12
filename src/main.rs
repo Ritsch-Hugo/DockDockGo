@@ -94,6 +94,8 @@ struct PullContext
     last_activity: Instant,
     pull_completed: bool,
 
+    pub scan_allowed: Option<bool>,
+
     pub active_requests: usize,
 }
 
@@ -147,7 +149,7 @@ struct ImageState {
 type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
 // Définir le timeout désiré (ex : 30 secondes)
-const CONTEXT_TIMEOUT: Duration = Duration::from_secs(100);
+const CONTEXT_TIMEOUT: Duration = Duration::from_secs(30);
 
 static UPSTREAM: &str = "https://registry-1.docker.io";
 
@@ -177,6 +179,7 @@ impl PullContext {
             os: "unknown".to_string(),
             arch: "unknown".to_string(),
             pull_completed: false,
+            scan_allowed: None,
             active_requests: 0,
 
         }
@@ -187,7 +190,7 @@ impl PullContext {
 
 /// 🔐 Politique de sécurité
 fn is_allowed() -> bool {
-    true 
+    false
 }
 
 
@@ -342,6 +345,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "blacklist").await {
             println!("Image dans blacklist");
 
+            //Les digests deja stockés en quarantaine ne sont pas supprimés 
             //drop(list);
             dec_active(&pull_contexts, context_uuid, false).await;
             return resp; // si dans blacklist, on renvoie la réponse FORBIDDEN
@@ -518,9 +522,8 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                         //Si Image OK 
                         if is_allowed() == true
                         {
-                            //On copie l'image en cache | Quarantaine -> Cache 
-                            copy_ctx_from_quarantine_to_cache(ctx);
-
+                            //On met a jour le contexte avec le resultat du scan 
+                            ctx.scan_allowed = Some(true);
                             //Ajout de l'image a la whitelist
                             if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
                                 eprintln!("[WHITELIST ERROR] {}", e);
@@ -528,7 +531,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                             }
 
                             drop(list);
-                            dec_active(&pull_contexts, context_uuid, true).await;
+                            dec_active(&pull_contexts, context_uuid, false).await;
                             //return reponse client 
                             let mut resp = Response::builder().status(status);
                             for (k, v) in headers.iter() {
@@ -541,6 +544,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                         //Si Image refusée 
                         else
                         {
+                            ctx.scan_allowed = Some(false);
                             //Ajout a la blacklist
                             if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
                                 eprintln!("[BLACKLIST ERROR] {}", e);
@@ -628,6 +632,8 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
                 //Check si on peut suppr le context
                 println!("activ_request : {}", ctx.active_requests);
+
+                cleanup_tmp_for_uuid(&ctx.uuid);
             }
             else 
             {

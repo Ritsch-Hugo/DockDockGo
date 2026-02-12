@@ -691,12 +691,14 @@ pub async fn dec_active(pull_contexts: &PullContextList, uuid: Uuid, pull_is_all
 
         if ctx.pull_completed && ctx.active_requests == 0 {
 
-            if pull_is_allowed {
-                println!("[SCAN] OK + paramètre → copie vers cache");
+            if ctx.scan_allowed == Some(true) {
+                println!("[SCAN] OK → copie vers cache");
                 copy_ctx_from_quarantine_to_cache(ctx);
+            } else {
+                //println!("[SCAN] REFUSED → pas de copie");
             }
             cleanup_tmp_for_uuid(&ctx.uuid);
-            //remove_ctx_digests_from_quarantine(ctx);
+            remove_ctx_digests_from_quarantine(ctx);
             list.retain(|c| c.uuid != uuid);
         }
     }
@@ -710,6 +712,7 @@ pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext) {
     let base_q = format!("quarantaine/{}/{}/", registry, repo);
     let base_c = format!("cache/{}/{}/", registry, repo);
 
+    println!("LOG -> manifests : {:?}, blobs : {:?}, referrers : {:?}", &ctx.manifest_digests, &ctx.blob_digests, &ctx.referrers_digests);
     // -------- MANIFESTS --------
     for digest in &ctx.manifest_digests {
         let q = format!("{}manifests/sha256/{}.json", base_q, digest.value);
