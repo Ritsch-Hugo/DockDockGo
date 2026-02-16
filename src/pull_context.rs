@@ -231,29 +231,46 @@ pub async fn get_pull_context(
         //Proxy <- API <- Scanner
 
         //Si accepté (pour le moment) on retourne l'uuid
-        if is_allowed() == true
+        println!("[GetPullContext] - Call API pour scan Haut Niveau");
+        match is_allowed(&mut ctx).await.as_str() 
         {
-            return Ok(Some(uuid));
-        }
-        //Si refusé
-        else 
-        {
-            //Ajout a la blacklist
-            if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
-                eprintln!("[BLACKLIST ERROR] {}", e);     
+            "ALLOW" => 
+            {
+                //println!("[GetPullContext] - Scan Haut Niveau accepté, pull autorisé");
+                //Ajout a la whitelist 
+                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
+                    eprintln!("[WHITELIST ERROR] {}", e);     
+                }
+
+                return Ok(Some(uuid));
             }
+            "PENDING" => 
+            {
+                //println!("[GetPullContext] - Scan Haut Niveau en attente, pull en attente");
+                return Ok(Some(uuid));
+            }
+            "DENY" => 
+            {
+                //println!("[GetPullContext] - Scan Haut Niveau refusé, pull refusé");
+                //Ajout a la blacklist
+                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
+                    eprintln!("[BLACKLIST ERROR] {}", e);     
+                }
 
-            //Supprimer dossier temporaire
-            cleanup_tmp_for_uuid(&ctx.uuid);
+                //Supprimer dossier temporaire
+                cleanup_tmp_for_uuid(&ctx.uuid);
 
-            // 🔹 Libérer le contexte PullContext
-            list.retain(|c| c.uuid != ctx.uuid);
+                // 🔹 Libérer le contexte PullContext
+                list.retain(|c| c.uuid != ctx.uuid);
 
-            //Retourne une erreure
-            return Err(PullContextError::BlockingFromTheScanner);
+                return Err(PullContextError::BlockingFromTheScanner);
+            }
+            _ => 
+            {
+                eprintln!("[GetPullContext] - Erreur lors du scan Haut Niveau");
+                return Err(PullContextError::BlockingFromTheScanner);
+            }
         }
-        //Gèrer par la suite le cas ou l'orchestre renvoie un ALLOW definitif -> Ajout dans whitelist
-
     }
 
 

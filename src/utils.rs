@@ -36,11 +36,7 @@ use anyhow::Result;
 
 // ===== Crate (TES types / constantes) =====
 use crate::{
-    Digest,
-    PullContext,
-    PullContextList,
-    CONTEXT_TIMEOUT,
-    UPSTREAM,
+    CONTEXT_TIMEOUT, Digest, PullContext, PullContextList, UPSTREAM, is_allowed
 };
 
 use crate::digest_process_for_head;
@@ -646,7 +642,7 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             if let Err(e) = fs::remove_file(&manifest) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
             } else {
-                println!("[QUARANTINE CLEAN] supprimé {}", manifest);
+                //println!("[QUARANTINE CLEAN] supprimé {}", manifest);
             }
         }
 
@@ -654,7 +650,7 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             if let Err(e) = fs::remove_file(&blob) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
             } else {
-                println!("[QUARANTINE CLEAN] supprimé {}", blob);
+                //println!("[QUARANTINE CLEAN] supprimé {}", blob);
             }
         }
         
@@ -662,7 +658,7 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             if let Err(e) = fs::remove_file(&referrers) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
             } else {
-                println!("[QUARANTINE CLEAN] supprimé {}", referrers);
+                //println!("[QUARANTINE CLEAN] supprimé {}", referrers);
             }
         }
     }
@@ -674,7 +670,7 @@ pub async fn dec_active(pull_contexts: &PullContextList, uuid: Uuid, pull_is_all
 
     match pull_contexts.try_lock() {
         Ok(_) => {
-            println!("[CTX] dec_active: mutex libre");
+            //println!("[CTX] dec_active: mutex libre");
             // le guard est droppé immédiatement ici
         }
         Err(_) => {
@@ -688,15 +684,34 @@ pub async fn dec_active(pull_contexts: &PullContextList, uuid: Uuid, pull_is_all
             ctx.active_requests -= 1;
         }
         println!("[CTX] -1 active_requests={} uuid={}", ctx.active_requests, ctx.uuid);
+        if ctx.pull_completed && ctx.active_requests == 0 && ctx.scan_final_done == false 
+        {
 
-        if ctx.pull_completed && ctx.active_requests == 0 {
+            ctx.scan_final_done = true; // pour éviter les appels redondants à is_allowed en cas de requetes simultanées
 
-            if ctx.scan_allowed == Some(true) {
-                println!("[SCAN] OK → copie vers cache");
-                copy_ctx_from_quarantine_to_cache(ctx);
-            } else {
-                //println!("[SCAN] REFUSED → pas de copie");
-            }
+            /* 
+            println!("MANIFESTS = {}", ctx.manifest_digests.len());
+            println!("BLOBS = {}", ctx.blob_digests.len());
+            println!("REFERRERS = {}", ctx.referrers_digests.len());
+            */
+
+            //Appel API pour le scan final si image pas en whitelist ni blacklist ni cache
+            if ctx.in_blacklist == Some(false) && ctx.in_whitelist == Some(false) && ctx.in_cache == Some(false) {
+                //println!("[SCAN] Image non présente dans whitelist ni blacklist → scan final nécessaire");
+                let state = is_allowed(ctx).await;
+                println!("[DEC_ACTIVE] final state={}", state);
+
+                //Si le scan final est en ALLOW ou PENDING → Image accepté 
+                if ctx.scan_status == Some("ALLOW".to_string()) || ctx.scan_status == Some("PENDING".to_string()) {
+                    println!("[SCAN] OK → copie vers cache");
+                    copy_ctx_from_quarantine_to_cache(ctx);
+                } 
+                else 
+                {
+                    //println!("[SCAN] REFUSED → pas de copie");
+                }
+            } 
+
             cleanup_tmp_for_uuid(&ctx.uuid);
             remove_ctx_digests_from_quarantine(ctx);
             list.retain(|c| c.uuid != uuid);
@@ -712,7 +727,7 @@ pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext) {
     let base_q = format!("quarantaine/{}/{}/", registry, repo);
     let base_c = format!("cache/{}/{}/", registry, repo);
 
-    println!("LOG -> manifests : {:?}, blobs : {:?}, referrers : {:?}", &ctx.manifest_digests, &ctx.blob_digests, &ctx.referrers_digests);
+    //println!("LOG -> manifests : {:?}, blobs : {:?}, referrers : {:?}", &ctx.manifest_digests, &ctx.blob_digests, &ctx.referrers_digests);
     // -------- MANIFESTS --------
     for digest in &ctx.manifest_digests {
         let q = format!("{}manifests/sha256/{}.json", base_q, digest.value);
@@ -733,11 +748,11 @@ pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext) {
         let c = format!("{}referrers/sha256/{}.json", base_c, digest.value);
         copy_if_exists(&q, &c);
     }
-
+    /* 
     println!(
         "[CACHE COPY] Image copiée quarantaine → cache | {} {}:{}",
         ctx.registry, ctx.repository, ctx.tag
-    );
+    );*/
 }
 
 fn copy_if_exists(src: &str, dst: &str) {
@@ -762,7 +777,7 @@ fn copy_if_exists(src: &str, dst: &str) {
     }
 
     match fs::copy(src_path, dst_path) {
-        Ok(_) => println!("[CACHE COPY] {}", dst),
+        Ok(_) => {/*println!("[CACHE COPY] {}", dst)*/},
         Err(e) => eprintln!("[CACHE COPY] error {} -> {}", src, e),
     }
 }
