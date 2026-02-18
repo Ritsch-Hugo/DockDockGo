@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "annotations": {"com.dockdockgo.testcase":"fs-secrets-pass"},
+  "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444", "size": 123},
+  "layers": [
+    {"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555", "size": 111}
+  ]
+}

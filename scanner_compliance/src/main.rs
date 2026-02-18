@@ -178,7 +178,8 @@ fn load_input(path: &str) -> Result<ImageData, String> {
         .count() as u32;
 
     // 3) has_fs = true UNIQUEMENT quand tous les layers FS attendus sont reçus
-    let final_has_fs = fs_layers_received == fs_layers_total;
+    let final_has_fs = fs_layers_total > 0 && fs_layers_received == fs_layers_total;
+                                                   
 
     // 4) Lire les layers reçus dans l'ordre du manifest
     let mut per_layer_entries: Vec<Vec<FsEntry>> = Vec::new();

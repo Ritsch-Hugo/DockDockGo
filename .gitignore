@@ -2,7 +2,6 @@
 /target/
 /scanner_compliance/target/
 
-
 # llama.cpp build artifacts
 /runtime/llama.cpp/build
 /runtime/llama.cpp/*.o

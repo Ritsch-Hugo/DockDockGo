@@ -188,8 +188,10 @@ pub struct ManifestLayer {
 pub struct ManifestData {
     pub media_type: Option<String>,
     pub layers_count: Option<u32>,
+    #[serde(default)]
     pub annotations: HashMap<String, String>,
     pub config_digest: Option<String>,
+    #[serde(default)]
     pub layers: Vec<ManifestLayer>,
 }
 

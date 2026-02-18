@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "annotations": {"com.dockdockgo.testcase":"fs-hygiene-warn"},
+  "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666", "size": 123},
+  "layers": [
+    {"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777", "size": 111}
+  ]
+}

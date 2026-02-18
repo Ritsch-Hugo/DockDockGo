@@ -1,0 +1,12 @@
+{
+  "config": {
+    "User": "1000",
+    "Entrypoint": ["/app/server"],
+    "Cmd": ["--port","8080"],
+    "Env": ["APP_ENV=prod"],
+    "Labels": {
+      "org.opencontainers.image.source": "https://github.com/example/repo",
+      "org.opencontainers.image.revision": "cafebabe"
+    }
+  }
+}
