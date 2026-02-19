@@ -34,6 +34,9 @@ use uuid::Uuid;
 // ===== Errors =====
 use anyhow::Result;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+
 // ===== Crate (TES types / constantes) =====
 use crate::{
     CONTEXT_TIMEOUT, Digest, PullContext, PullContextList, UPSTREAM, is_allowed
@@ -642,7 +645,7 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             if let Err(e) = fs::remove_file(&manifest) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
             } else {
-                //println!("[QUARANTINE CLEAN] supprimé {}", manifest);
+                println!("[QUARANTINE CLEAN] supprimé {}", manifest);
             }
         }
 
@@ -650,7 +653,7 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             if let Err(e) = fs::remove_file(&blob) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
             } else {
-                //println!("[QUARANTINE CLEAN] supprimé {}", blob);
+                println!("[QUARANTINE CLEAN] supprimé {}", blob);
             }
         }
         
@@ -658,67 +661,43 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             if let Err(e) = fs::remove_file(&referrers) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
             } else {
-                //println!("[QUARANTINE CLEAN] supprimé {}", referrers);
+                println!("[QUARANTINE CLEAN] supprimé {}", referrers);
             }
         }
     }
 }
+pub async fn dec_active(
+    pull_contexts: &PullContextList,
+    uuid: Uuid,
+) {
+    let notify;
+    {
+        let mut list = pull_contexts.lock().await;
+        let ctx = match list.iter_mut().find(|c| c.uuid == uuid) {
+            Some(c) => c,
+            None => return,
+        };
 
+        // décrémente le compteur de requêtes actives
+        let prev = ctx.active_requests.fetch_sub(1, Ordering::SeqCst);
+        // le compteur est décrémenté, on affiche la nouvelle valeur
+        let now = prev - 1;
 
-//Cycle de vie des requetes
-pub async fn dec_active(pull_contexts: &PullContextList, uuid: Uuid, pull_is_allowed: bool) {
+        println!("[CTX] -1 active_requests={} uuid={}", now, ctx.uuid);
 
-    match pull_contexts.try_lock() {
-        Ok(_) => {
-            //println!("[CTX] dec_active: mutex libre");
-            // le guard est droppé immédiatement ici
-        }
-        Err(_) => {
-            println!("[CTX] dec_active: mutex déjà pris -> attente");
-        }
-    }
+        // clone notify pour l'utiliser hors lock
+        notify = ctx.notify_zero.clone();
 
-    let mut list = pull_contexts.lock().await;
-    if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
-        if ctx.active_requests > 0 {
-            ctx.active_requests -= 1;
-        }
-        println!("[CTX] -1 active_requests={} uuid={}", ctx.active_requests, ctx.uuid);
-        if ctx.pull_completed && ctx.active_requests == 0 && ctx.scan_final_done == false 
-        {
-
-            ctx.scan_final_done = true; // pour éviter les appels redondants à is_allowed en cas de requetes simultanées
-
-            /* 
-            println!("MANIFESTS = {}", ctx.manifest_digests.len());
-            println!("BLOBS = {}", ctx.blob_digests.len());
-            println!("REFERRERS = {}", ctx.referrers_digests.len());
-            */
-
-            //Appel API pour le scan final si image pas en whitelist ni blacklist ni cache
-            if ctx.in_blacklist == Some(false) && ctx.in_whitelist == Some(false) && ctx.in_cache == Some(false) {
-                //println!("[SCAN] Image non présente dans whitelist ni blacklist → scan final nécessaire");
-                let state = is_allowed(ctx).await;
-                println!("[DEC_ACTIVE] final state={}", state);
-
-                //Si le scan final est en ALLOW ou PENDING → Image accepté 
-                if ctx.scan_status == Some("ALLOW".to_string()) || ctx.scan_status == Some("PENDING".to_string()) {
-                    println!("[SCAN] OK → copie vers cache");
-                    copy_ctx_from_quarantine_to_cache(ctx);
-                } 
-                else 
-                {
-                    //println!("[SCAN] REFUSED → pas de copie");
-                }
-            } 
-
-            cleanup_tmp_for_uuid(&ctx.uuid);
-            remove_ctx_digests_from_quarantine(ctx);
-            list.retain(|c| c.uuid != uuid);
+        if now == 0 {
+            println!("[CTX] >>> PLUS AUCUNE REQUETE ACTIVE");
+        } else {
+            return;
         }
     }
+
+    // 🔔 notifier pour le scan final 
+    notify.notify_waiters();
 }
-
 
 pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext) {
     let registry = &ctx.registry;

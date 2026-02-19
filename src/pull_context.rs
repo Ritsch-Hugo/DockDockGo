@@ -30,6 +30,7 @@ pub async fn get_pull_context(
     client_ip: &str,
     pull_contexts: &PullContextList,
     client: &Client, 
+    path: &str,
 )-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
 
@@ -232,7 +233,7 @@ pub async fn get_pull_context(
 
         //Si accepté (pour le moment) on retourne l'uuid
         println!("[GetPullContext] - Call API pour scan Haut Niveau");
-        match is_allowed(&mut ctx).await.as_str() 
+        match is_allowed(&mut ctx, &path, "scan_haut_niveau").await.as_str() 
         {
             "ALLOW" => 
             {

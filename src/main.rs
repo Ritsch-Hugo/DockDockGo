@@ -29,6 +29,16 @@ use std::time::Instant;//pour le timeout des pull context 2
 
 use reqwest::multipart;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Notify;
+
+
+
+
+
 mod pull_context;
 use pull_context::{
     get_pull_context, 
@@ -72,7 +82,7 @@ struct Digest {
     value: String,     // hex
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct PullContext 
 {
     uuid: Uuid,
@@ -99,10 +109,14 @@ struct PullContext
     in_whitelist: Option<bool>,
     in_blacklist: Option<bool>,
     in_cache: Option<bool>,
+    check_if_verify_digest_completed: bool,
 
     pub scan_status: Option<String>, // "ALLOW", "PENDING", "DENY" ou None si pas encore de scan
 
-    pub active_requests: usize,
+    pub active_requests: AtomicUsize,
+
+    #[serde(skip_serializing, skip_deserializing)]
+    pub notify_zero: Arc<Notify>,
 }
 
 
@@ -189,11 +203,42 @@ impl PullContext {
             in_blacklist: None,
             in_whitelist: None,
             in_cache: None,
+            check_if_verify_digest_completed: false,
             scan_status: Some("PENDING".to_string()),
-            active_requests: 0,
+            active_requests: AtomicUsize::new(0),
+            notify_zero: Arc::new(Notify::new()),
 
         }
 
+    }
+}
+impl Clone for PullContext {
+    fn clone(&self) -> Self {
+        Self {
+            uuid: self.uuid,
+            ip_client: self.ip_client.clone(),
+            registry: self.registry.clone(),
+            repository: self.repository.clone(),
+            tag: self.tag.clone(),
+            manifest_digests: self.manifest_digests.clone(),
+            blob_digests: self.blob_digests.clone(),
+            referrers_digests: self.referrers_digests.clone(),
+            manifest_racine_digest: self.manifest_racine_digest.clone(),
+            digests_possible: self.digests_possible.clone(),
+            digests_expected: self.digests_expected.clone(),
+            os: self.os.clone(),
+            arch: self.arch.clone(),
+            last_activity: self.last_activity,
+            pull_completed: self.pull_completed,
+            scan_final_done: self.scan_final_done,
+            in_whitelist: self.in_whitelist,
+            in_blacklist: self.in_blacklist,
+            in_cache: self.in_cache,
+            check_if_verify_digest_completed: self.check_if_verify_digest_completed,
+            scan_status: self.scan_status.clone(),
+            active_requests: AtomicUsize::new(self.active_requests.load(Ordering::SeqCst)),
+            notify_zero: self.notify_zero.clone(),
+        }
     }
 }
 
@@ -206,78 +251,264 @@ impl PullContext {
 /// 🔐 Politique de sécurité (async)
 /// ALLOW ou PENDING => true (on continue)
 /// DENY => false (on bloque direct)
+pub async fn launch_final_scan(
+    pull_contexts: &PullContextList,
+    uuid: Uuid,
+    path: &str,
+) -> Option<bool> {
 
-async fn is_allowed(ctx: &mut PullContext) -> String {
+    // 1️⃣ récupérer le contexte
+    let mut ctx_clone;
+    {
+        let mut list = pull_contexts.lock().await;
+        let ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
+
+        // sécurité : scan déjà lancé ?
+        if ctx.scan_final_done {
+            return None;
+        }
+
+        ctx.scan_final_done = true;
+        ctx_clone = ctx.clone();
+    }
+    // 🔴 on sort du mutex ici
+
+    println!("[SCAN FINAL] lancement pour uuid={}", uuid);
+
+    // 2️⃣ appel scanner
+    let state = is_allowed(&mut ctx_clone, path, "scan_final").await;
+
+
+
+    let mut list = pull_contexts.lock().await;
+    let ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
+
+    if state == "ALLOW" || state == "PENDING" {
+        println!("[SCAN FINAL] OK → cache");
+
+        //Ajouter a whitelist 
+        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
+            eprintln!("[WHITELIST ERROR] {}", e);
+        }
+        copy_ctx_from_quarantine_to_cache(ctx);
+        cleanup_tmp_for_uuid(&ctx.uuid);
+        remove_ctx_digests_from_quarantine(ctx);
+
+        list.retain(|c| c.uuid != uuid);
+        return Some(true);
+    }
+
+    if state == "DENY" {
+        println!("[SCAN FINAL] REFUSÉ");
+
+        //Ajouter a blacklist
+        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
+            eprintln!("[BLACKLIST ERROR] {}", e);
+        }
+
+        cleanup_tmp_for_uuid(&ctx.uuid);
+        remove_ctx_digests_from_quarantine(ctx);
+        list.retain(|c| c.uuid != uuid);
+        return Some(false);
+    }
+
+    println!("[SCAN FINAL] état inconnu");
+    None
+}
+
+async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> String {
     #[derive(serde::Deserialize)]
     struct OrchestratorResp {
         pull_id: uuid::Uuid,
         state: String, // "PENDING" | "ALLOW" | "DENY"
     }
 
+    println!("flag : {}", flag);
     const ORCH_URL: &str = "http://127.0.0.1:3000/v1/decision";
 
     println!("============================== APPEL ORCHESTRATEUR ==============================");
     println!("uuid={} repo={}:{}", ctx.uuid, ctx.repository, ctx.tag);
 
-    // 1) champ context (inchangé, juste emballé en texte multipart)
+    // 1) context inchangé
     let mut form = multipart::Form::new()
         .text("context", serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string()));
 
-    // Helper: ajoute un fichier s'il existe, sinon skip (pas bloquant pour le MVP)
-    async fn add_file_if_exists(
-        form: multipart::Form,
-        field_name: &'static str,
-        filename: String,
-        path: String,
-    ) -> multipart::Form {
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => {
-                let part = multipart::Part::bytes(bytes).file_name(filename);
-                form.part(field_name, part)
+async fn add_file_if_exists(
+    form: multipart::Form,
+    field_name: &'static str,
+    filename: String,
+    path: String,
+) -> multipart::Form {
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => {
+            if bytes.is_empty() {
+                println!("[ORCH WARN] fichier vide: {}", path);
+                return form;
             }
-            Err(_) => form, // pas trouvé => on ignore
+
+            println!("[ORCH INFO] ajout fichier: {}", path);
+
+            let mime = if path.contains("/manifests/") || path.contains("/referrers/") {
+                "application/json"
+            } else {
+                "application/octet-stream"
+            };
+
+            // Renommer le fichier pour éviter les ':' dans le nom
+            let safe_filename = filename.replace(":", "_");
+
+            let part = multipart::Part::bytes(bytes)
+                .file_name(safe_filename)
+                .mime_str(mime)
+                .unwrap();
+
+            form.part(field_name, part)
+        }
+        Err(e) => {
+            println!("[ORCH WARN] fichier introuvable: {} ({})", path, e);
+            form
+        }
+    }
+}
+
+
+
+    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
+
+    // =====================================================================
+    // SCAN FINAL → envoyer TOUS les digests de l'image
+    // =====================================================================
+    if flag == "scan_final" 
+    {
+        println!("[ORCH] SCAN FINAL -> envoi de tous les digests de l'image");
+
+        // ---------------- manifests ----------------
+        for d in &ctx.manifest_digests {
+            let digest = d.as_str();
+            let parts: Vec<&str> = digest.split(':').collect();
+            if parts.len() == 2 {
+                let algo = parts[0];
+                let value = parts[1];
+
+                let filename = digest.clone();
+                let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
+
+                form = add_file_if_exists(form, "manifests", filename, file_path).await;
+            }
+        }
+
+        // ---------------- blobs ----------------
+        for d in &ctx.blob_digests {
+            let digest = d.as_str();
+            let parts: Vec<&str> = digest.split(':').collect();
+            if parts.len() == 2 {
+                let algo = parts[0];
+                let value = parts[1];
+
+                let filename = digest.clone();
+                let file_path = format!("{}/blobs/{}/{}", base_dir, algo, value);
+
+                form = add_file_if_exists(form, "blobs", filename, file_path).await;
+            }
+        }
+
+        // ---------------- referrers ----------------
+        for d in &ctx.referrers_digests {
+            let digest = d.as_str();
+            let parts: Vec<&str> = digest.split(':').collect();
+            if parts.len() == 2 {
+                let algo = parts[0];
+                let value = parts[1];
+
+                let filename = digest.clone();
+                let file_path = format!("{}/referrers/{}/{}.json", base_dir, algo, value);
+
+                form = add_file_if_exists(form, "referrers", filename, file_path).await;
+            }
+        }
+
+        println!("[ORCH] SCAN FINAL -> tous les fichiers ajoutés au multipart");
+    }
+
+    // ------------------------------------------------------------------
+    // On envoie uniquement le digest demandé dans l'URL
+    // ------------------------------------------------------------------
+    else 
+    {
+
+        if let Some(pos) = path.find("sha256:") {
+            let digest = &path[pos..];
+            println!("[ORCH] digest courant détecté: {}", digest);
+
+            if path.contains("/manifests/") {
+                let parts: Vec<&str> = digest.split(':').collect();
+                if parts.len() == 2 {
+                    let algo = parts[0];
+                    let value = parts[1];
+
+                    let filename = digest.to_string();
+                    let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
+
+                    form = add_file_if_exists(form, "manifests", filename, file_path).await;
+                }
+                
+            } else if path.contains("/blobs/") {
+                let parts: Vec<&str> = digest.split(':').collect();
+                if parts.len() == 2 {
+                    let algo = parts[0];
+                    let value = parts[1];
+
+                    let filename = digest.to_string();
+                    let file_path = format!("{}/blobs/{}/{}", base_dir, algo, value);
+
+                    println!("[ORCH] fichier blob attendu: {}", file_path);
+
+                    form = add_file_if_exists(form, "blobs", filename, file_path).await;
+                }
+            } else if path.contains("/referrers/") {
+                let parts: Vec<&str> = digest.split(':').collect();
+                if parts.len() == 2 {
+                    let algo = parts[0];
+                    let value = parts[1];
+
+                    let filename = digest.to_string();
+                    let file_path = format!("{}/referrers/{}/{}.json", base_dir, algo, value);
+
+                    form = add_file_if_exists(form, "referrers", filename, file_path).await;
+                }
+            }
         }
     }
 
-    // Base dir (même logique que save_to_quarantine)
-    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
-
-    // 2) manifests
-    for d in &ctx.manifest_digests {
-        let filename = format!("{}:{}", d.algorithm, d.value);
-        let path = format!("{}/manifests/{}/{}.json", base_dir, d.algorithm, d.value);
-        form = add_file_if_exists(form, "manifests", filename, path).await;
-    }
-
-    // 3) blobs
-    for d in &ctx.blob_digests {
-        let filename = format!("{}:{}", d.algorithm, d.value);
-        let path = format!("{}/blobs/{}/{}", base_dir, d.algorithm, d.value);
-        form = add_file_if_exists(form, "blobs", filename, path).await;
-    }
-
-    // 4) referrers
-    for d in &ctx.referrers_digests {
-        let filename = format!("{}:{}", d.algorithm, d.value);
-        let path = format!("{}/referrers/{}/{}.json", base_dir, d.algorithm, d.value);
-        form = add_file_if_exists(form, "referrers", filename, path).await;
-    }
-
-    // 5) POST multipart
+    println!("file_path : {}", base_dir);
+    // 5) POST multipart (inchangé)
     let client = reqwest::Client::new();
     let resp = client.post(ORCH_URL).multipart(form).send().await;
 
-    //Traietement de la réponse de l'orchestrateur
     let state = match resp {
         Ok(r) => {
-            println!("[ORCH CALL] status={}", r.status());
-            match r.json::<OrchestratorResp>().await {
+            let status = r.status();
+            println!("[ORCH CALL] status={}", status);
+
+            // 🔴 lire TOUJOURS la réponse en texte brut
+            let text = r.text().await.unwrap_or_default();
+            println!("[ORCH RAW RESP] {}", text);
+
+            if !status.is_success() {
+                println!("[ORCH ERROR] orchestrateur a renvoyé non-200");
+                return "PENDING".to_string();
+            }
+
+            match serde_json::from_str::<OrchestratorResp>(&text) {
                 Ok(body) => {
-                    println!("[ORCH RESP] body={{ pull_id={}, state={} }}", body.pull_id, body.state);
+                    println!(
+                        "[ORCH RESP] pull_id={} state={}",
+                        body.pull_id, body.state
+                    );
                     body.state.trim().to_uppercase()
                 }
                 Err(e) => {
-                    println!("[ORCH CALL] parse error: {:?}", e);
+                    println!("[ORCH PARSE ERROR] {:?}", e);
                     "PENDING".to_string()
                 }
             }
@@ -288,33 +519,30 @@ async fn is_allowed(ctx: &mut PullContext) -> String {
         }
     };
 
+
     println!("==================================================================================");
 
-    match state.as_str() 
-    {
+    match state.as_str() {
         "ALLOW" => {
             println!("Pull autorisé par l'orchestrateur");
             ctx.scan_status = Some("ALLOW".to_string());
-            // continuer le pull normalement
-        },
+        }
         "PENDING" => {
             println!("Pull en attente, décision non finale");
             ctx.scan_status = Some("PENDING".to_string());
-            // éventuellement laisser passer mais marquer en attente
-        },
+        }
         "DENY" => {
             println!("Pull refusé par l'orchestrateur");
             ctx.scan_status = Some("DENY".to_string());
-            // bloquer le pull, blacklist si nécessaire
-        },
+        }
         other => {
             println!("[WARNING] État inattendu reçu: {}", other);
-            // par défaut on peut considérer comme "PENDING"
         }
     }
 
-    state // retourne directement "ALLOW", "PENDING" ou "DENY"
+    state
 }
+
 
 
 async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextList, ) -> Response<Body> {
@@ -348,9 +576,10 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     .ip()
     .to_string();
 
+    let mut pull_completed = false;
     //recupère le contexte du pull en cours
     // /!\ Attention : Scan de haut niveau appelé dans tout les cas meme si le pull est déjà dans la whitelist ou blacklist, ou même dans le cache (pour le moment) /!\
-    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client).await {
+    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client, &path).await {
         Ok(Some(uuid)) => {
             println!("[Main] Contexte trouvé / créé avec UUID: {}", uuid);
             uuid // tu peux continuer à utiliser uuid
@@ -391,12 +620,16 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     {
         let mut list = pull_contexts.lock().await;
         if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
-            ctx.active_requests += 1;
+            // Incrémente atomiquement
+            let atomic_count_request = ctx.active_requests.fetch_add(1, Ordering::SeqCst) + 1;
+
             println!(
-                "[CTX] +1 active_requests={} uuid={}",
-                ctx.active_requests, ctx.uuid
+                "[CTX] +1 active_requests={:?} uuid={}",
+                ctx.active_requests.load(Ordering::SeqCst),
+                ctx.uuid
             );
         }
+
     } 
 
 
@@ -419,10 +652,12 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
                     // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
                     // et que digests_expected contient plus d'un élément
+                    let mut should_cleanup = false;
                     if ctx.digests_expected.len() > 1
                     {
 
                         //On compare les digests expected et ceux réellement téléchargés
+
                         match verify_downloaded_digests(ctx) 
                         {
                             Ok(DigestVerificationState::InProgress) => {
@@ -433,13 +668,27 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
                                 //Mettre la variable scan_completed a true
                                 ctx.pull_completed = true;
+
+                                //Ajouter a whitelist
+                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
+                                    eprintln!("[WHITELIST ERROR] {}", e);
+                                }
+                                cleanup_tmp_for_uuid(&ctx.uuid);
+                                remove_ctx_digests_from_quarantine(&ctx);
+
+                                should_cleanup = true;
+
                             }
                             Err(_) => {
                                 eprintln!("[PullContext] Pull invalide");
-                                // Libérer le contexte si nécessaire
+                                //
+                                cleanup_tmp_for_uuid(&ctx.uuid);
+                                remove_ctx_digests_from_quarantine(&ctx);
                                 drop(list);
-                                dec_active(&pull_contexts, context_uuid, false).await;
-                                //list.retain(|c| c.uuid != context_uuid);
+                                dec_active(&pull_contexts, context_uuid).await;
+
+                                let mut list = pull_contexts.lock().await;
+                                list.retain(|c| c.uuid != context_uuid);
                                 return Response::builder()
                                     .status(StatusCode::FORBIDDEN)
                                     .body(Body::from("Digest mismatch detected"))
@@ -450,7 +699,14 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     }
 
                     drop(list);
-                    dec_active(&pull_contexts, context_uuid, false).await;
+                    // Décrémenter le compteur AVANT de retirer le contexte
+                    dec_active(&pull_contexts, context_uuid).await;
+
+                    if should_cleanup {
+                         let mut list = pull_contexts.lock().await;
+                        list.retain(|c| c.uuid != context_uuid);
+                    }
+
                     return resp;
                 }
                 else 
@@ -462,6 +718,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         }
     }
 
+    //Pas sur d'etre necessaire
     //A ce moment on sait que le digest n'est pas dans le cache
     {
         let mut list = pull_contexts.lock().await;
@@ -481,7 +738,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         // Vérifier la blacklist
         if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "blacklist").await {
             println!("Image dans blacklist");
-
             {
                 let mut list = pull_contexts.lock().await;
                 if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
@@ -490,9 +746,19 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 }
             }
             //Les digests deja stockés en quarantaine ne sont pas supprimés 
-            //drop(list);
-            dec_active(&pull_contexts, context_uuid, false).await;
+            dec_active(&pull_contexts, context_uuid).await;
             return resp; // si dans blacklist, on renvoie la réponse FORBIDDEN
+        }
+    }
+    else 
+    {
+        //A ce moment on sait que le digest n'est pas en blacklist
+        {
+            let mut list = pull_contexts.lock().await;
+            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
+            {
+                ctx.in_blacklist = Some(false);
+            }
         }
     }
     //Verifier dans la whitelist
@@ -513,8 +779,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             Ok(resp) => resp,  // upstream ok
             Err(resp) => 
             {
-                //drop(list);
-                dec_active(&pull_contexts, context_uuid, false).await;
+                dec_active(&pull_contexts, context_uuid).await;
                 return resp;
             } // upstream KO → renvoyer directement la réponse
         };
@@ -533,6 +798,8 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         //Check si dernière requete 
         let mut list = pull_contexts.lock().await;
 
+        let mut should_cleanup = false;
+
         if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
         {
             if ctx.digests_expected.len() > 1
@@ -549,12 +816,19 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                         //Mettre la variable scan_completed a true
                         ctx.pull_completed = true;
 
+                        should_cleanup = true;
+
+                        cleanup_tmp_for_uuid(&ctx.uuid);
+
                     }
                     Err(_) => {
                         eprintln!("[PullContext] Pull invalide");
                         // Libérer le contexte si nécessaire
                         drop(list);
-                        dec_active(&pull_contexts, context_uuid, false).await;
+                        dec_active(&pull_contexts, context_uuid).await;
+
+                        let mut list = pull_contexts.lock().await;
+                        list.retain(|c| c.uuid != context_uuid);
 
                         return Response::builder()
                             .status(StatusCode::FORBIDDEN)
@@ -567,9 +841,24 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
 
         drop(list);
-        dec_active(&pull_contexts, context_uuid, false).await;
+        dec_active(&pull_contexts, context_uuid).await;
 
+        if should_cleanup {
+            let mut list = pull_contexts.lock().await;
+            list.retain(|c| c.uuid != context_uuid);
+        }
         return resp.body(Body::from(bytes)).unwrap();
+    }
+    else 
+    {
+        //A ce moment on sait que le digest n'est pas en whitelist
+        {
+            let mut list = pull_contexts.lock().await;
+            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
+            {
+                ctx.in_whitelist = Some(false);
+            }
+        }
     }
 
 
@@ -582,7 +871,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         Err(resp) =>
         { 
             //drop(list);
-            dec_active(&pull_contexts, context_uuid, false).await;
+            dec_active(&pull_contexts, context_uuid).await;
             return resp;// upstream KO → renvoyer directement la réponse
         }
     };
@@ -641,122 +930,124 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     }
 
 
-
     // 🔹 Vérification finale des digests téléchargés
     if method == Method::GET
     {
         let mut list = pull_contexts.lock().await;
-        if let Some(mut ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
+        if let Some(mut ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
+        {
 
-            // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
-            // et que digests_expected contient plus d'un élément
-            if ctx.digests_expected.len() > 1{
+        // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
+        // et que digests_expected contient plus d'un élément
+            if ctx.digests_expected.len() > 1
+            {
 
-                //On compare les digests expected et ceux réellement téléchargés
-                match verify_downloaded_digests(ctx) {
-                    Ok(DigestVerificationState::InProgress) => {
-                        // pull normal, on laisse continuer
-                    }
-                    Ok(DigestVerificationState::Completed) => 
-                    {
-                        println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
-                        //Mettre la variable scan_completed a true
-                        ctx.pull_completed = true;
-                         println!("test");
-
-                        //[Appel API] : déclencher scan final avec tout les digests 
-
-                        //Proxy -> API -> Scanner
-
-                        //Proxy <- API <- Scanner
-
-                        //Si Image OK 
-                        println!("[HANDLE] - Call API pour scan Final");
-                        //appel is _allow
-                         
-                        match is_allowed(&mut ctx).await.as_str() 
+                if ctx.check_if_verify_digest_completed == false
+                {
+                    //On compare les digests expected et ceux réellement téléchargés
+                    match verify_downloaded_digests(ctx) {
+                        Ok(DigestVerificationState::InProgress) => {
+                            // pull normal, on laisse continuer
+                        }
+                        Ok(DigestVerificationState::Completed) => 
                         {
-                            "ALLOW" | "PENDING" => 
-                            {
-                                println!("[SECURITY CHECK] Image conforme ou en attente -> continuation du pull + ajout whitelist");
-                                //Ajout de l'image a la whitelist
-                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
-                                    eprintln!("[WHITELIST ERROR] {}", e);
-                                    
-                                }
 
-                                drop(list);
-                                dec_active(&pull_contexts, context_uuid, false).await;
-                                //return reponse client 
-                                let mut resp = Response::builder().status(status);
-                                for (k, v) in headers.iter() {
-                                    resp = resp.header(k, v);
-                                }
+                            ctx.check_if_verify_digest_completed = true;
 
-                                return resp.body(Body::from(bytes)).unwrap();
+                            println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
+
+                            pull_completed = true;
+
+                            println!("[HANDLE] - Call API pour scan Final");
+
+                            // on clone le notify AVANT de sortir du lock
+                            let notify = ctx.notify_zero.clone();
+                            let ctx_clone = ctx.clone();
+
+                            // ⚠️ IMPORTANT : on sort du mutex AVANT d'attendre
+                            drop(list);
+
+                            // 1️⃣ on décrémente CETTE requête
+                            dec_active(&pull_contexts, context_uuid).await;
+
+                            // 2️⃣ on attend que toutes les autres finissent
+                            notify.notified().await;
+
+                            // 3️⃣ maintenant scan final
+                            let status_scan_final =
+                                launch_final_scan(&pull_contexts, context_uuid, &path).await;
+
+                            match status_scan_final {
+                                Some(true) => {
+                                    println!("[SECURITY CHECK] Image conforme -> ajout whitelist");
+
+                                    //Ajouter a whitelist
+                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist") {
+                                        eprintln!("[WHITELIST ERROR] {}", e);
+                                    }
+
+                                    cleanup_tmp_for_uuid(&ctx_clone.uuid);
+                                    remove_ctx_digests_from_quarantine(&ctx_clone);
+
+
+                                    let mut list = pull_contexts.lock().await;
+                                    list.retain(|c| c.uuid != context_uuid);
+
+                                    let mut resp = Response::builder().status(status);
+                                    for (k, v) in headers.iter() {
+                                        resp = resp.header(k, v);
+                                    }
+                                    return resp.body(Body::from(bytes)).unwrap();
+                                }
+                                Some(false) => {
+
+                                    //Ajouter a whitelist
+                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist") {
+                                        eprintln!("[WHITELIST ERROR] {}", e);
+                                    }
+                                    cleanup_tmp_for_uuid(&ctx_clone.uuid);
+                                    remove_ctx_digests_from_quarantine(&ctx_clone);
+
+                                    println!("[SECURITY CHECK] Image non conforme -> bloquage du pull");
+
+                                    let mut list = pull_contexts.lock().await;
+                                    list.retain(|c| c.uuid != context_uuid);
+                                    return Response::builder()
+                                        .status(StatusCode::FORBIDDEN)
+                                        .body(Body::from("Image refused by security scan"))
+                                        .unwrap();
+                                }
+                                None => {
+                                    println!("[SECURITY CHECK]- Race condition détectée ou erreur lors du scan final");
+
+                                    let mut list = pull_contexts.lock().await;
+                                    list.retain(|c| c.uuid != context_uuid);
+                                    return Response::builder()
+                                        .status(StatusCode::FORBIDDEN)
+                                        .body(Body::from("Image refused by security scan"))
+                                        .unwrap();
+                                }
                             }
-                            //Si Image refusée 
-                            "DENY" => 
-                            {
-                                //Ajout a la blacklist
-                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
-                                    eprintln!("[BLACKLIST ERROR] {}", e);
-                                    
-                                }
+                        }
 
-                                //affichage de la liste de contexte restante :    
-                                println!("========== PULL CONTEXT 2 LIST ==========");
-                                for (i, c) in list.iter().enumerate() {
-                                    println!(
-                                        "[{}]\n\
-                                        uuid={}\n\
-                                        ip={}\n\
-                                        registry={}\n\
-                                        repository={}\n\
-                                        tag={}\n\
-                                        manifest_racine_digests={:?}\n\
-                                        blob_digests={:?}\n\
-                                        referrers_digests={:?}\n\
-                                        digests_possible={:?}\n
-                                        digests_expected={:?}\n
-                                        os={}, arch={}\n",
-                                        i, c.uuid, c.ip_client, c.registry, c.repository, c.tag,
-                                        c.manifest_racine_digest, c.blob_digests, c.referrers_digests, c.digests_possible, c.digests_expected, c.os, c.arch
-                                    );
-                                }
-                                //retourner une erreure 
-                                println!("========================================="); 
+                        Err(_) => {
+                            eprintln!("[PullContext] Pull invalide");
 
-                                drop(list);
-                                dec_active(&pull_contexts, context_uuid, false).await;
+                            dec_active(&pull_contexts, context_uuid).await;
 
-                                return Response::builder()
+                            let mut list = pull_contexts.lock().await;
+                            list.retain(|c| c.uuid != context_uuid);
+                            return Response::builder()
                                 .status(StatusCode::FORBIDDEN)
-                                .body(Body::from("Image refused by security scan"))
+                                .body(Body::from("Digest mismatch detected"))
                                 .unwrap();
-                            }
-                            other => 
-                            {
-                                eprintln!("[WARNING] État inattendu de l'orchestrateur: {}", other);
-                            }
-                            
-                        }     
-                    }
-                    Err(_) => {
-                        eprintln!("[PullContext] Pull invalide");
-                        // Libérer le contexte si nécessaire
-                        drop(list);
-                        dec_active(&pull_contexts, context_uuid, false).await;
-                        //list.retain(|c| c.uuid != context_uuid);
-                        return Response::builder()
-                            .status(StatusCode::FORBIDDEN)
-                            .body(Body::from("Digest mismatch detected"))
-                            .unwrap();
+                        }
                     }
                 }
-            } else {
-                // Si ce n'est pas un GET ou digests_expected <= 1, on ne fait rien
             }
+        } 
+        else {
+            // Si ce n'est pas un GET ou digests_expected <= 1, on ne fait rien
         }
 
 
@@ -769,8 +1060,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         //Proxy -> API -> Scanner
         //Proxy <- API <- Scanner
 
-
-
         if method == Method::GET 
         {
             if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
@@ -780,17 +1069,16 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 {
                     // On continue ou on stop le pull en fonction du scan de sécurité
                     println!("[GetPullContext] - Call API pour scan par digest");
-                    match is_allowed(ctx).await.as_str() 
+                    match is_allowed(ctx, &path, "flagg").await.as_str() 
                     {
                         "DENY" => 
                         {
                             //
                             //------------- Cas ou le fichier est refusé par le scan de sécurité -------------
-                            println!("[SECURITY CHECK] Image non conforme -> bloquage du pull");
+                            println!("[SCAN BY DIGEST] Digest DENY -> bloquage du pull + ajout image en blacklist");
 
                             if let Some(mut ctx) = list.iter().find(|c| c.uuid == context_uuid).cloned() 
                             {
-
                                 println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
 
                                 // blacklist
@@ -798,11 +1086,10 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                     eprintln!("[BLACKLIST ERROR] {}", e);
                                 }
 
-
-                                //Check si on peut suppr le context
-                                println!("activ_request : {}", ctx.active_requests);
-
                                 cleanup_tmp_for_uuid(&ctx.uuid);
+                                remove_ctx_digests_from_quarantine(&ctx);
+
+
                             }
                             else 
                             {
@@ -810,7 +1097,10 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                             }
 
                             drop(list);
-                            dec_active(&pull_contexts, context_uuid, false).await;
+                            dec_active(&pull_contexts, context_uuid).await;
+
+                            let mut list = pull_contexts.lock().await;
+                            list.retain(|c| c.uuid != context_uuid);
                             //Cas ou l'image est refusé par le scan de securité 
                             return Response::builder()
                                 .status(StatusCode::FORBIDDEN)
@@ -819,7 +1109,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                         }
                         "ALLOW" => 
                         {
-                            println!("[SECURITY CHECK] Image conforme -> continuation du pull + ajout whitelist");
+                            println!("[SCAN BY DIGEST] Digest ALLOW -> continuation du pull + ajout image en whitelist");
                             //Ajout a la whitelist
                             if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
                                 eprintln!("[WHITELIST ERROR] {}", e);   
@@ -828,8 +1118,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                         }
                         "PENDING" => 
                         {
-                            //println!("[SECURITY CHECK] Image en attente de validation -> continuation du pull en mode PENDING");
-                            //On laisse continuer le pull mais on reste en attente pour les prochains digests
+                            println!("[SCAN BY DIGEST] Digest PENDING -> continuation du pull");
                         }
                         other => 
                         {
@@ -846,10 +1135,10 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
 
     //Appeller la fonction qui va supprimer le digest de la quarantaine et le mettre en cache 
+    
 
+    dec_active(&pull_contexts, context_uuid).await; //Appel is_allowed ici
 
-    //drop(list);
-    dec_active(&pull_contexts, context_uuid, false).await;
 
     // Construire la réponse finale pour le client -> 200 OK
     let mut resp = Response::builder().status(status);
