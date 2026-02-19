@@ -1,6 +1,7 @@
 # Rust
 /target/
 /scanner_compliance/target/
+tmp/
 
 # llama.cpp build artifacts
 /runtime/llama.cpp/build
