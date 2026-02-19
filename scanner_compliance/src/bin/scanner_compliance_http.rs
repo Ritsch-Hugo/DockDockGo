@@ -6,7 +6,7 @@ use axum::{
     response::IntoResponse,
     extract::Multipart,
 };
-use scanner_compliance::models::ScanRequest;
+use scanner_compliance::models::{ScanRequest, RawBlob, Stage};
 use scanner_compliance::pipeline;
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -16,8 +16,8 @@ use std::io::Write;
 #[tokio::main]
 async fn main() {
     let app = Router::new()
-        .route("/v1/scan", post(scan_handler)) // JSON endpoint existant
-        .route("/v1/scan-upload", post(upload_handler)); // NOUVEAU multipart
+        .route("/v1/scan", post(scan_handler))          // JSON endpoint
+        .route("/v1/scan-upload", post(upload_handler)); // Multipart endpoint
 
     let addr = "127.0.0.1:3001";
 
@@ -32,7 +32,7 @@ async fn main() {
         .expect("Server error");
 }
 
-/* ---------------- JSON EXISTANT ---------------- */
+/* ---------------- JSON ENDPOINT ---------------- */
 
 async fn scan_handler(
     Json(req): Json<ScanRequest>,
@@ -54,7 +54,7 @@ async fn scan_handler(
     (StatusCode::OK, Json(report)).into_response()
 }
 
-/* ---------------- MULTIPART TEST ---------------- */
+/* ---------------- MULTIPART ENDPOINT ---------------- */
 
 async fn upload_handler(
     mut multipart: Multipart,
@@ -74,15 +74,14 @@ async fn upload_handler(
 
     println!("📂 Workspace created: {}", workspace_path);
 
-    let mut manifest_received = false;
-    let mut blobs_count = 0;
+    let mut manifest_path: Option<String> = None;
+    let mut blobs: Vec<RawBlob> = Vec::new();
 
     // 2️⃣ Lecture multipart
     while let Some(field) = multipart.next_field().await.unwrap() {
 
         let field_name = field.name().unwrap_or("").to_string();
         let file_name = field.file_name().unwrap_or("unknown").to_string();
-
         let data = field.bytes().await.unwrap();
 
         let file_path = format!("{}/{}", workspace_path, file_name);
@@ -93,34 +92,78 @@ async fn upload_handler(
         file.write_all(&data)
             .expect("Failed to write file");
 
-        println!("📥 Received field '{}' -> {}", field_name, file_path);
+        println!("📥 Received '{}' -> {}", field_name, file_path);
 
         if field_name == "manifest" {
-            manifest_received = true;
+            manifest_path = Some(file_path.clone());
         }
 
         if field_name == "blob" {
-            blobs_count += 1;
+            let digest = format!("sha256:{}", file_name);
+
+            blobs.push(RawBlob {
+                digest,
+                media_type: None,
+                size: None,
+                path: Some(file_path.clone()),
+                bytes_b64: None,   // ✅ FIX ICI
+            });
         }
     }
 
-    // 3️⃣ Cleanup (on garde pour l’instant pour test visuel)
-    println!("🧹 Cleaning workspace...");
+    // 3️⃣ Vérification manifest
+    let manifest_path = match manifest_path {
+        Some(p) => p,
+        None => {
+            let _ = fs::remove_dir_all(&workspace_path);
+            return (
+                StatusCode::BAD_REQUEST,
+                "No manifest provided",
+            )
+                .into_response();
+        }
+    };
+
+    // 4️⃣ Lire manifest
+    let manifest_raw = match fs::read_to_string(&manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&workspace_path);
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Failed to read manifest: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // 5️⃣ Construire ScanRequest
+    let req = ScanRequest {
+        image_ref: Some("upload".into()),
+        manifest_raw,
+        blobs,
+        stage: Stage::Final,
+    };
+
+    // 6️⃣ Pipeline
+    let image = match pipeline::image_from_scan_request(req) {
+        Ok(img) => img,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&workspace_path);
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("ScanRequest error: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    let report = pipeline::scan_image(&image);
+
+    // 7️⃣ Cleanup
     if let Err(e) = fs::remove_dir_all(&workspace_path) {
         eprintln!("Cleanup error: {}", e);
     }
 
-    if !manifest_received {
-        return (
-            StatusCode::BAD_REQUEST,
-            "No manifest provided",
-        )
-            .into_response();
-    }
-
-    (
-        StatusCode::OK,
-        format!("Upload OK ({} blobs)", blobs_count),
-    )
-        .into_response()
+    (StatusCode::OK, Json(report)).into_response()
 }
