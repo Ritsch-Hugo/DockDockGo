@@ -20,6 +20,7 @@ use crate::{
     is_allowed,
     add_context_to_blacklist_or_whitelist,
     cleanup_tmp_for_uuid,
+    check_manifest_in_list,
 };
 
 
@@ -58,12 +59,6 @@ pub async fn get_pull_context(
     // 🔹 Extraire la valeur (digest ou tag)
     let value = parts[idx + 1];
 
-    /*println!(
-        "[PullContext] Resource type={}, index={}, value={}",
-        resource_type, idx, value
-    );*/
-
-
     // Extraire le repository
     let repository = parts[..idx].join("/");
 
@@ -93,9 +88,7 @@ pub async fn get_pull_context(
             resource_type, idx, value
         );*/
 
-
-        let digest_cmd = format!("{}:{}", repository, tag_ou_digest);
-        let mut manifest_racine_digest: Option<String> = None;
+        let manifest_racine_digest: Option<String> = None;
 
 
         // 🔹 Appeler digest_process_for_head pour récupérer le digest racine
@@ -222,8 +215,33 @@ pub async fn get_pull_context(
 
         //mise a jour de l'activité pour le timer (nouveau contexte)
         ctx.last_activity = Instant::now();
-
         list.push(ctx.clone());
+
+        let ctx_clone = ctx.clone(); // Cloner le contexte pour l'utiliser en dehors du lock
+
+        drop(list); // Libérer le lock avant les opérations potentiellement longues
+
+        // 🔹 Vérifier si le manifest racine est déjà en whitelist ou blacklist
+        let in_whitelist = check_manifest_in_list(
+            ctx_clone.uuid,
+            pull_contexts,
+            Method::HEAD,
+            "whitelist",
+        ).await;
+
+        let in_blacklist = check_manifest_in_list(
+            ctx_clone.uuid,
+            pull_contexts,
+            Method::HEAD,
+            "blacklist",
+        ).await;
+
+        let mut list = pull_contexts.lock().await;
+        // 🔹 Si l'image est déjà dans whitelist ou blacklist, on skip le scan haut niveau
+        if in_whitelist.is_some() || in_blacklist.is_some() {
+            println!("[GetPullContext] - Image déjà en whitelist/blacklist, scan Haut Niveau SKIPPÉ");
+            return Ok(Some(ctx.uuid));
+        }
 
         //[Appel API] : déclencher scan de haut niveau
 
@@ -231,8 +249,10 @@ pub async fn get_pull_context(
 
         //Proxy <- API <- Scanner
 
-        //Si accepté (pour le moment) on retourne l'uuid
+        //Si image dans whitelist ou blacklist on skip le scan de haut niveau
+        // /!\ Meme si l'image est dans le cache on ne peut pas le savoir au moment du HEAD, donc le scan de haut niveau est lancé dans tout les cas
         println!("[GetPullContext] - Call API pour scan Haut Niveau");
+        //Si accepté (pour le moment) on retourne l'uuid
         match is_allowed(&mut ctx, &path, "scan_haut_niveau").await.as_str() 
         {
             "ALLOW" => 

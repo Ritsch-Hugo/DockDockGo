@@ -4,7 +4,6 @@
 use std::fs;
 use std::path::Path;
 use std::fs::create_dir_all;
-use std::collections::{HashMap, HashSet};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use anyhow::Result;

@@ -34,12 +34,12 @@ use uuid::Uuid;
 // ===== Errors =====
 use anyhow::Result;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{Ordering};
 
 
 // ===== Crate (TES types / constantes) =====
 use crate::{
-    CONTEXT_TIMEOUT, Digest, PullContext, PullContextList, UPSTREAM, is_allowed
+    CONTEXT_TIMEOUT, Digest, PullContext, PullContextList, UPSTREAM,
 };
 
 use crate::digest_process_for_head;
@@ -146,7 +146,98 @@ pub fn save_to_quarantine(
     }
 }
 
+pub fn save_to_cache(
+    path: &str,
+    bytes: &[u8],
+    ctx: &PullContext,
+) {
+    let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
+    if parts.len() < 4 {
+        return;
+    }
 
+    let base_dir = format!(
+        "cache/{}/{}",
+        ctx.registry,
+        ctx.repository
+    );
+
+    // Helper pour écrire un digest
+    fn write_digest(
+        base_dir: &str,
+        category: &str,
+        digest: &Digest,
+        bytes: &[u8],
+        ext: Option<&str>,
+    ) {
+        let dir = format!("{}/{}/{}/{}", base_dir, category, digest.algorithm, "");
+        create_dir_all(&dir).ok();
+
+        let filename = match ext {
+            Some(e) => format!("{}/{}.{}", dir, digest.value, e),
+            None => format!("{}/{}", dir, digest.value),
+        };
+
+        // Écriture idempotente
+        if !std::path::Path::new(&filename).exists() {
+            fs::write(&filename, bytes).ok();
+        }
+    }
+
+    // ===== MANIFEST =====
+    if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
+        let digest_value = parts[3].trim_start_matches("sha256:");
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
+
+        write_digest(
+            &base_dir,
+            "manifests",
+            &digest,
+            bytes,
+            Some("json"),
+        );
+        println!("Manifest Ajouté au cache");
+    }
+
+    // ===== BLOB =====
+    else if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
+        let digest_value = parts[3].trim_start_matches("sha256:");
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
+
+        write_digest(
+            &base_dir,
+            "blobs",
+            &digest,
+            bytes,
+            None,
+        );
+        println!("Blob Ajouté au cache");
+    }
+
+    // ===== REFERRERS =====
+    else if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
+        let digest_value = parts[3].trim_start_matches("sha256:");
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
+
+        write_digest(
+            &base_dir,
+            "referrers",
+            &digest,
+            bytes,
+            Some("json"),
+        );
+        println!("Refferer Ajouté au cache");
+    }
+}
 
 
 /// 📦 Sert depuis le cache qui contient les images préalablement scannées
@@ -432,11 +523,11 @@ pub async fn check_manifest_in_list(
 
                         // Si blacklist -> cleanup + retirer contexte
                         if mode == "blacklist" {
-                            cleanup_tmp_for_uuid(&context_uuid);
+                            /*cleanup_tmp_for_uuid(&context_uuid);
                             let mut list = pull_contexts.lock().await;
                             list.retain(|c| c.uuid != context_uuid);
                             println!("[PullContext] Contexte libéré car blacklisté | uuid={}", context_uuid);
-
+                            */
                             return Some(
                                 Response::builder()
                                     .status(StatusCode::FORBIDDEN)

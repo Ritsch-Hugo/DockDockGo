@@ -12,11 +12,7 @@ use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
-use std::fs;
-use std::path::Path;
-use sha2::{Digest as Sha2Digest};
-
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use tokio::sync::Mutex as TokioMutex;
 
 
@@ -28,9 +24,6 @@ use serde::{Serialize, Deserialize};
 use std::time::Instant;//pour le timeout des pull context 2
 
 use reqwest::multipart;
-
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
@@ -60,6 +53,7 @@ use predict_digests_utils::{
 mod utils;
 use utils::{
     save_to_quarantine,
+    save_to_cache,
     try_serve_from_cache,
     manifest_list_has_linux_amd64,
     store_digest,
@@ -149,7 +143,6 @@ struct ManifestList {
 #[derive(Debug, Deserialize)]
 struct ManifestDescriptor {
     digest: String,
-    mediaType: String,
     platform: Platform,
     #[serde(default)]
     annotations: Option<HashMap<String, String>>,
@@ -159,10 +152,6 @@ struct ManifestDescriptor {
 struct Platform {
     os: String,
     architecture: String,
-}
-struct ImageState {
-    blobs_expected: HashSet<String>,  // tous les blobs attendus pour l'image
-    blobs_downloaded: HashSet<String> // blobs déjà téléchargés
 }
 
 
@@ -241,12 +230,6 @@ impl Clone for PullContext {
         }
     }
 }
-
-
-/// 🔐 Politique de sécurité
-/*fn is_allowed() -> bool {
-    false
-}*/
 
 /// 🔐 Politique de sécurité (async)
 /// ALLOW ou PENDING => true (on continue)
@@ -698,14 +681,41 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
                     }
 
+                    //On clone le notify AVANT de sortir du lock
+                    let notify = {
+                        if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                            ctx.notify_zero.clone()
+                        } else {
+                            return Response::builder()
+                                .status(StatusCode::FORBIDDEN)
+                                .body(Body::from("Digest mismatch detected"))
+                                .unwrap();
+                        }
+                    };
+
                     drop(list);
                     // Décrémenter le compteur AVANT de retirer le contexte
                     dec_active(&pull_contexts, context_uuid).await;
 
                     if should_cleanup {
-                         let mut list = pull_contexts.lock().await;
+                        // 🔴 CHECK IMMÉDIAT
+                        let zero = {
+                            let list = pull_contexts.lock().await;
+                            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                                ctx.active_requests.load(Ordering::SeqCst) == 0
+                            } else {
+                                true
+                            }
+                        };
+
+                        if !zero {
+                            notify.notified().await;
+                        }
+
+                        let mut list = pull_contexts.lock().await;
                         list.retain(|c| c.uuid != context_uuid);
                     }
+
 
                     return resp;
                 }
@@ -837,13 +847,49 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     }
                 }
             }
+            // 🔹 Sauvegarde en cache
+            if method == Method::GET 
+            {
+                if path.contains("/manifests/")
+                    || path.contains("/blobs/")
+                    || path.contains("/referrers/")
+                {
+                    println!("Ecriture des fichiers en cache");
+                    save_to_cache(&path, &bytes, ctx);
+                }
+            }
         } 
 
+        //On clone le notify AVANT de sortir du lock
+        let notify = {
+            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                ctx.notify_zero.clone()
+            } else {
+                return Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body(Body::from("Digest mismatch detected"))
+                    .unwrap();
+            }
+        };
 
         drop(list);
         dec_active(&pull_contexts, context_uuid).await;
 
         if should_cleanup {
+            // 🔴 CHECK IMMÉDIAT
+            let zero = {
+                let list = pull_contexts.lock().await;
+                if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                    ctx.active_requests.load(Ordering::SeqCst) == 0
+                } else {
+                    true
+                }
+            };
+
+            if !zero {
+                notify.notified().await;
+            }
+
             let mut list = pull_contexts.lock().await;
             list.retain(|c| c.uuid != context_uuid);
         }
@@ -915,7 +961,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
     
     // 🔹 Sauvegarde en quarantaine pour analyse
-    if method == Method::GET //&& !bytes.is_empty() 
+    if method == Method::GET 
     {
         if path.contains("/manifests/")
             || path.contains("/blobs/")
@@ -934,7 +980,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     if method == Method::GET
     {
         let mut list = pull_contexts.lock().await;
-        if let Some(mut ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
+        if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
         {
 
         // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
@@ -1077,7 +1123,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                             //------------- Cas ou le fichier est refusé par le scan de sécurité -------------
                             println!("[SCAN BY DIGEST] Digest DENY -> bloquage du pull + ajout image en blacklist");
 
-                            if let Some(mut ctx) = list.iter().find(|c| c.uuid == context_uuid).cloned() 
+                            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid).cloned() 
                             {
                                 println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
 
