@@ -1016,8 +1016,22 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                             // 1️⃣ on décrémente CETTE requête
                             dec_active(&pull_contexts, context_uuid).await;
 
-                            // 2️⃣ on attend que toutes les autres finissent
-                            notify.notified().await;
+
+                            // 2️⃣ Vérifier d'abord si déjà à 0 avant d'attendre
+                            // 🔔 Ce pattern permet d'éviter un blocage infini si la notification a déjà été émise avant qu'on commence à l'écouter.
+                            let already_zero = {
+                                let list = pull_contexts.lock().await;
+                                if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                                    ctx.active_requests.load(Ordering::SeqCst) == 0
+                                } else {
+                                    true
+                                }
+                            };
+
+                            // 3️⃣ N'attendre que si pas encore à 0
+                            if !already_zero {
+                                notify.notified().await;
+                            }
 
                             // 3️⃣ maintenant scan final
                             let status_scan_final =

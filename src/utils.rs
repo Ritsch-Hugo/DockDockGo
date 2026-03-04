@@ -476,6 +476,7 @@ pub async fn get_response_from_upstream(
 
 /// Vérifie si le manifest racine est dans la blacklist ou whitelist
 /// `mode` = "blacklist" ou "whitelist"
+/// Actuellement la verif est fait via le manifest racine, pas de differnetiation entre les differnts tags (A modifier) 
 pub async fn check_manifest_in_list(
     context_uuid: Uuid,
     pull_contexts: &Arc<TokioMutex<Vec<PullContext>>>, // OK maintenant
