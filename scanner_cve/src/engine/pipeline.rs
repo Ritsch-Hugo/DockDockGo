@@ -4,6 +4,7 @@ use crate::engine::layer_gate::check_layers;
 use crate::manifest::parser::parse_manifest;
 use crate::models::{ScanRequest, ScanResponse, ScanStatus};
 use crate::workspace::Workspace;
+use crate::fs::apply_layer::apply_layer;
 
 pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
 
@@ -25,9 +26,23 @@ pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
         });
     }
 
-    // création workspace temporaire
+    // workspace temporaire
     let ws = Workspace::new()?;
     println!("workspace created at {:?}", ws.rootfs);
+
+    // reconstruction rootfs
+    for layer in &parsed.layer_digests {
+
+        println!("applying layer {}", layer);
+
+        apply_layer(
+            &req.blob_store_dir,
+            layer,
+            &ws.rootfs,
+        )?;
+    }
+
+    println!("rootfs ready at {:?}", ws.rootfs);
 
     Ok(ScanResponse {
         request_id: req.request_id.clone(),
