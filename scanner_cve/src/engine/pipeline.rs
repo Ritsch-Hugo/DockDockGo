@@ -3,8 +3,10 @@ use anyhow::Result;
 use crate::engine::layer_gate::check_layers;
 use crate::manifest::parser::parse_manifest;
 use crate::models::{ScanRequest, ScanResponse, ScanStatus};
+use crate::workspace::Workspace;
 
 pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
+
     let parsed = parse_manifest(&req.manifest_path)?;
 
     let (complete, missing) =
@@ -22,6 +24,10 @@ pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
             meta: req.meta.clone(),
         });
     }
+
+    // création workspace temporaire
+    let ws = Workspace::new()?;
+    println!("workspace created at {:?}", ws.rootfs);
 
     Ok(ScanResponse {
         request_id: req.request_id.clone(),
