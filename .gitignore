@@ -1,0 +1,7 @@
+# Rust
+/target/
+/scanner_cve/target/
+tmp/
+
+# Env
+.env
