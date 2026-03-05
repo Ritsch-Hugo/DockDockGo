@@ -6,6 +6,7 @@ use crate::models::{ScanRequest, ScanResponse, ScanStatus};
 use crate::workspace::Workspace;
 use crate::fs::apply_layer::apply_layer;
 use crate::scanner::trivy::run_trivy;
+use crate::scanner::trivy_parser::parse_trivy;
 
 pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
 
@@ -46,14 +47,16 @@ pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
     println!("rootfs ready at {:?}", ws.rootfs);
     let trivy_output = run_trivy(&ws.rootfs)?;
 
+    let (summary, findings) = parse_trivy(&trivy_output);
+
     Ok(ScanResponse {
     request_id: req.request_id.clone(),
     status: ScanStatus::Complete,
     missing_layers: vec![],
     message: Some("scan completed".to_string()),
-    summary: None,
-    findings: vec![],
-    raw_trivy_json: Some(trivy_output),
+    summary: Some(summary),
+    findings,
+    raw_trivy_json: None,
     meta: req.meta.clone(),
 })
 }
