@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 // Pour les types définis dans ton projet
 use crate::{PullContext, Digest, ManifestList, DigestVerificationState, PullContextError};
-
+use crate::registry_auth::RegistryClient;
 
 
 /// Retourne l'OS et l'architecture d'un manifest Docker à partir de son digest.
@@ -106,7 +106,13 @@ pub fn fetch_and_process_manifest<'a>(
             let url = format!("https://{}/v2/{}/manifests/{}", registry, repository, digest);
             let resp = client.get(&url)
                 .header("Authorization", format!("Bearer {}", token))
-                .header("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+                .header(
+                    "Accept",
+                    "application/vnd.docker.distribution.manifest.list.v2+json,\
+                    application/vnd.docker.distribution.manifest.v2+json,\
+                    application/vnd.oci.image.index.v1+json,\
+                    application/vnd.oci.image.manifest.v1+json",
+                )
                 .send()
                 .await?;
             let content = resp.bytes().await?;
@@ -118,6 +124,13 @@ pub fn fetch_and_process_manifest<'a>(
         let content = fs::read(&path)?;
         let json: serde_json::Value = serde_json::from_slice(&content)?;
 
+        //Log
+        println!("[FETCH DEBUG] manifest {}: config={:?}, layers={:?}", 
+            digest_clean,
+            json.get("config"),
+            json.get("layers")
+        );
+        
         // Ajouter digest du manifest lui-même
         if !digests.iter().any(|d| d.value == digest_clean) {
             digests.push(Digest { algorithm: "sha256".into(), value: digest_clean.into() });
@@ -170,11 +183,12 @@ pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_c
     // ============================
     // 1️⃣ Récupération du token
     // ============================
+
+    /* 
     let token_url = format!(
         "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
         repository
     );
-
     let token_resp = client.get(&token_url).send().await?;
     let token_json: serde_json::Value = token_resp.json().await?;
 
@@ -182,6 +196,11 @@ pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_c
         .get("token")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Token Docker manquant"))?;
+    */
+
+    let token = RegistryClient::from_registry(registry)
+    .get_token(client, repository)
+    .await?;
 
     // ============================
     // 2️⃣ Préparer le stockage temporaire
@@ -208,8 +227,13 @@ pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_c
         let resp = client
             .get(&manifest_url)
             .header("Authorization", format!("Bearer {}", token))
-            .header("Accept", "application/vnd.docker.distribution.manifest.list.v2+json,\
-                     application/vnd.docker.distribution.manifest.v2+json")
+            .header(
+                "Accept",
+                "application/vnd.docker.distribution.manifest.list.v2+json,\
+                application/vnd.docker.distribution.manifest.v2+json,\
+                application/vnd.oci.image.index.v1+json,\
+                application/vnd.oci.image.manifest.v1+json",
+            )
             .send()
             .await?;
 
@@ -281,7 +305,10 @@ pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_c
                         .header("Authorization", format!("Bearer {}", token))
                         .header(
                             "Accept",
-                            "application/vnd.docker.distribution.manifest.v2+json",
+                            "application/vnd.docker.distribution.manifest.list.v2+json,\
+                            application/vnd.docker.distribution.manifest.v2+json,\
+                            application/vnd.oci.image.index.v1+json,\
+                            application/vnd.oci.image.manifest.v1+json",
                         )
                         .send()
                         .await?;
@@ -335,7 +362,10 @@ pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_c
                                     .header("Authorization", format!("Bearer {}", token))
                                     .header(
                                         "Accept",
-                                        "application/vnd.docker.distribution.manifest.v2+json",
+                                        "application/vnd.docker.distribution.manifest.list.v2+json,\
+                                        application/vnd.docker.distribution.manifest.v2+json,\
+                                        application/vnd.oci.image.index.v1+json,\
+                                        application/vnd.oci.image.manifest.v1+json",
                                     )
                                     .send()
                                     .await?;
@@ -369,7 +399,7 @@ pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_c
 
     // Parcourir chaque manifest pour extraire config + layers
     for digest in manifests_to_process {
-        fetch_and_process_manifest(&client, uuid, registry, repository, &digest, token, &mut digests).await?;
+        fetch_and_process_manifest(&client, uuid, registry, repository, &digest, &token, &mut digests).await?;
     }
 
     //affiche les digests prédites par predict_digests

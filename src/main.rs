@@ -28,7 +28,10 @@ use reqwest::multipart;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 
-
+use rustls::sign::any_supported_type;
+use rustls::server::ResolvesServerCert;
+use rustls::sign::CertifiedKey;
+use std::path::Path;
 
 
 
@@ -41,6 +44,8 @@ use pull_context::{
 
 // Déclare le module
 mod predict_digests_utils;
+
+mod registry_auth;
 
 // Puis importe les fonctions dont tu as besoin
 use predict_digests_utils::{
@@ -66,6 +71,7 @@ use utils::{
     remove_ctx_digests_from_quarantine,
     dec_active,
     copy_ctx_from_quarantine_to_cache,
+    is_registry_allowed,
 };
 
 
@@ -133,8 +139,6 @@ enum DigestVerificationState {
 }
 
 //Structures pour predict_digests
-
-
 #[derive(Debug, Deserialize)]
 struct ManifestList {
     manifests: Vec<ManifestDescriptor>,
@@ -155,13 +159,58 @@ struct Platform {
 }
 
 
+
+//Structure pour la gestion multi certificats 
+struct MultiCertResolver {
+    certs: HashMap<String, Arc<CertifiedKey>>,
+}
+
+impl MultiCertResolver {
+    fn new() -> Self {
+        Self {
+            certs: HashMap::new(),
+        }
+    }
+
+    fn add(&mut self, domain: &str) -> Result<()> {
+        let crt_path = format!("certs-mitm/{}.crt", domain);
+        let key_path = format!("certs-mitm/{}.key", domain);
+
+        if !Path::new(&crt_path).exists() || !Path::new(&key_path).exists() {
+            eprintln!("[TLS] Certificat manquant pour {}", domain);
+            return Ok(());
+        }
+
+        let certs = load_certs(&crt_path)?;
+        let key = load_private_key(&key_path)?;
+        let signing_key = any_supported_type(&key)?;
+        let certified = Arc::new(CertifiedKey::new(certs, signing_key));
+        self.certs.insert(domain.to_string(), certified);
+        println!("[TLS] Certificat chargé pour {}", domain);
+        Ok(())
+    }
+}
+
+impl ResolvesServerCert for MultiCertResolver {
+    fn resolve(
+        &self,
+        client_hello: rustls::server::ClientHello,
+    ) -> Option<Arc<CertifiedKey>> {
+        let name = client_hello.server_name()?;
+        self.certs.get(name).cloned()
+    }
+}
+
+
+
+
+
 type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
 // Définir le timeout désiré (ex : 30 secondes)
 const CONTEXT_TIMEOUT: Duration = Duration::from_secs(60);
 
-static UPSTREAM: &str = "https://registry-1.docker.io";
-
+//static UPSTREAM: &str = "https://registry-1.docker.io";
 
 
 impl Digest {
@@ -533,6 +582,9 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let uri = req.uri().clone();
     let path = uri.path().to_string();
     //let headers = req.headers().clone();
+    
+    // Normaliser sha256- → sha256: pour les registres OCI
+    let path = path.replace("sha256-", "sha256:");
     println!("============================================================");
     println!("[REQ] {} {}", method, path);
 
@@ -550,7 +602,23 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     if req.method() == Method::POST {
         println!("[POST] Requête POST non supportée");
     }
-    
+
+    // Redirection des requêtes /token vers le vrai registre
+    if path.starts_with("/token") {
+        let upstream = match get_response_from_upstream(req, client).await {
+            Ok(resp) => resp,
+            Err(resp) => return resp,
+        };
+        let status = upstream.status();
+        let headers = upstream.headers().clone();
+        let bytes = upstream.bytes().await.unwrap_or_default();
+        let mut resp = Response::builder().status(status);
+        for (k, v) in headers.iter() {
+            resp = resp.header(k, v);
+        }
+        return resp.body(Body::from(bytes)).unwrap();
+    }
+        
     //recupère l'ip du client 
     let client_ip = req
     .extensions()
@@ -558,6 +626,22 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     .unwrap()
     .ip()
     .to_string();
+
+    //exctation de l'host depuis la requete 
+    let host = req.headers()
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Vérifier si le registre est autorisé
+    if !is_registry_allowed(&host) {
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::from("Registre non autorisé"))
+            .unwrap();
+    }
+
 
     let mut pull_completed = false;
     //recupère le contexte du pull en cours
@@ -1213,15 +1297,41 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let certs = load_certs("certs-mitm/registry-1.docker.io.crt")?;
+    
+    
+    /*let certs = load_certs("certs-mitm/registry-1.docker.io.crt")?;
     let key = load_private_key("certs-mitm/registry-1.docker.io.key")?;
 
     let tls = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
+    */
 
+    //Gestion Multi-Certificats
+    let content = std::fs::read_to_string("registry_whitelist.json")
+        .expect("[TLS] registry_whitelist.json introuvable");
+    let registries: Vec<String> = serde_json::from_str(&content)
+        .expect("[TLS] registry_whitelist.json invalide");
+
+    let mut resolver = MultiCertResolver::new();
+    for registry in &registries {
+        resolver.add(registry)?;
+    }
+
+    let tls = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(resolver));
+
+
+        
     let listener = TcpListener::bind(("0.0.0.0", 443)).await?;
+
+    //[HANDSHAKE]
+    // 1 - Le client initie la connexion TLS 
+    // 2 - Le proxy envoie le certificat server (du bon registre)
+    // 3 - Si le certificat est signé par la CA, le certificat est accepté car la CA du proxy est trust par le client
     let acceptor = TlsAcceptor::from(Arc::new(tls));
 
     let client = Client::builder().use_rustls_tls().build()?;

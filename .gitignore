@@ -9,4 +9,5 @@ certs-mitm/
 EOF
 blacklist.json
 whitelist.json
+registry_whitelist.json
 Cargo.lock

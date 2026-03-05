@@ -8,6 +8,7 @@ use std::time::Duration;
 // ===== Tokio =====
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::sleep;
+use crate::registry_auth::RegistryClient;
 
 // ===== Hyper =====
 use hyper::{
@@ -39,7 +40,7 @@ use std::sync::atomic::{Ordering};
 
 // ===== Crate (TES types / constantes) =====
 use crate::{
-    CONTEXT_TIMEOUT, Digest, PullContext, PullContextList, UPSTREAM,
+    CONTEXT_TIMEOUT, Digest, PullContext, PullContextList,
 };
 
 use crate::digest_process_for_head;
@@ -396,6 +397,7 @@ pub async fn store_digest(
     let digest = digest_process_for_head(client, registry, repository, tag).await?;
 
     // Télécharger le manifest complet
+    /* 
     let token_url = format!(
         "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
         repository
@@ -403,6 +405,12 @@ pub async fn store_digest(
     let token_resp = client.get(&token_url).send().await?;
     let token_json: serde_json::Value = token_resp.json().await?;
     let token = token_json.get("token").and_then(|v| v.as_str()).unwrap();
+    */
+
+    //Recupèration du token en fonction du registre
+    let token = RegistryClient::from_registry(registry)
+        .get_token(client, repository)
+        .await?;
 
     let manifest_url = format!("https://{}/v2/{}/manifests/{}", registry, repository, tag);
     let manifest_resp = client
@@ -411,7 +419,9 @@ pub async fn store_digest(
         .header(
             "Accept",
             "application/vnd.docker.distribution.manifest.list.v2+json,\
-             application/vnd.docker.distribution.manifest.v2+json",
+            application/vnd.docker.distribution.manifest.v2+json,\
+            application/vnd.oci.image.index.v1+json,\
+            application/vnd.oci.image.manifest.v1+json",
         )
         .send()
         .await?;
@@ -443,9 +453,23 @@ pub async fn get_response_from_upstream(
     let method = req.method().clone();
     let headers = req.headers().clone();
 
+    /* 
     let upstream_url = format!(
         "{}{}",
         UPSTREAM,
+        uri.path_and_query().map(|p| p.as_str()).unwrap_or("/")
+    );*/
+
+    //On construit le host 
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("registry-1.docker.io");
+
+    //On extrait url upstream a partir du host
+    let upstream_url = format!(
+        "https://{}{}",
+        host,
         uri.path_and_query().map(|p| p.as_str()).unwrap_or("/")
     );
 
@@ -851,5 +875,31 @@ fn copy_if_exists(src: &str, dst: &str) {
         Ok(_) => {/*println!("[CACHE COPY] {}", dst)*/},
         Err(e) => eprintln!("[CACHE COPY] error {} -> {}", src, e),
     }
+}
+
+pub fn is_registry_allowed(registry: &str) -> bool {
+    let file_path = "registry_whitelist.json";
+
+    let content = match fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("[REGISTRY] registry_whitelist.json introuvable → tout bloqué");
+            return false;
+        }
+    };
+
+    let list: Vec<String> = match serde_json::from_str(&content) {
+        Ok(l) => l,
+        Err(_) => {
+            eprintln!("[REGISTRY] registry_whitelist.json invalide → tout bloqué");
+            return false;
+        }
+    };
+
+    let allowed = list.iter().any(|r| r == registry);
+    if !allowed {
+        println!("[REGISTRY] Registre '{}' non autorisé", registry);
+    }
+    allowed
 }
 

@@ -4,6 +4,7 @@ use reqwest::Client;
 use uuid::Uuid;
 use std::time::Instant;
 use anyhow::Result;
+use crate::registry_auth::RegistryClient;
 
 use crate::{
     PullContext,
@@ -35,8 +36,14 @@ pub async fn get_pull_context(
 )-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
 
-    // 🔹 Construire les variables principales à partir de parts
-    let registry = "registry-1.docker.io".to_string(); // Par défaut pour Docker Hub
+    // 🔹 Extraire le registre de la requete 
+    //let registry = "registry-1.docker.io".to_string(); // Par défaut pour Docker Hub
+    let registry = req
+        .headers()
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("registry-1.docker.io")
+        .to_string();
 
     // 🔹 Déterminer le type de ressource et son index
     let (resource_type, idx) = if let Some(i) = parts.iter().position(|p| *p == "manifests") {
@@ -171,13 +178,22 @@ pub async fn get_pull_context(
 
 
         // 🔹 Récupération de tout les digests pour le manifest list
-         
+
+       /*   
         let token = get_dockerhub_token(&client, &repository)
+            .await
+            .map_err(|_| PullContextError::MissingDigestOrTag)?;
+        */
+
+        //Recupèration du token en fonction du registre
+        let token = RegistryClient::from_registry(&registry)
+            .get_token(client, &repository)
             .await
             .map_err(|_| PullContextError::MissingDigestOrTag)?;
 
         let manifest_url = format!(
-            "https://registry-1.docker.io/v2/{}/manifests/sha256:{}",
+            "https://{}/v2/{}/manifests/sha256:{}",
+            registry,
             repository,
             digest_clean
         );
@@ -186,7 +202,10 @@ pub async fn get_pull_context(
             .get(&manifest_url)
             .header(
                 "Accept",
-                "application/vnd.docker.distribution.manifest.list.v2+json",
+                "application/vnd.docker.distribution.manifest.list.v2+json,\
+                application/vnd.docker.distribution.manifest.v2+json,\
+                application/vnd.oci.image.index.v1+json,\
+                application/vnd.oci.image.manifest.v1+json",
             )
             .bearer_auth(token)
             .send()
@@ -470,6 +489,7 @@ pub async fn digest_process_for_head(
 ) -> Result<Digest, anyhow::Error> {
     println!("[HEAD] Récupération du digest racine pour {}/{}", repository, tag);
 
+    /* 
     // 1️⃣ Récupération du token Docker
     let token_url = format!(
         "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
@@ -482,6 +502,12 @@ pub async fn digest_process_for_head(
         .get("token")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Token Docker manquant"))?;
+    */
+
+    //On recupère pas le token de la meme façon en fonction des registres 
+    let token = RegistryClient::from_registry(registry)
+    .get_token(client, repository)
+    .await?;
 
     println!("[HEAD] Token Docker récupéré");
 
@@ -494,43 +520,40 @@ pub async fn digest_process_for_head(
         .header(
             "Accept",
             "application/vnd.docker.distribution.manifest.list.v2+json,\
-             application/vnd.docker.distribution.manifest.v2+json",
+            application/vnd.docker.distribution.manifest.v2+json,\
+            application/vnd.oci.image.index.v1+json,\
+            application/vnd.oci.image.manifest.v1+json",
         )
         .send()
         .await?;
 
-        
+    // Extraire les headers AVANT de consommer le body
     let headers = manifest_resp.headers().clone();
 
-    // 🔍 LOG RATE-LIMIT
-    let headers = manifest_resp.headers();
+    // ← log temporaire
+    let body_text = manifest_resp.text().await?;
+    /*println!("[HEAD] Body reçu: {}", body_text);
+    println!("[HEAD] Headers reçus:");
+    for (k, v) in headers.iter() {
+        println!("  {}: {}", k, v.to_str().unwrap_or("invalid"));
+    }*/
 
+    // Rate limit (depuis le clone déjà fait)
     if let Some(limit) = headers.get("ratelimit-limit") {
-        println!(
-            "[RATE-LIMIT] limit = {}",
-            limit.to_str().unwrap_or("invalid")
-        );
+        println!("[RATE-LIMIT] limit = {}", limit.to_str().unwrap_or("invalid"));
     }
-
     if let Some(remaining) = headers.get("ratelimit-remaining") {
         let remaining_str = remaining.to_str().unwrap_or("invalid");
         println!("[RATE-LIMIT] remaining = {}", remaining_str);
-
         if remaining_str.starts_with('0') {
             anyhow::bail!("Docker Hub rate-limit atteint (remaining=0)");
         }
     }
-
     if let Some(src) = headers.get("docker-ratelimit-source") {
-        println!(
-            "[RATE-LIMIT] source = {}",
-            src.to_str().unwrap_or("invalid")
-        );
+        println!("[RATE-LIMIT] source = {}", src.to_str().unwrap_or("invalid"));
     }
 
-
-    // 3️⃣ Extraire le digest racine depuis l'en-tête
-    // /!\ Attention le Header docker-content-digest n'est pas toujours envoyé /!\
+    // Digest racine
     let manifest_digest = headers
         .get("Docker-Content-Digest")
         .and_then(|v| v.to_str().ok())
