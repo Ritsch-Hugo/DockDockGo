@@ -3,3 +3,4 @@ pub mod models;
 pub mod manifest;
 pub mod workspace;
 pub mod fs;
+pub mod scanner;

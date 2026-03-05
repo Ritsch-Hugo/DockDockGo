@@ -1,0 +1,11 @@
+{
+ "schemaVersion": 2,
+ "config": {
+   "digest": "sha256:706db57fb2063f39f69632c5b5c9c439633fda35110e65587c5d85553fd1cc38"
+ },
+ "layers": [
+   {
+     "digest": "sha256:256f393e029fa2063d8c93720da36a74a032bed3355a2bc3e313ad12f8bde9d1"
+   }
+ ]
+}

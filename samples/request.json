@@ -1,0 +1,7 @@
+{
+  "request_id": "dev-test-001",
+  "manifest_path": "../samples/manifest.json",
+  "config_path": null,
+  "blob_store_dir": "../samples/blobs",
+  "meta": { "image_ref": "alpine:latest" }
+}
