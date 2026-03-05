@@ -1,16 +1,18 @@
+use axum::extract::DefaultBodyLimit;
 use axum::{
     extract::Multipart, http::StatusCode, response::IntoResponse, routing::post, Json, Router,
 };
 use bytes::Bytes;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use rand::{seq::SliceRandom, thread_rng};
 use reqwest;
+use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as ShaDigest, Sha256};
 use std::net::SocketAddr;
-use uuid::Uuid;
-use axum::extract::DefaultBodyLimit;
 use tower_http::limit::RequestBodyLimitLayer;
-
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 struct HighLevelResp {
@@ -19,6 +21,10 @@ struct HighLevelResp {
 }
 
 const HL_URL: &str = "http://127.0.0.1:4000/v1/high-level";
+static COMPLIANCE_URL: &str = "http://127.0.0.1:3001/v1/scan-upload";
+
+static MANIFESTS: Lazy<DashMap<Uuid, Bytes>> = Lazy::new(DashMap::new);
+static PENDING_BLOBS: Lazy<DashMap<Uuid, Vec<Bytes>>> = Lazy::new(DashMap::new);
 
 // ===================
 // PullContext INCHANGÉ
@@ -76,6 +82,42 @@ fn sha256_digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", h.finalize())
 }
 
+async fn send_to_compliance(manifest: Bytes, blob: Bytes) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+
+    let form = multipart::Form::new()
+        .part(
+            "manifest",
+            multipart::Part::bytes(manifest.to_vec())
+                .file_name("manifest.json")
+                .mime_str("application/json")
+                .map_err(|e| e.to_string())?,
+        )
+        .part(
+            "blob",
+            multipart::Part::bytes(blob.to_vec())
+                .file_name("blob.bin")
+                .mime_str("application/octet-stream")
+                .map_err(|e| e.to_string())?,
+        );
+
+    let resp = client
+        .post(COMPLIANCE_URL)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("compliance unreachable: {e}"))?;
+
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+
+    if !status.is_success() {
+        return Err(format!("compliance http {}: {}", status, text));
+    }
+
+    serde_json::from_str(&text).map_err(|e| format!("bad json from compliance: {e}"))
+}
+
 // ---------------------------
 // Agent + dispatch (nouveau)
 // ---------------------------
@@ -130,14 +172,58 @@ async fn dispatch_to_scanner(
 ) {
     match scan {
         ScanType::Compliance => {
-            println!(
-                "[ORCH][SCAN][COMPLIANCE] pull_id={} kind={} digest={} size={}",
-                ctx.uuid,
-                kind,
-                digest,
-                bytes.len()
-            );
-            // compliance_scan(bytes, digest, ctx).await;
+            if kind == "manifest" {
+                MANIFESTS.insert(ctx.uuid, bytes.clone());
+                println!(
+                    "[ORCH][COMPLIANCE] manifest stored pull_id={} digest={}",
+                    ctx.uuid, digest
+                );
+
+                // flush blobs reçus avant le manifest
+                if let Some((_k, mut pending)) = PENDING_BLOBS.remove(&ctx.uuid) {
+                    if let Some(man) = MANIFESTS.get(&ctx.uuid).map(|v| v.value().clone()) {
+                        for b in pending.drain(..) {
+                            match send_to_compliance(man.clone(), b).await {
+                                Ok(v) => println!(
+                                    "[ORCH][COMPLIANCE] ok pull_id={} resp={}",
+                                    ctx.uuid, v
+                                ),
+                                Err(e) => println!(
+                                    "[ORCH][COMPLIANCE] error pull_id={} err={}",
+                                    ctx.uuid, e
+                                ),
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
+            if kind == "blob" {
+                if let Some(man) = MANIFESTS.get(&ctx.uuid).map(|v| v.value().clone()) {
+                    println!(
+                        "[ORCH][COMPLIANCE] forwarding blob pull_id={} digest={} size={}",
+                        ctx.uuid,
+                        digest,
+                        bytes.len()
+                    );
+                    match send_to_compliance(man, bytes).await {
+                        Ok(v) => println!("[ORCH][COMPLIANCE] ok pull_id={} resp={}", ctx.uuid, v),
+                        Err(e) => {
+                            println!("[ORCH][COMPLIANCE] error pull_id={} err={}", ctx.uuid, e)
+                        }
+                    }
+                } else {
+                    println!(
+                        "[ORCH][COMPLIANCE] blob buffered (manifest missing) pull_id={} digest={}",
+                        ctx.uuid, digest
+                    );
+                    PENDING_BLOBS.entry(ctx.uuid).or_default().push(bytes);
+                }
+                return;
+            }
+
+            println!("[ORCH][COMPLIANCE] ignoring kind={}", kind);
         }
         ScanType::Sbom => {
             println!(
@@ -352,4 +438,3 @@ async fn main() {
         .await
         .unwrap();
 }
-
