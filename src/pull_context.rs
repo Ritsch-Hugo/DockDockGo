@@ -487,7 +487,6 @@ pub async fn digest_process_for_head(
     repository: &str,
     tag: &str,
 ) -> Result<Digest, anyhow::Error> {
-    println!("[HEAD] Récupération du digest racine pour {}/{}", repository, tag);
 
     /* 
     // 1️⃣ Récupération du token Docker
@@ -504,6 +503,7 @@ pub async fn digest_process_for_head(
         .ok_or_else(|| anyhow::anyhow!("Token Docker manquant"))?;
     */
 
+    println!("[HEAD] Récupération du digest racine pour {}/{}", repository, tag);
     //On recupère pas le token de la meme façon en fonction des registres 
     let token = RegistryClient::from_registry(registry)
     .get_token(client, repository)

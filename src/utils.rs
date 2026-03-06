@@ -229,6 +229,11 @@ pub fn save_to_cache(
             value: digest_value.to_string(),
         };
 
+        if serde_json::from_slice::<serde_json::Value>(bytes).is_err() {
+            println!("Referrer ignoré car non-JSON");
+            return;
+        }
+
         write_digest(
             &base_dir,
             "referrers",
@@ -331,6 +336,22 @@ pub fn try_serve_from_cache(
         if let Ok(data) = fs::read(&file) {
             if data.len() < 20 {
                 return None;
+            }
+
+            // Décompresser si gzip (magic bytes: 0x1f 0x8b) (pour ghr.io)
+            let data = if data.starts_with(&[0x1f, 0x8b]) {
+                use std::io::Read;
+                let mut decoder = flate2::read::GzDecoder::new(&data[..]);
+                let mut decompressed = Vec::new();
+                decoder.read_to_end(&mut decompressed).ok()?;
+                decompressed
+            } else {
+                data
+            };
+            // Vérifier que c'est du JSON valide avant de servir
+            if serde_json::from_slice::<serde_json::Value>(&data).is_err() {
+                println!("[CACHE] Referrer corrompu ignoré, fallback upstream");
+                return None; // ← force le fallback vers upstream
             }
 
             return Some(

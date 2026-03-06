@@ -7,6 +7,7 @@ pub enum RegistryClient {
 }
 
 impl RegistryClient {
+    //on fabrique l'enum en fonction du registre
     pub fn from_registry(registry: &str) -> Self {
         match registry {
             "registry-1.docker.io" => RegistryClient::DockerHub,
@@ -48,6 +49,7 @@ impl RegistryClient {
                 );
 
                 // Appel sans token pour récupérer le Www-Authenticate
+                //Si on est pas dans le cas de dockerhub on ne connait pas a l'url d'auth a l'avance donc on doit envoyer une requete sans token pour recupèrer dans la reponse 401 les infos pour s'authentifier 
                 let resp_unauth = client
                     .get(&manifest_url)
                     .header(
@@ -60,19 +62,21 @@ impl RegistryClient {
                     .send()
                     .await?;
 
+                //reponse avec les headers pour savoir s'authentifier 
                 let www_auth = resp_unauth
                     .headers()
                     .get("Www-Authenticate")
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| anyhow::anyhow!("Www-Authenticate manquant pour {}", registry))?
                     .to_string();
-
+                
                 get_token_from_www_authenticate(client, &www_auth).await
             }
         }
     }
 }
 
+//fait requete upstream pour recuperer auth token
 async fn get_token_from_www_authenticate(
     client: &Client,
     www_auth: &str,
@@ -99,6 +103,7 @@ async fn get_token_from_www_authenticate(
 
     let json: serde_json::Value = serde_json::from_str(&text)?;
 
+    //recupèration du token dans la reponse upstream
     let token = json
         .get("token")
         .or_else(|| json.get("access_token"))
@@ -108,6 +113,7 @@ async fn get_token_from_www_authenticate(
     Ok(token.to_string())
 }
 
+//parseur de header
 fn extract_www_auth_field(www_auth: &str, field: &str) -> Option<String> {
     let pattern = format!("{}=\"", field);
     let start = www_auth.find(&pattern)? + pattern.len();

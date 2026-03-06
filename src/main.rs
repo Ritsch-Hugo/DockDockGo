@@ -208,7 +208,7 @@ impl ResolvesServerCert for MultiCertResolver {
 type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
 // Définir le timeout désiré (ex : 30 secondes)
-const CONTEXT_TIMEOUT: Duration = Duration::from_secs(60);
+const CONTEXT_TIMEOUT: Duration = Duration::from_secs(200);
 
 //static UPSTREAM: &str = "https://registry-1.docker.io";
 
@@ -582,7 +582,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let uri = req.uri().clone();
     let path = uri.path().to_string();
     //let headers = req.headers().clone();
-    
+
     // Normaliser sha256- → sha256: pour les registres OCI
     let path = path.replace("sha256-", "sha256:");
     println!("============================================================");
