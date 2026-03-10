@@ -22,6 +22,7 @@ use crate::{
     add_context_to_blacklist_or_whitelist,
     cleanup_tmp_for_uuid,
     check_manifest_in_list,
+    try_serve_from_cache,
 };
 
 
@@ -269,9 +270,10 @@ pub async fn get_pull_context(
         //Proxy <- API <- Scanner
 
         //Si image dans whitelist ou blacklist on skip le scan de haut niveau
-        // /!\ Meme si l'image est dans le cache on ne peut pas le savoir au moment du HEAD, donc le scan de haut niveau est lancé dans tout les cas
+        // /!\ Meme si l'image est dans le cache on ne peut pas le savoir au moment du HEAD, donc le scan de haut niveau est lancé quand meme
         println!("[GetPullContext] - Call API pour scan Haut Niveau");
         //Si accepté (pour le moment) on retourne l'uuid
+
         match is_allowed(&mut ctx, &path, "scan_haut_niveau").await.as_str() 
         {
             "ALLOW" => 

@@ -11,3 +11,4 @@ blacklist.json
 whitelist.json
 registry_whitelist.json
 Cargo.lock
+guide_proxy

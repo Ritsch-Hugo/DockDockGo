@@ -43,34 +43,45 @@ impl RegistryClient {
 
             // ← comportement générique via Www-Authenticate
             RegistryClient::Generic(registry) => {
-                let manifest_url = format!(
-                    "https://{}/v2/{}/manifests/latest",
-                    registry, repository
-                );
+                let ping_url = format!("https://{}/v2/", registry);
 
-                // Appel sans token pour récupérer le Www-Authenticate
-                //Si on est pas dans le cas de dockerhub on ne connait pas a l'url d'auth a l'avance donc on doit envoyer une requete sans token pour recupèrer dans la reponse 401 les infos pour s'authentifier 
                 let resp_unauth = client
-                    .get(&manifest_url)
-                    .header(
-                        "Accept",
-                        "application/vnd.docker.distribution.manifest.list.v2+json,\
-                        application/vnd.docker.distribution.manifest.v2+json,\
-                        application/vnd.oci.image.index.v1+json,\
-                        application/vnd.oci.image.manifest.v1+json",
-                    )
+                    .get(&ping_url)
                     .send()
                     .await?;
 
-                //reponse avec les headers pour savoir s'authentifier 
                 let www_auth = resp_unauth
                     .headers()
                     .get("Www-Authenticate")
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| anyhow::anyhow!("Www-Authenticate manquant pour {}", registry))?
                     .to_string();
-                
-                get_token_from_www_authenticate(client, &www_auth).await
+
+                // Extraire realm et service, ignorer le scope du header
+                let realm = extract_www_auth_field(&www_auth, "realm")
+                    .ok_or_else(|| anyhow::anyhow!("realm manquant"))?;
+                let service = extract_www_auth_field(&www_auth, "service").unwrap_or_default();
+
+                // Construire l'URL avec le bon scope
+                let token_url = format!(
+                    "{}?service={}&scope=repository:{}:pull",
+                    realm, service, repository
+                );
+
+                println!("[AUTH] Token URL: {}", token_url);
+
+                let resp = client.get(&token_url).send().await?;
+                let text = resp.text().await?;
+                println!("[AUTH] Réponse brute: {}", text);
+
+                let json: serde_json::Value = serde_json::from_str(&text)?;
+                let token = json
+                    .get("token")
+                    .or_else(|| json.get("access_token"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Token manquant dans la réponse auth"))?;
+
+                Ok(token.to_string())
             }
         }
     }
