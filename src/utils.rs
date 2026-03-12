@@ -92,6 +92,24 @@ pub fn save_to_quarantine(
         }
     }
 
+    // ===== MANIFEST par tag (cas Podman : /manifests/latest) =====
+    if parts[2] == "manifests" && !parts[3].starts_with("sha256:") 
+    {
+        // Le path contient un tag (ex: "latest") et non un digest
+        // On utilise le manifest_racine_digest du contexte pour nommer le fichier
+        if let Some(racine) = &ctx.manifest_racine_digest {
+            write_digest(
+                &base_dir,
+                "manifests",
+                racine,
+                bytes,
+                Some("json"),
+            );
+            println!("Manifest racine (par tag) Ajouté a la quarantaine");
+        } else {
+            eprintln!("[QUARANTINE] manifest par tag mais manifest_racine_digest absent du ctx");
+        }
+    }
     // ===== MANIFEST =====
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
@@ -185,6 +203,24 @@ pub fn save_to_cache(
         }
     }
 
+    // ===== MANIFEST par tag (cas Podman : /manifests/latest) =====
+    if parts[2] == "manifests" && !parts[3].starts_with("sha256:") 
+    {
+        // Le path contient un tag (ex: "latest") et non un digest
+        // On utilise le manifest_racine_digest du contexte pour nommer le fichier
+        if let Some(racine) = &ctx.manifest_racine_digest {
+            write_digest(
+                &base_dir,
+                "manifests",
+                racine,
+                bytes,
+                Some("json"),
+            );
+            println!("Manifest racine (par tag) Ajouté a la quarantaine");
+        } else {
+            eprintln!("[QUARANTINE] manifest par tag mais manifest_racine_digest absent du ctx");
+        }
+    }
     // ===== MANIFEST =====
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
@@ -270,19 +306,58 @@ pub fn try_serve_from_cache(
         return None;
     }
 
+    // ================= MANIFEST par tag (cas Podman) =================
+    if parts[2] == "manifests" && !parts[3].starts_with("sha256:") {
+        if let Some(racine) = &ctx.manifest_racine_digest {
+            let file = format!("{}/manifests/sha256/{}.json", base_dir, racine.value);
+
+            if let Ok(data) = fs::read(&file) {
+                if data.len() < 20 {
+                    return None;
+                }
+
+                // ← Lire le vrai mediaType
+                let content_type = serde_json::from_slice::<serde_json::Value>(&data)
+                    .ok()
+                    .and_then(|v| v.get("mediaType").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                    .unwrap_or_else(|| {
+                        // Manifest list OCI sans mediaType explicite
+                        "application/vnd.oci.image.index.v1+json".to_string()
+                    });
+
+                return Some(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Docker-Distribution-API-Version", "registry/2.0")
+                        .header("Content-Type", content_type)
+                        .header("Docker-Content-Digest", format!("sha256:{}", racine.value))
+                        .header("Content-Length", data.len())
+                        .body(Body::from(data))
+                        .unwrap(),
+                );
+            }
+        }
+        return None;
+    }
+
     // ================= MANIFEST =================
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
         let digest = parts[3].trim_start_matches("sha256:");
-        let file = format!(
-            "{}/manifests/sha256/{}.json",
-            base_dir, digest
-        );
+        let file = format!("{}/manifests/sha256/{}.json", base_dir, digest);
 
-        //prend la donné en lisant le fichier du cache
         if let Ok(data) = fs::read(&file) {
             if data.len() < 20 {
                 return None;
             }
+
+            // ← Lire le vrai mediaType depuis le JSON
+            let content_type = serde_json::from_slice::<serde_json::Value>(&data)
+                .ok()
+                .and_then(|v| v.get("mediaType").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                .unwrap_or_else(|| {
+                    // Pas de mediaType explicite → OCI manifest
+                    "application/vnd.oci.image.manifest.v1+json".to_string()
+                });
 
             let real_digest = sha256_hex(&data);
 
@@ -290,10 +365,7 @@ pub fn try_serve_from_cache(
                 Response::builder()
                     .status(StatusCode::OK)
                     .header("Docker-Distribution-API-Version", "registry/2.0")
-                    .header(
-                        "Content-Type",
-                        "application/vnd.docker.distribution.manifest.v2+json",
-                    )
+                    .header("Content-Type", content_type)
                     .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
                     .header("Content-Length", data.len())
                     .body(if is_head { Body::empty() } else { Body::from(data) })

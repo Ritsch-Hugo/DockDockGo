@@ -473,7 +473,8 @@ async fn add_file_if_exists(
     else 
     {
 
-        if let Some(pos) = path.find("sha256:") {
+        if let Some(pos) = path.find("sha256:") 
+        {
             let digest = &path[pos..];
             println!("[ORCH] digest courant détecté: {}", digest);
 
@@ -512,6 +513,25 @@ async fn add_file_if_exists(
                     let file_path = format!("{}/referrers/{}/{}.json", base_dir, algo, value);
 
                     form = add_file_if_exists(form, "referrers", filename, file_path).await;
+                }
+            }
+        }
+            
+        // ← CAS PODMAN : path par tag, pas de sha256: dans le path
+        else if path.contains("/manifests/") && !path.contains("sha256:") {
+            // Utiliser le manifest_racine_digest du contexte
+            if let Some(racine) = &ctx.manifest_racine_digest {
+                let digest = racine.as_str(); // "sha256:d1e2e92c..."
+                let parts: Vec<&str> = digest.split(':').collect();
+                if parts.len() == 2 {
+                    let algo = parts[0];
+                    let value = parts[1];
+
+                    let filename = digest.clone();
+                    let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
+
+                    println!("[ORCH] manifest racine (par tag) détecté: {}", file_path);
+                    form = add_file_if_exists(form, "manifests", filename, file_path).await;
                 }
             }
         }

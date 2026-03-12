@@ -337,21 +337,6 @@ pub async fn digest_process_for_head(
     tag: &str,
 ) -> Result<Digest, anyhow::Error> {
 
-    /* 
-    // 1️⃣ Récupération du token Docker
-    let token_url = format!(
-        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
-        repository
-    );
-
-    let token_resp = client.get(&token_url).send().await?;
-    let token_json: serde_json::Value = token_resp.json().await?;
-    let token = token_json
-        .get("token")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Token Docker manquant"))?;
-    */
-
     println!("[HEAD] Récupération du digest racine pour {}/{}", repository, tag);
     //On recupère pas le token de la meme façon en fonction des registres 
     let token = RegistryClient::from_registry(registry)
@@ -444,8 +429,8 @@ async fn create_context_from_tag(
 
     // 2️⃣ UUID déterministe — même formule que l'ancien bloc HEAD
     let uuid_input = format!(
-        "{}|{}|{}|{}",
-        registry, repository, &manifest_racine_digest.value, ip_client
+        "{}|{}|{}|{}|{}",
+        registry, repository, &manifest_racine_digest.value, ip_client, client_type
     );
     let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, uuid_input.as_bytes());
 
@@ -475,6 +460,11 @@ async fn create_context_from_tag(
     ctx.client_type = client_type.to_string(); // ← stocker le type de client
 
     ctx.manifest_racine_digest = Some(manifest_racine_digest.clone());
+
+    if !ctx.manifest_digests.contains(&manifest_racine_digest) 
+    {
+        ctx.manifest_digests.push(manifest_racine_digest.clone());
+    }
 
     if !ctx.digests_possible.contains(&manifest_racine_digest) {
         ctx.digests_possible.push(manifest_racine_digest.clone());

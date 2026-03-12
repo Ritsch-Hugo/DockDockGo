@@ -545,6 +545,12 @@ pub async fn predict_digests_podman(
     // ============================
     let mut digests: Vec<Digest> = Vec::new();
 
+    // ← AJOUTER le digest racine en premier
+    digests.push(Digest {
+        algorithm: "sha256".to_string(),
+        value: digest_clean.clone(), // digest_clean = manifest_racine_digest nettoyé
+    });
+    
     // manifest linux/amd64
     digests.push(Digest {
         algorithm: "sha256".to_string(),
