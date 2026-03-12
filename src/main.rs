@@ -51,7 +51,8 @@ mod registry_auth;
 use predict_digests_utils::{
     get_os_arch_for_digest,
     //fetch_and_process_manifest,
-    predict_digests,
+    predict_digests_docker,
+    predict_digests_podman,
     verify_downloaded_digests,
 };
 
@@ -114,6 +115,8 @@ struct PullContext
     pub scan_status: Option<String>, // "ALLOW", "PENDING", "DENY" ou None si pas encore de scan
 
     pub active_requests: AtomicUsize,
+
+    pub client_type: String, //podman ou docker
 
     #[serde(skip_serializing, skip_deserializing)]
     pub notify_zero: Arc<Notify>,
@@ -244,6 +247,7 @@ impl PullContext {
             check_if_verify_digest_completed: false,
             scan_status: Some("PENDING".to_string()),
             active_requests: AtomicUsize::new(0),
+            client_type: "unknown".to_string(),
             notify_zero: Arc::new(Notify::new()),
 
         }
@@ -275,6 +279,7 @@ impl Clone for PullContext {
             check_if_verify_digest_completed: self.check_if_verify_digest_completed,
             scan_status: self.scan_status.clone(),
             active_requests: AtomicUsize::new(self.active_requests.load(Ordering::SeqCst)),
+            client_type: self.client_type.clone(),
             notify_zero: self.notify_zero.clone(),
         }
     }
@@ -642,11 +647,13 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .unwrap();
     }
 
+    let client_type = detect_client_type(&req);
+    println!("[CLIENT] type détecté: {}", client_type); 
 
     let mut pull_completed = false;
     //recupère le contexte du pull en cours
     // /!\ Attention : Scan de haut niveau appelé dans tout les cas meme si le pull est déjà dans la whitelist ou blacklist, ou même dans le cache (pour le moment) /!\
-    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client, &path).await {
+    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client, &path, client_type).await {
         Ok(Some(uuid)) => {
             println!("[Main] Contexte trouvé / créé avec UUID: {}", uuid);
             uuid // tu peux continuer à utiliser uuid
@@ -856,7 +863,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         }
     }
     //Verifier dans la whitelist
-    if let Some(response) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "whitelist").await 
+    if let Some(_) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "whitelist").await 
     {
         println!("Image dans whitelist");
 
@@ -1290,6 +1297,13 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         resp = resp.header(k, v);
     }
 
+    //LOG
+    /* 
+    println!("[RESP] status={} headers:", status);
+    for (k, v) in headers.iter() {
+        println!("  {}: {}", k, v.to_str().unwrap_or("?"));
+    }*/
+
     resp.body(Body::from(bytes)).unwrap()
 
 }
@@ -1408,4 +1422,19 @@ fn load_private_key(path: &str) -> Result<PrivateKey> {
     }
 
     Err(anyhow::anyhow!("No private keys found in {}", path))
+}
+
+pub fn detect_client_type(req: &Request<Body>) -> &'static str {
+    let ua = req.headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if ua.contains("containers/") {
+        "podman"
+    } else if ua.to_lowercase().contains("docker") {
+        "docker"
+    } else {
+        "unknown"
+    }
 }

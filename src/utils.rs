@@ -465,7 +465,6 @@ pub async fn store_digest(
 
     Ok(digest)
 }
- 
 pub async fn get_response_from_upstream(
     req: Request<Body>,
     client: Client,
@@ -474,20 +473,12 @@ pub async fn get_response_from_upstream(
     let method = req.method().clone();
     let headers = req.headers().clone();
 
-    /* 
-    let upstream_url = format!(
-        "{}{}",
-        UPSTREAM,
-        uri.path_and_query().map(|p| p.as_str()).unwrap_or("/")
-    );*/
-
-    //On construit le host 
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("registry-1.docker.io");
+        .unwrap_or("registry-1.docker.io")
+        .to_string();
 
-    //On extrait url upstream a partir du host
     let upstream_url = format!(
         "https://{}{}",
         host,
@@ -497,11 +488,31 @@ pub async fn get_response_from_upstream(
     let body = to_bytes(req.into_body()).await.unwrap_or_default();
 
     let mut rb = client.request(method, &upstream_url);
+
     for (k, v) in headers.iter() {
-        if !matches!(k.as_str(), "host" | "connection") {
+        // ← supprimer le token du client + host + connection
+        if !matches!(k.as_str(), "host" | "connection" | "authorization") {
             rb = rb.header(k, v);
         }
     }
+
+    // ← injecter un token frais obtenu par le proxy
+    let path = uri.path();
+    if let Some(repository) = extract_repository_from_path(path) {
+        match RegistryClient::from_registry(&host)
+            .get_token(&client, &repository)
+            .await
+        {
+            Ok(token) => {
+                rb = rb.header("Authorization", format!("Bearer {}", token));
+            }
+            Err(e) => {
+                eprintln!("[AUTH] Impossible d'obtenir un token pour {}: {:?}", repository, e);
+                // on continue sans token — Docker Hub répondra 401 mais c'est son problème
+            }
+        }
+    }
+
     if !body.is_empty() {
         rb = rb.body(body);
     }
@@ -511,10 +522,23 @@ pub async fn get_response_from_upstream(
         Err(_) => Err(
             Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from("DockerHub unreachable"))
+                .body(Body::from("Registry unreachable"))
                 .unwrap()
         ),
     }
+}
+
+// ← helper : extrait "library/alpine" depuis "/v2/library/alpine/manifests/latest"
+fn extract_repository_from_path(path: &str) -> Option<String> {
+    let stripped = path.trim_start_matches("/v2/");
+    let parts: Vec<&str> = stripped.split('/').collect();
+    let end = parts.iter().position(|p| {
+        *p == "manifests" || *p == "blobs" || *p == "referrers"
+    })?;
+    if end == 0 {
+        return None;
+    }
+    Some(parts[..end].join("/"))
 }
 
 
@@ -569,15 +593,11 @@ pub async fn check_manifest_in_list(
 
                         // Si blacklist -> cleanup + retirer contexte
                         if mode == "blacklist" {
-                            /*cleanup_tmp_for_uuid(&context_uuid);
-                            let mut list = pull_contexts.lock().await;
-                            list.retain(|c| c.uuid != context_uuid);
-                            println!("[PullContext] Contexte libéré car blacklisté | uuid={}", context_uuid);
-                            */
+ 
                             return Some(
                                 Response::builder()
                                     .status(StatusCode::FORBIDDEN)
-                                    .body(Body::from("Image présente dans blacklist"))
+                                    .body(Body::empty())
                                     .unwrap(),
                             );
                         } else if mode == "whitelist" {
@@ -585,7 +605,7 @@ pub async fn check_manifest_in_list(
                             return Some(
                                 Response::builder()
                                     .status(StatusCode::OK)
-                                    .body(Body::from("Image présente dans whitelist"))
+                                    .body(Body::empty()) // ← vide, juste un signal booléen
                                     .unwrap(),
                             );
                         }

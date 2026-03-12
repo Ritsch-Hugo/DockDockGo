@@ -162,7 +162,7 @@ pub fn fetch_and_process_manifest<'a>(
     }.boxed()
 }
 
-pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_context
+pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get_pull_context
     client: &Client,
     uuid: &Uuid,
     registry: &str,
@@ -413,6 +413,186 @@ pub async fn predict_digests( //Doit etre appellée lors du HEAD dans get_pull_c
 
 }
 
+
+pub async fn predict_digests_podman(
+    client: &Client,
+    uuid: &Uuid,
+    registry: &str,
+    repository: &str,
+    os: &str,
+    arch: &str,
+    manifest_racine_digest: &Digest,
+) -> Result<Vec<Digest>> {
+
+    println!(
+        "[PREDICT PODMAN] Démarrage pour {}/{} target={}/{}",
+        repository, manifest_racine_digest.value, os, arch
+    );
+
+    // ============================
+    // 1️⃣ Lire le manifest list racine depuis tmp/<uuid>/
+    // Déjà téléchargé par create_context_from_tag
+    // ============================
+    let digest_clean = manifest_racine_digest.value
+        .trim_start_matches("sha256:")
+        .to_string();
+
+    let manifest_list_path = format!("tmp/{}/{}.json", uuid, digest_clean);
+
+    let bytes = std::fs::read(&manifest_list_path)
+        .map_err(|e| anyhow::anyhow!(
+            "[PREDICT PODMAN] Manifest list introuvable: {} ({})",
+            manifest_list_path, e
+        ))?;
+
+    let manifest_list_json: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow::anyhow!(
+            "[PREDICT PODMAN] Manifest list JSON invalide: {}", e
+        ))?;
+
+    // ============================
+    // 2️⃣ Trouver le manifest linux/amd64
+    // Ignorer unknown/unknown et toutes les autres architectures
+    // ============================
+    let manifests = manifest_list_json
+        .get("manifests")
+        .and_then(|m| m.as_array())
+        .ok_or_else(|| anyhow::anyhow!("[PREDICT PODMAN] Champ 'manifests' absent"))?;
+
+    let mut digest_amd64: Option<String> = None;
+
+    for m in manifests {
+        let platform = match m.get("platform") {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let m_os = platform
+            .get("os")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let m_arch = platform
+            .get("architecture")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // On skip tout ce qui n'est pas notre cible
+        if m_os != os || m_arch != arch {
+            println!(
+                "[PREDICT PODMAN] Skip manifest {}/{} (on cherche {}/{})",
+                m_os, m_arch, os, arch
+            );
+            continue;
+        }
+
+        // On a trouvé le bon manifest
+        if let Some(d) = m.get("digest").and_then(|d| d.as_str()) {
+            digest_amd64 = Some(d.trim_start_matches("sha256:").to_string());
+            println!("[PREDICT PODMAN] Manifest {}/{} trouvé: {}", os, arch, d);
+            break;
+        }
+    }
+
+    let digest_amd64 = digest_amd64
+        .ok_or_else(|| anyhow::anyhow!(
+            "[PREDICT PODMAN] Aucun manifest trouvé pour {}/{}", os, arch
+        ))?;
+
+    // ============================
+    // 3️⃣ Télécharger le manifest linux/amd64 si absent
+    // ============================
+    let token = RegistryClient::from_registry(registry)
+        .get_token(client, repository)
+        .await?;
+
+    let manifest_amd64_path = format!("tmp/{}/{}.json", uuid, digest_amd64);
+
+    if !Path::new(&manifest_amd64_path).exists() {
+        let manifest_url = format!(
+            "https://{}/v2/{}/manifests/sha256:{}",
+            registry, repository, digest_amd64
+        );
+
+        let resp = client
+            .get(&manifest_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header(
+                "Accept",
+                "application/vnd.docker.distribution.manifest.v2+json,\
+                application/vnd.oci.image.manifest.v1+json",
+            )
+            .send()
+            .await?;
+
+        let content = resp.bytes().await?;
+        fs::write(&manifest_amd64_path, &content)?;
+        println!("[PREDICT PODMAN] Manifest {}/{} stocké: {}", os, arch, manifest_amd64_path);
+    } else {
+        println!("[PREDICT PODMAN] Manifest {}/{} déjà présent: {}", os, arch, manifest_amd64_path);
+    }
+
+    // ============================
+    // 4️⃣ Lire le manifest linux/amd64 et extraire config + layers
+    // ============================
+    let manifest_bytes = fs::read(&manifest_amd64_path)?;
+    let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes)?;
+
+    // ============================
+    // 5️⃣ Construire digests_expected
+    // [manifest_amd64, config, layer1, layer2, ...]
+    // Sans manifest racine, sans unknown/unknown, sans referrers
+    // ============================
+    let mut digests: Vec<Digest> = Vec::new();
+
+    // manifest linux/amd64
+    digests.push(Digest {
+        algorithm: "sha256".to_string(),
+        value: digest_amd64.clone(),
+    });
+
+    // config
+    if let Some(config_digest) = manifest_json
+        .get("config")
+        .and_then(|c| c.get("digest"))
+        .and_then(|d| d.as_str())
+    {
+        let clean = config_digest.trim_start_matches("sha256:");
+        digests.push(Digest {
+            algorithm: "sha256".to_string(),
+            value: clean.to_string(),
+        });
+        println!("[PREDICT PODMAN] Config: {}", clean);
+    } else {
+        eprintln!("[PREDICT PODMAN] Champ 'config.digest' absent du manifest");
+    }
+
+    // layers
+    if let Some(layers) = manifest_json.get("layers").and_then(|l| l.as_array()) {
+        for layer in layers {
+            if let Some(layer_digest) = layer.get("digest").and_then(|d| d.as_str()) {
+                let clean = layer_digest.trim_start_matches("sha256:");
+                digests.push(Digest {
+                    algorithm: "sha256".to_string(),
+                    value: clean.to_string(),
+                });
+                println!("[PREDICT PODMAN] Layer: {}", clean);
+            }
+        }
+    } else {
+        eprintln!("[PREDICT PODMAN] Champ 'layers' absent du manifest");
+    }
+
+    // ============================
+    // Log récap
+    // ============================
+    println!("[PREDICT PODMAN] {} digests attendus:", digests.len());
+    for d in &digests {
+        println!("  - sha256:{}", d.value);
+    }
+
+    Ok(digests)
+}
 
 pub fn verify_downloaded_digests(ctx: &PullContext) -> Result<DigestVerificationState, PullContextError> {
     use std::collections::HashSet;

@@ -17,12 +17,13 @@ use crate::{
     store_digest,
     get_dockerhub_token,
     get_os_arch_for_digest,
-    predict_digests,
+    predict_digests_docker,
     is_allowed,
     add_context_to_blacklist_or_whitelist,
     cleanup_tmp_for_uuid,
     check_manifest_in_list,
     try_serve_from_cache,
+    predict_digests_podman,
 };
 
 
@@ -34,6 +35,7 @@ pub async fn get_pull_context(
     pull_contexts: &PullContextList,
     client: &Client, 
     path: &str,
+    client_type: &str,
 )-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
 
@@ -79,239 +81,43 @@ pub async fn get_pull_context(
     );*/
 
     // 🔹 HEAD → création d’un nouveau contexte pour un tag
-    if req.method() == Method::HEAD 
-    {
-        // Récupérer l’index de "manifests"
+    if req.method() == Method::HEAD {
 
-        // Vérifier que l'index trouvé est valide pour accéder au digest ou tag
-        if idx + 1 >= parts.len() {
-            println!("[PullContext] Path invalide, digest ou tag manquant");
-            return Err(PullContextError::MissingDigestOrTag);
-        }
+        let uuid = create_context_from_tag(
+            client, &registry, &repository, tag_ou_digest,
+            &ip_client, pull_contexts, path, client_type
+        ).await?;
 
-        // Extraire la valeur suivante : digest ou tag selon le type
-        let value = parts[idx + 1];
-        /*println!(
-            "[PullContext] Resource type={}, index={}, value={}",
-            resource_type, idx, value
-        );*/
+        // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
+        let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist").await;
+        let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist").await;
 
-        let manifest_racine_digest: Option<String> = None;
-
-
-        // 🔹 Appeler digest_process_for_head pour récupérer le digest racine
-
-        let manifest_racine_digest = digest_process_for_head(
-            client,
-            &registry,
-            &repository,
-            &tag_ou_digest,
-        )
-        .await
-        .map_err(|e| {
-            eprintln!("[PullContext] Erreur lors de digest_process_for_head: {:?}", e);
-            PullContextError::MissingDigestOrTag
-        })?;
-
-
-        let digest_clean = manifest_racine_digest.value.trim_start_matches("sha256:").to_string();
-
-
-        println!("[PullContext] Digest racine récupéré: {}", manifest_racine_digest.value);
-
-        // 🔹 Construction de l’UUID déterministe (sans le tag, mais avec digest possible)
-        let uuid_input = format!(
-            "{}|{}|{}|{}",
-            registry,
-            repository,
-            &manifest_racine_digest.value,
-            ip_client
-        );
-
-        let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, uuid_input.as_bytes());
-
-        // 🔹 Vérifier si l'UUID existe déjà
-        let mut list = pull_contexts.lock().await;
-        if list.iter().any(|c| c.uuid == uuid) {
-            println!("[PullContext] UUID déjà présent, pas de création d'un nouveau contexte");
-
-            //Met a jour l'activité pour le timer
-            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
-                ctx.last_activity = Instant::now();
-            }
-
-            return Ok(Some(uuid));//retourner l'uuid existant
-
-        }
-    
-        // 🔹 Création du contexte PullContext
-        let mut ctx = PullContext::new(
-            uuid,
-            ip_client.clone(),
-            registry.clone(),
-            repository.clone(),
-            tag_ou_digest.to_string(),//ici c'est le tag
-        );
-
-        // 🔹 Après création du PullContext et mise à jour du digest racine
-        //Si le digest racine n'est pas déjà dans digests_possible, l'ajouter
-        ctx.manifest_racine_digest = Some(manifest_racine_digest.clone());
-        if !ctx.digests_possible.contains(&manifest_racine_digest) {
-            ctx.digests_possible.push(manifest_racine_digest.clone());
-        }
-
-        ctx.manifest_racine_digest = Some(manifest_racine_digest.clone());
-        if !ctx.digests_expected.contains(&manifest_racine_digest) {
-            ctx.digests_expected.push(manifest_racine_digest.clone());
-        }
-
-        // 🔹 Stockage du manifest dans tmp/<uuid>/
-        let _ = store_digest(client, &registry, &repository, &tag_ou_digest, &uuid)
-            .await
-            .map_err(|e| {
-                eprintln!("[PullContext] Erreur lors de store_digest: {:?}", e);
-                PullContextError::StorageError
-            })?;
-
-        //Ajout du manifest racine digest au contexte
-        ctx.manifest_racine_digest = Some(manifest_racine_digest.clone());
-
-
-
-        // 🔹 Récupération de tout les digests pour le manifest list
-
-       /*   
-        let token = get_dockerhub_token(&client, &repository)
-            .await
-            .map_err(|_| PullContextError::MissingDigestOrTag)?;
-        */
-
-        //Recupèration du token en fonction du registre
-        let token = RegistryClient::from_registry(&registry)
-            .get_token(client, &repository)
-            .await
-            .map_err(|_| PullContextError::MissingDigestOrTag)?;
-
-        let manifest_url = format!(
-            "https://{}/v2/{}/manifests/sha256:{}",
-            registry,
-            repository,
-            digest_clean
-        );
-
-        let resp = client
-            .get(&manifest_url)
-            .header(
-                "Accept",
-                "application/vnd.docker.distribution.manifest.list.v2+json,\
-                application/vnd.docker.distribution.manifest.v2+json,\
-                application/vnd.oci.image.index.v1+json,\
-                application/vnd.oci.image.manifest.v1+json",
-            )
-            .bearer_auth(token)
-            .send()
-            .await
-            .map_err(|_| PullContextError::MissingDigestOrTag)?;
-
-        let manifest_json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|_| PullContextError::MissingDigestOrTag)?;
-
-        if let Some(manifests) = manifest_json.get("manifests").and_then(|m| m.as_array()) {
-            for m in manifests {
-                if let Some(digest) = m.get("digest").and_then(|d| d.as_str()) {
-                    let digest = Digest {
-                        algorithm: "sha256".to_string(),
-                        value: digest.trim_start_matches("sha256:").to_string(),
-                    };
-
-                    if !ctx.digests_possible.contains(&digest) {
-                        ctx.digests_possible.push(digest);
-                    }
-                }
-            }
-        }
-
-        //mise a jour de l'activité pour le timer (nouveau contexte)
-        ctx.last_activity = Instant::now();
-        list.push(ctx.clone());
-
-        let ctx_clone = ctx.clone(); // Cloner le contexte pour l'utiliser en dehors du lock
-
-        drop(list); // Libérer le lock avant les opérations potentiellement longues
-
-        // 🔹 Vérifier si le manifest racine est déjà en whitelist ou blacklist
-        let in_whitelist = check_manifest_in_list(
-            ctx_clone.uuid,
-            pull_contexts,
-            Method::HEAD,
-            "whitelist",
-        ).await;
-
-        let in_blacklist = check_manifest_in_list(
-            ctx_clone.uuid,
-            pull_contexts,
-            Method::HEAD,
-            "blacklist",
-        ).await;
-
-        let mut list = pull_contexts.lock().await;
-        // 🔹 Si l'image est déjà dans whitelist ou blacklist, on skip le scan haut niveau
-        if in_whitelist.is_some() || in_blacklist.is_some() {
-            println!("[GetPullContext] - Image déjà en whitelist/blacklist, scan Haut Niveau SKIPPÉ");
-            return Ok(Some(ctx.uuid));
-        }
-
-        //[Appel API] : déclencher scan de haut niveau
-
-        //Proxy -> API -> Scanner
-
-        //Proxy <- API <- Scanner
-
-        //Si image dans whitelist ou blacklist on skip le scan de haut niveau
-        // /!\ Meme si l'image est dans le cache on ne peut pas le savoir au moment du HEAD, donc le scan de haut niveau est lancé quand meme
-        println!("[GetPullContext] - Call API pour scan Haut Niveau");
-        //Si accepté (pour le moment) on retourne l'uuid
-
-        match is_allowed(&mut ctx, &path, "scan_haut_niveau").await.as_str() 
         {
-            "ALLOW" => 
-            {
-                //println!("[GetPullContext] - Scan Haut Niveau accepté, pull autorisé");
-                //Ajout a la whitelist 
-                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
-                    eprintln!("[WHITELIST ERROR] {}", e);     
-                }
-
+            let mut list = pull_contexts.lock().await;
+            if in_whitelist.is_some() || in_blacklist.is_some() {
+                println!("[GetPullContext] Déjà en whitelist/blacklist, scan skippé");
                 return Ok(Some(uuid));
             }
-            "PENDING" => 
-            {
-                //println!("[GetPullContext] - Scan Haut Niveau en attente, pull en attente");
+        }
+
+        // Scan haut niveau (inchangé)
+        let mut list = pull_contexts.lock().await;
+        let ctx = list.iter_mut().find(|c| c.uuid == uuid)
+            .ok_or(PullContextError::ContextMismatch)?;
+
+        match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
+            "ALLOW" => {
+                add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist").ok();
                 return Ok(Some(uuid));
             }
-            "DENY" => 
-            {
-                //println!("[GetPullContext] - Scan Haut Niveau refusé, pull refusé");
-                //Ajout a la blacklist
-                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
-                    eprintln!("[BLACKLIST ERROR] {}", e);     
-                }
-
-                //Supprimer dossier temporaire
+            "PENDING" => return Ok(Some(uuid)),
+            "DENY" => {
+                add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist").ok();
                 cleanup_tmp_for_uuid(&ctx.uuid);
-
-                // 🔹 Libérer le contexte PullContext
-                list.retain(|c| c.uuid != ctx.uuid);
-
+                list.retain(|c| c.uuid != uuid);
                 return Err(PullContextError::BlockingFromTheScanner);
             }
-            _ => 
-            {
-                eprintln!("[GetPullContext] - Erreur lors du scan Haut Niveau");
-                return Err(PullContextError::BlockingFromTheScanner);
-            }
+            _ => return Err(PullContextError::BlockingFromTheScanner),
         }
     }
 
@@ -319,12 +125,24 @@ pub async fn get_pull_context(
     // 🔹 GET → vérifier un digest existant
     else if req.method() == Method::GET 
     {
-
-        // Extraire le digest de la requête
         let digest_str = parts[idx + 1];
-        if !digest_str.starts_with("sha256:") {
-            return Err(PullContextError::DigestNotAllowed);
+
+        // 🔑 Podman peut envoyer un GET par tag sans HEAD préalable
+        if !digest_str.starts_with("sha256:") && client_type == "podman" {
+            println!("[PullContext] GET par tag détecté (Podman?) → création contexte à la volée");
+
+            // Même fonction que HEAD → UUID déterministe, pas de doublon
+            let uuid = create_context_from_tag(
+                client, &registry, &repository, digest_str,
+                &ip_client, pull_contexts, path, client_type
+            ).await?;
+
+            return Ok(Some(uuid));
+            // Le scan haut niveau sera déclenché dans handle() via is_allowed
+            // comme pour n'importe quel GET normal
         }
+
+        // ✅ Cas normal : GET par digest sha256 (Docker et Podman après le HEAD)
         let digest_value = digest_str.trim_start_matches("sha256:").to_string();
         
         // 🔹 Rechercher le contexte correspondant et vérifier le digest
@@ -423,27 +241,50 @@ pub async fn get_pull_context(
                             // Utilisation de predict_digests avec OS/ARCH specifique 
                             let manifest_racine_digest = ctx.manifest_racine_digest.as_ref().unwrap();
 
-                            //On recupère les exacts digests attendus (ni plus ni moin)
-                            let predicted_digests = match predict_digests(
-                                &client,            // reqwest::Client
-                                &ctx.uuid,          // UUID du contexte
-                                &registry,          // "registry-1.docker.io"
-                                &repository,        // ex: "library/ubuntu"
-                                &tag_ou_digest,     // tag ou digest
-                                &ctx.os,            // ✅ OS dynamique
-                                &ctx.arch,          // ✅ ARCH dynamique
-                                manifest_racine_digest,
-                            )
-                            .await
-                            {
-                                Ok(d) => d,
-                                Err(e) => {
-                                    eprintln!("[PullContext] predict_digests failed: {:?}", e);
+                            //On appelle la bonne fonction de prediction (podman ou docker)
+                            let predicted_digests = match ctx.client_type.as_str() {
+                                "docker" => {
+                                    match predict_digests_docker(
+                                        &client,
+                                        &ctx.uuid,
+                                        &registry,
+                                        &repository,
+                                        &tag_ou_digest,
+                                        &ctx.os,
+                                        &ctx.arch,
+                                        manifest_racine_digest,
+                                    ).await {
+                                        Ok(d) => d,
+                                        Err(e) => {
+                                            eprintln!("[PullContext] predict_digests failed: {:?}", e);
+                                            return Err(PullContextError::StorageError);
+                                        }
+                                    }
+                                }
+                                "podman" => {
+                                    match predict_digests_podman(
+                                        &client,
+                                        &ctx.uuid,
+                                        &registry,
+                                        &repository,
+                                        &ctx.os,
+                                        &ctx.arch,
+                                        manifest_racine_digest,
+                                    ).await {
+                                        Ok(d) => d,
+                                        Err(e) => {
+                                            eprintln!("[PullContext] predict_digests_podman failed: {:?}", e);
+                                            return Err(PullContextError::StorageError);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    eprintln!("[PullContext] client_type inconnu: {}", ctx.client_type);
                                     return Err(PullContextError::StorageError);
                                 }
                             };
 
-                            // Mettre à jour les digests attendus
+                            //Ajout des digests attendus au contexte
                             ctx.digests_expected = predicted_digests;
 
                             //println!("[PullContext] Digests expected : {:?}", ctx.digests_expected);
@@ -474,6 +315,12 @@ pub async fn get_pull_context(
         }
         // Aucun contexte trouvé en parcourant la liste
         println!("[PullContext] Aucun contexte trouvé pour le digest GET demandé");
+
+        //Le contexte n'est pas trouvé on peut donc se trouver dans le cas d'une première requete podman
+        //Verifier si la requete est caracteristique d'une requete podman
+
+
+        //Sinon retourner context Mismatch
         return Err(PullContextError::ContextMismatch);
     }
 
@@ -573,4 +420,130 @@ pub async fn digest_process_for_head(
     println!("[HEAD] Digest racine prêt: {}", digest_clean);
 
     Ok(racine_digest)
+}
+
+/// Crée un nouveau PullContext à partir d'un tag (appelé depuis HEAD ou GET par tag)
+/// Retourne l'UUID du contexte créé ou déjà existant
+async fn create_context_from_tag(
+    client: &Client,
+    registry: &str,
+    repository: &str,
+    tag: &str,
+    ip_client: &str,
+    pull_contexts: &PullContextList,
+    path: &str,
+    client_type: &str,
+) -> Result<Uuid, PullContextError> {
+
+    // 1️⃣ Récupérer le digest racine upstream
+    let manifest_racine_digest = digest_process_for_head(
+        client, registry, repository, tag,
+    )
+    .await
+    .map_err(|_| PullContextError::MissingDigestOrTag)?;
+
+    // 2️⃣ UUID déterministe — même formule que l'ancien bloc HEAD
+    let uuid_input = format!(
+        "{}|{}|{}|{}",
+        registry, repository, &manifest_racine_digest.value, ip_client
+    );
+    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, uuid_input.as_bytes());
+
+    // 3️⃣ Contexte déjà existant → on le retourne directement
+    {
+        let mut list = pull_contexts.lock().await;
+        if list.iter().any(|c| c.uuid == uuid) {
+            println!("[PullContext] UUID déjà présent (appel depuis GET tag) uuid={}", uuid);
+            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
+                ctx.last_activity = Instant::now();
+            }
+            return Ok(uuid);
+        }
+    }
+
+    // 4️⃣ Construire le contexte
+    let digest_clean = manifest_racine_digest.value.trim_start_matches("sha256:").to_string();
+
+    let mut ctx = PullContext::new(
+        uuid,
+        ip_client.to_string(),
+        registry.to_string(),
+        repository.to_string(),
+        tag.to_string(),
+    );
+
+    ctx.client_type = client_type.to_string(); // ← stocker le type de client
+
+    ctx.manifest_racine_digest = Some(manifest_racine_digest.clone());
+
+    if !ctx.digests_possible.contains(&manifest_racine_digest) {
+        ctx.digests_possible.push(manifest_racine_digest.clone());
+    }
+    if !ctx.digests_expected.contains(&manifest_racine_digest) {
+        ctx.digests_expected.push(manifest_racine_digest.clone());
+    }
+
+    // 5️⃣ Stocker le manifest dans tmp/<uuid>/
+    let _ = store_digest(client, registry, repository, tag, &uuid)
+        .await
+        .map_err(|_| PullContextError::StorageError)?;
+
+    // 6️⃣ Récupérer tous les digests possible depuis le manifest list
+    let token = RegistryClient::from_registry(registry)
+        .get_token(client, repository)
+        .await
+        .map_err(|_| PullContextError::MissingDigestOrTag)?;
+
+    let manifest_url = format!(
+        "https://{}/v2/{}/manifests/sha256:{}",
+        registry, repository, digest_clean
+    );
+
+    let resp = client
+        .get(&manifest_url)
+        .header(
+            "Accept",
+            "application/vnd.docker.distribution.manifest.list.v2+json,\
+            application/vnd.docker.distribution.manifest.v2+json,\
+            application/vnd.oci.image.index.v1+json,\
+            application/vnd.oci.image.manifest.v1+json",
+        )
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|_| PullContextError::MissingDigestOrTag)?;
+
+    let manifest_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|_| PullContextError::MissingDigestOrTag)?;
+
+    if let Some(manifests) = manifest_json.get("manifests").and_then(|m| m.as_array()) {
+        for m in manifests {
+            if let Some(digest) = m.get("digest").and_then(|d| d.as_str()) {
+                let d = Digest {
+                    algorithm: "sha256".to_string(),
+                    value: digest.trim_start_matches("sha256:").to_string(),
+                };
+                if !ctx.digests_possible.contains(&d) {
+                    ctx.digests_possible.push(d);
+                }
+            }
+        }
+    }
+
+    ctx.last_activity = Instant::now();
+
+    // 7️⃣ Insérer dans la liste
+    {
+        let mut list = pull_contexts.lock().await;
+        list.push(ctx.clone());
+    }
+
+    println!(
+        "[PullContext] Contexte créé | uuid={} client_type={} registry={} repo={} tag={}",
+        uuid, client_type, registry, repository, tag
+    );
+
+    Ok(uuid)
 }
