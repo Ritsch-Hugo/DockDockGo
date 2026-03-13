@@ -1453,27 +1453,29 @@ async fn main() -> Result<()> {
 fn load_certs(path: &str) -> Result<Vec<Certificate>> {
     let certfile = File::open(path)?;
     let mut reader = BufReader::new(certfile);
-    let certs = certs(&mut reader)?
+    let certs = certs(&mut reader)
+        .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .map(Certificate)
+        .map(|c| Certificate(c.to_vec()))
         .collect();
     Ok(certs)
 }
 
-/// 🔑 Chargement de la clé privée TLS
 fn load_private_key(path: &str) -> Result<PrivateKey> {
     let keyfile = File::open(path)?;
     let mut reader = BufReader::new(keyfile);
 
-    let keys = pkcs8_private_keys(&mut reader)?;
+    let keys: Vec<_> = pkcs8_private_keys(&mut reader)
+        .collect::<Result<Vec<_>, _>>()?;
     if !keys.is_empty() {
-        return Ok(PrivateKey(keys[0].clone()));
+        return Ok(PrivateKey(keys[0].secret_pkcs8_der().to_vec()));
     }
 
     let mut reader = BufReader::new(File::open(path)?);
-    let keys = rsa_private_keys(&mut reader)?;
+    let keys: Vec<_> = rsa_private_keys(&mut reader)
+        .collect::<Result<Vec<_>, _>>()?;
     if !keys.is_empty() {
-        return Ok(PrivateKey(keys[0].clone()));
+        return Ok(PrivateKey(keys[0].secret_pkcs1_der().to_vec()));
     }
 
     Err(anyhow::anyhow!("No private keys found in {}", path))
