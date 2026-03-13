@@ -467,6 +467,24 @@ async fn add_file_if_exists(
         println!("[ORCH] SCAN FINAL -> tous les fichiers ajoutés au multipart");
     }
 
+    //Cas scan haut niveau podman (sur le GET /manifest/<tag>)
+    else if path.contains("/manifests/") && !path.contains("sha256:") 
+    {
+        if flag != "scan_haut_niveau" {  // ← ne pas joindre le manifest pour le premier call
+            if let Some(racine) = &ctx.manifest_racine_digest {
+                let digest = racine.as_str();
+                let parts: Vec<&str> = digest.split(':').collect();
+                if parts.len() == 2 {
+                    let algo = parts[0];
+                    let value = parts[1];
+                    let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
+                    println!("[ORCH] manifest racine (par tag) détecté: {}", file_path);
+                    form = add_file_if_exists(form, "manifests", digest.clone(), file_path).await;
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // On envoie uniquement le digest demandé dans l'URL
     // ------------------------------------------------------------------
@@ -687,10 +705,17 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 .unwrap();
         },
         Err(PullContextError::DigestNotAllowed) => {
-            eprintln!("[Main] Digest not allowed");
+            eprintln!("[Main] Accès refusé au registre");
             return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(Body::from("Erreur PullContext"))
+                .status(StatusCode::UNAUTHORIZED)
+                .body(Body::from("Accès refusé : image privée ou credentials manquants"))
+                .unwrap();
+        }
+        Err(PullContextError::MissingDigestOrTag) => {  // ← ajouter ce cas
+            eprintln!("[Main] L'image n'existe pas dans le registre ou est privée");
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Image inexistante ou privée"))
                 .unwrap();
         }
         Err(PullContextError::BlockingFromTheScanner) => {

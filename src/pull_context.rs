@@ -137,9 +137,38 @@ pub async fn get_pull_context(
                 &ip_client, pull_contexts, path, client_type
             ).await?;
 
-            return Ok(Some(uuid));
-            // Le scan haut niveau sera déclenché dans handle() via is_allowed
-            // comme pour n'importe quel GET normal
+            // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
+            let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist").await;
+            let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist").await;
+
+            {
+                let mut list = pull_contexts.lock().await;
+                if in_whitelist.is_some() || in_blacklist.is_some() {
+                    println!("[GetPullContext] Déjà en whitelist/blacklist, scan skippé");
+                    return Ok(Some(uuid));
+                }
+            }
+
+            // Scan haut niveau (inchangé)
+            let mut list = pull_contexts.lock().await;
+            let ctx = list.iter_mut().find(|c| c.uuid == uuid)
+                .ok_or(PullContextError::ContextMismatch)?;
+
+            match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
+                "ALLOW" => {
+                    add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist").ok();
+                    return Ok(Some(uuid));
+                }
+                "PENDING" => return Ok(Some(uuid)),
+                "DENY" => {
+                    add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist").ok();
+                    cleanup_tmp_for_uuid(&ctx.uuid);
+                    list.retain(|c| c.uuid != uuid);
+                    return Err(PullContextError::BlockingFromTheScanner);
+                }
+                _ => return Err(PullContextError::BlockingFromTheScanner),
+            }
+
         }
 
         // ✅ Cas normal : GET par digest sha256 (Docker et Podman après le HEAD)
@@ -361,6 +390,13 @@ pub async fn digest_process_for_head(
         .send()
         .await?;
 
+    if manifest_resp.status() == 404 || manifest_resp.status() == 401 {
+        anyhow::bail!("[HEAD] Image introuvable: {}/{}", repository, tag);
+    }
+    if manifest_resp.status() == 403 {
+        anyhow::bail!("[HEAD] Accès refusé: {}/{}", repository, tag);
+    }
+
     // Extraire les headers AVANT de consommer le body
     let headers = manifest_resp.headers().clone();
 
@@ -425,7 +461,17 @@ async fn create_context_from_tag(
         client, registry, repository, tag,
     )
     .await
-    .map_err(|_| PullContextError::MissingDigestOrTag)?;
+    .map_err(|e| {
+        eprintln!("[PullContext] Erreur HEAD: {}", e);
+        let msg = e.to_string();
+        if msg.contains("introuvable") || msg.contains("DENIED") || msg.contains("Token manquant") {
+            PullContextError::MissingDigestOrTag
+        } else if msg.contains("refusé") {
+            PullContextError::DigestNotAllowed
+        } else {
+            PullContextError::StorageError
+        }
+    })?;
 
     // 2️⃣ UUID déterministe — même formule que l'ancien bloc HEAD
     let uuid_input = format!(
