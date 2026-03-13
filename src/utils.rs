@@ -45,7 +45,9 @@ use crate::{
 
 use crate::digest_process_for_head;
 
-
+pub fn build_image_key(ctx: &PullContext) -> String {
+    format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag)
+}
 /// 🔑 SHA256 réel (Docker compliant)
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -620,12 +622,12 @@ fn extract_repository_from_path(path: &str) -> Option<String> {
 /// Actuellement la verif est fait via le manifest racine, pas de differnetiation entre les differnts tags (A modifier) 
 pub async fn check_manifest_in_list(
     context_uuid: Uuid,
-    pull_contexts: &Arc<TokioMutex<Vec<PullContext>>>, // OK maintenant
+    pull_contexts: &Arc<TokioMutex<Vec<PullContext>>>,
     method: Method,
     mode: &str,
+    pool: &sqlx::PgPool,
 ) -> Option<Response<Body>> {
 
-    // 🔹 Récupérer le contexte PullContext
     let ctx_opt = {
         let list = pull_contexts.lock().await;
         list.iter().find(|c| c.uuid == context_uuid).cloned()
@@ -633,128 +635,54 @@ pub async fn check_manifest_in_list(
 
     let ctx = match ctx_opt {
         Some(c) => c,
-        None => return None, // contexte introuvable
+        None => return None,
     };
 
-    if let Some(racine_digest) = &ctx.manifest_racine_digest {
-        let list_path = match mode {
-            "blacklist" => "blacklist.json",
-            "whitelist" => "whitelist.json",
-            _ => return None,
-        };
+    let image_key = format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag);
 
-        if Path::new(list_path).exists() {
-            if let Ok(content) = fs::read_to_string(list_path) {
-                if let Ok(list_json) = serde_json::from_str::<Vec<PullContext>>(&content) {
-                    let is_present = list_json.iter().any(|entry| {
-                        if let Some(entry_racine) = &entry.manifest_racine_digest {
-                            entry_racine.value == racine_digest.value
-                        } else {
-                            false
-                        }
-                    });
+    let found = crate::db::is_image_in_list(pool, &image_key, mode)
+        .await
+        .unwrap_or(false);
 
-                    if is_present {
-                        let action = if mode == "blacklist" {
-                            "[BLACKLIST CHECK] Manifest racine présent -> pull refusé"
-                        } else {
-                            "[WHITELIST CHECK] Manifest racine présent -> pull autorisé"
-                        };
-
-                        println!("{} | uuid={}", action, context_uuid);
-
-                        // Si blacklist -> cleanup + retirer contexte
-                        if mode == "blacklist" {
- 
-                            return Some(
-                                Response::builder()
-                                    .status(StatusCode::FORBIDDEN)
-                                    .body(Body::empty())
-                                    .unwrap(),
-                            );
-                        } else if mode == "whitelist" {
-                            // whitelist -> on laisse passer
-                            return Some(
-                                Response::builder()
-                                    .status(StatusCode::OK)
-                                    .body(Body::empty()) // ← vide, juste un signal booléen
-                                    .unwrap(),
-                            );
-                        }
-                    }
-                }
-            }
-        }
+    if !found {
+        return None;
     }
 
-    None // Pas trouvé dans la liste, ou méthode non HEAD
+    match mode {
+        "blacklist" => {
+            println!("[BLACKLIST CHECK] {} -> pull refusé", image_key);
+            Some(
+                Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        }
+        "whitelist" => {
+            println!("[WHITELIST CHECK] {} -> pull autorisé", image_key);
+            Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        }
+        _ => None,
+    }
 }
 
 /// Ajoute un PullContext dans la blacklist ou la whitelist selon `list_type`.
 /// `list_type` doit être "blacklist" ou "whitelist"
-pub fn add_context_to_blacklist_or_whitelist(ctx: PullContext, list_type: &str) -> Result<()> {
-    // Vérification du paramètre
-    let file_path = match list_type {
-        "whitelist" => "whitelist.json",
-        "blacklist" => "blacklist.json",
-        _ => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("list_type invalide : '{}', doit être 'whitelist' ou 'blacklist'", list_type),
-            ).into());
-        }
-    };
+pub async fn add_context_to_blacklist_or_whitelist(
+    ctx: PullContext,
+    list_type: &str,
+    pool: &sqlx::PgPool,
+) -> Result<()> {
+    let image_key = format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag);
 
-    // 🔹 Charger la liste existante ou créer une nouvelle
-    println!("[DEBUG] Chargement de la {} depuis '{}'", list_type, file_path);
+    crate::db::add_image_to_list(pool, &image_key, list_type).await?;
 
-    let mut list: Vec<PullContext> = if Path::new(file_path).exists() {
-        match fs::read_to_string(file_path) {
-            Ok(s) => match serde_json::from_str::<Vec<PullContext>>(&s) {
-                Ok(b) => b,
-                Err(_) => Vec::new(),
-            },
-            Err(_) => Vec::new(),
-        }
-    } else {
-        println!(
-            "[DEBUG] {} n'existe pas encore, création d'une nouvelle liste",
-            file_path
-        );
-        Vec::new()
-    };
-
-    // 🔹 Vérifier si le contexte existe déjà (via UUID)
-    if list.iter().any(|c| c.uuid == ctx.uuid) {
-        println!(
-            "[DEBUG] Contexte UUID={} déjà présent dans {} – ajout ignoré",
-            ctx.uuid, list_type
-        );
-        return Ok(()); // on ne fait rien si le contexte existe déjà
-    }
-
-    // 🔹 Ajouter le contexte courant
-    println!("[DEBUG] Ajout du contexte UUID={} à la {}", ctx.uuid, list_type);
-    list.push(ctx);
-
-    // 🔹 Écriture dans le fichier
-    match serde_json::to_string_pretty(&list) {
-        Ok(json) => match fs::write(file_path, json) {
-            Ok(_) => println!("[{}] Contexte ajouté dans {}", list_type.to_uppercase(), file_path),
-            Err(e) => eprintln!(
-                "[{} ERROR] Impossible d'écrire {}: {:?}",
-                list_type.to_uppercase(),
-                file_path,
-                e
-            ),
-        },
-        Err(e) => eprintln!(
-            "[{} ERROR] Sérialisation impossible: {:?}",
-            list_type.to_uppercase(),
-            e
-        ),
-    }
-
+    println!("[{}] {} ajouté", list_type.to_uppercase(), image_key);
     Ok(())
 }
 

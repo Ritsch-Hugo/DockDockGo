@@ -36,6 +36,7 @@ use std::path::Path;
 
 
 mod pull_context;
+mod db;
 use pull_context::{
     get_pull_context, 
     digest_process_for_head,
@@ -292,7 +293,9 @@ pub async fn launch_final_scan(
     pull_contexts: &PullContextList,
     uuid: Uuid,
     path: &str,
-) -> Option<bool> {
+    pool: &sqlx::PgPool,
+) -> Option<bool>
+{
 
     // 1️⃣ récupérer le contexte
     let mut ctx_clone;
@@ -324,7 +327,7 @@ pub async fn launch_final_scan(
         println!("[SCAN FINAL] OK → cache");
 
         //Ajouter a whitelist 
-        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
+        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await{
             eprintln!("[WHITELIST ERROR] {}", e);
         }
         copy_ctx_from_quarantine_to_cache(ctx);
@@ -339,7 +342,7 @@ pub async fn launch_final_scan(
         println!("[SCAN FINAL] REFUSÉ");
 
         //Ajouter a blacklist
-        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
+        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await{
             eprintln!("[BLACKLIST ERROR] {}", e);
         }
 
@@ -620,7 +623,7 @@ async fn add_file_if_exists(
 
 
 
-async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextList, ) -> Response<Body> {
+async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextList, pool: sqlx::PgPool) -> Response<Body> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
@@ -691,7 +694,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let mut pull_completed = false;
     //recupère le contexte du pull en cours
     // /!\ Attention : Scan de haut niveau appelé dans tout les cas meme si le pull est déjà dans la whitelist ou blacklist, ou même dans le cache (pour le moment) /!\
-    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client, &path, client_type).await {
+    let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client, &path, client_type, &pool).await {
         Ok(Some(uuid)) => {
             println!("[Main] Contexte trouvé / créé avec UUID: {}", uuid);
             uuid // tu peux continuer à utiliser uuid
@@ -722,7 +725,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             eprintln!("[Main] Pull bloqué et image blacklisté car scan de haut niveau n'est pas passé");
             return Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Body::from("Erreur PullContext"))
+                .body(Body::from("Image refusée par le scan de sécurité"))
                 .unwrap();
         }
         Err(e) => {
@@ -789,7 +792,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 ctx.pull_completed = true;
 
                                 //Ajouter a whitelist
-                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
+                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
                                     eprintln!("[WHITELIST ERROR] {}", e);
                                 }
                                 cleanup_tmp_for_uuid(&ctx.uuid);
@@ -882,7 +885,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     if req.method() == Method::HEAD
     {  
         // Vérifier la blacklist
-        if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "blacklist").await {
+        if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "blacklist", &pool).await {
             println!("Image dans blacklist");
             {
                 let mut list = pull_contexts.lock().await;
@@ -908,7 +911,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         }
     }
     //Verifier dans la whitelist
-    if let Some(_) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "whitelist").await 
+    if let Some(_) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "whitelist", &pool).await 
     {
         println!("Image dans whitelist");
 
@@ -1171,14 +1174,14 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
                             // 3️⃣ maintenant scan final
                             let status_scan_final =
-                                launch_final_scan(&pull_contexts, context_uuid, &path).await;
+                                launch_final_scan(&pull_contexts, context_uuid, &path, &pool).await;
 
                             match status_scan_final {
                                 Some(true) => {
                                     println!("[SECURITY CHECK] Image conforme -> ajout whitelist");
 
                                     //Ajouter a whitelist
-                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist") {
+                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist", &pool).await {
                                         eprintln!("[WHITELIST ERROR] {}", e);
                                     }
 
@@ -1198,7 +1201,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 Some(false) => {
 
                                     //Ajouter a whitelist
-                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist") {
+                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist", &pool).await {
                                         eprintln!("[WHITELIST ERROR] {}", e);
                                     }
                                     cleanup_tmp_for_uuid(&ctx_clone.uuid);
@@ -1278,7 +1281,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
 
                                 // blacklist
-                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist") {
+                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
                                     eprintln!("[BLACKLIST ERROR] {}", e);
                                 }
 
@@ -1307,7 +1310,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                         {
                             println!("[SCAN BY DIGEST] Digest ALLOW -> continuation du pull + ajout image en whitelist");
                             //Ajout a la whitelist
-                            if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist") {
+                            if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
                                 eprintln!("[WHITELIST ERROR] {}", e);   
                             
                             }
@@ -1384,6 +1387,11 @@ async fn main() -> Result<()> {
         .with_cert_resolver(Arc::new(resolver));
 
 
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://docdockgo_admin:docdockgo@localhost:5432/docdockgo".to_string());
+
+    let pool = db::init_pool(&database_url).await?;
+
         
     let listener = TcpListener::bind(("0.0.0.0", 443)).await?;
 
@@ -1409,6 +1417,7 @@ async fn main() -> Result<()> {
         let acceptor = acceptor.clone();
         let client = client.clone();
         let pull_contexts = pull_context.clone();
+        let pool = pool.clone();
 
         
         tokio::spawn(async move {
@@ -1425,11 +1434,12 @@ async fn main() -> Result<()> {
                         let client = client.clone();
                         let addr = addr; // passer addr
                         let pull_contexts = pull_contexts.clone();
+                        let pool = pool.clone();
                         async move 
                         { 
                             // stocker addr dans la requête pour handle
                             req.extensions_mut().insert(addr);
-                            Ok::<_, Infallible>(handle(req, client,pull_contexts).await) 
+                            Ok::<_, Infallible>(handle(req, client,pull_contexts, pool).await) 
                         }
                     });
                 let _ = Http::new().serve_connection(tls, service).await;

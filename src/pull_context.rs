@@ -5,6 +5,7 @@ use uuid::Uuid;
 use std::time::Instant;
 use anyhow::Result;
 use crate::registry_auth::RegistryClient;
+use sqlx::{Pool, Postgres};
 
 use crate::{
     PullContext,
@@ -36,6 +37,8 @@ pub async fn get_pull_context(
     client: &Client, 
     path: &str,
     client_type: &str,
+    pool: &sqlx::PgPool
+
 )-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
 
@@ -89,8 +92,8 @@ pub async fn get_pull_context(
         ).await?;
 
         // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
-        let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist").await;
-        let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist").await;
+        let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist", &pool).await;
+        let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist", &pool).await;
 
         {
             let mut list = pull_contexts.lock().await;
@@ -107,12 +110,16 @@ pub async fn get_pull_context(
 
         match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
             "ALLOW" => {
-                add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist").ok();
+                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
+                    eprintln!("[WHITELIST ERROR] {}", e);
+                }
                 return Ok(Some(uuid));
             }
             "PENDING" => return Ok(Some(uuid)),
             "DENY" => {
-                add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist").ok();
+                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
+                    eprintln!("[BLACKLIST ERROR] {}", e);
+                }
                 cleanup_tmp_for_uuid(&ctx.uuid);
                 list.retain(|c| c.uuid != uuid);
                 return Err(PullContextError::BlockingFromTheScanner);
@@ -138,8 +145,8 @@ pub async fn get_pull_context(
             ).await?;
 
             // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
-            let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist").await;
-            let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist").await;
+            let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist", &pool).await;
+            let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist", &pool).await;
 
             {
                 let mut list = pull_contexts.lock().await;
@@ -156,12 +163,16 @@ pub async fn get_pull_context(
 
             match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
                 "ALLOW" => {
-                    add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist").ok();
+                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
+                        eprintln!("[BLACKLIST ERROR] {}", e);
+                    }
                     return Ok(Some(uuid));
                 }
                 "PENDING" => return Ok(Some(uuid)),
                 "DENY" => {
-                    add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist").ok();
+                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
+                        eprintln!("[BLACKLIST ERROR] {}", e);
+                    }
                     cleanup_tmp_for_uuid(&ctx.uuid);
                     list.retain(|c| c.uuid != uuid);
                     return Err(PullContextError::BlockingFromTheScanner);
