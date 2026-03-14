@@ -99,6 +99,14 @@ pub async fn get_pull_context(
             let mut list = pull_contexts.lock().await;
             if in_whitelist.is_some() || in_blacklist.is_some() {
                 println!("[GetPullContext] Déjà en whitelist/blacklist, scan skippé");
+                // ← mettre à jour le scan_status pour éviter le scan par digest dans handle
+                if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
+                    if in_blacklist.is_some() {
+                        ctx.scan_status = Some("DENY".to_string());
+                    } else {
+                        ctx.scan_status = Some("ALLOW".to_string());
+                    }
+                }
                 return Ok(Some(uuid));
             }
         }
@@ -110,6 +118,7 @@ pub async fn get_pull_context(
 
         match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
             "ALLOW" => {
+                ctx.scan_status = Some("ALLOW".to_string());
                 if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
                     eprintln!("[WHITELIST ERROR] {}", e);
                 }
@@ -152,6 +161,13 @@ pub async fn get_pull_context(
                 let mut list = pull_contexts.lock().await;
                 if in_whitelist.is_some() || in_blacklist.is_some() {
                     println!("[GetPullContext] Déjà en whitelist/blacklist, scan skippé");
+                    if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
+                        if in_blacklist.is_some() {
+                            ctx.scan_status = Some("DENY".to_string());
+                        } else {
+                            ctx.scan_status = Some("ALLOW".to_string());
+                        }
+                    }
                     return Ok(Some(uuid));
                 }
             }
@@ -163,12 +179,17 @@ pub async fn get_pull_context(
 
             match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
                 "ALLOW" => {
+                    ctx.scan_status = Some("ALLOW".to_string());
                     if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
                         eprintln!("[BLACKLIST ERROR] {}", e);
                     }
                     return Ok(Some(uuid));
                 }
-                "PENDING" => return Ok(Some(uuid)),
+                "PENDING" => 
+                {
+                    ctx.scan_status = Some("PENDING".to_string());
+                    return Ok(Some(uuid));
+                }
                 "DENY" => {
                     if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
                         eprintln!("[BLACKLIST ERROR] {}", e);

@@ -418,6 +418,8 @@ async fn add_file_if_exists(
     // =====================================================================
     // SCAN FINAL → envoyer TOUS les digests de l'image
     // =====================================================================
+    println!("flag : {} : ", flag);
+
     if flag == "scan_final" 
     {
         println!("[ORCH] SCAN FINAL -> envoi de tous les digests de l'image");
@@ -539,7 +541,7 @@ async fn add_file_if_exists(
         }
             
         // ← CAS PODMAN : path par tag, pas de sha256: dans le path
-        else if path.contains("/manifests/") && !path.contains("sha256:") {
+        else if path.contains("/manifests/") && !path.contains("sha256:") && flag != "scan_haut_niveau" {
             // Utiliser le manifest_racine_digest du contexte
             if let Some(racine) = &ctx.manifest_racine_digest {
                 let digest = racine.as_str(); // "sha256:d1e2e92c..."
@@ -882,7 +884,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
      
     //On check blacklist que sur les HEAD 
-    if req.method() == Method::HEAD
+    if req.method() == Method::HEAD || req.method() == Method::GET
     {  
         // Vérifier la blacklist
         if let Some(resp) = check_manifest_in_list(context_uuid, &pull_contexts, method.clone(), "blacklist", &pool).await {
@@ -1264,11 +1266,12 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) 
             {
                 //Scan chaques digests uniquement si le scan d'avant est en PENDING
+                println!("scan_status : {:?}", ctx.scan_status);
                 if ctx.scan_status.as_deref() == Some("PENDING")
                 {
                     // On continue ou on stop le pull en fonction du scan de sécurité
                     println!("[GetPullContext] - Call API pour scan par digest");
-                    match is_allowed(ctx, &path, "flagg").await.as_str() 
+                    match is_allowed(ctx, &path, "scan_par_digest").await.as_str() 
                     {
                         "DENY" => 
                         {

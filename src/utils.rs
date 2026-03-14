@@ -654,7 +654,7 @@ pub async fn check_manifest_in_list(
             Some(
                 Response::builder()
                     .status(StatusCode::FORBIDDEN)
-                    .body(Body::empty())
+                    .body(Body::from("Image dans la blacklist"))
                     .unwrap(),
             )
         }
