@@ -168,6 +168,74 @@ struct MultiCertResolver {
     certs: HashMap<String, Arc<CertifiedKey>>,
 }
 
+/// Entrée pour une IP : nombre de requêtes et début de la fenêtre
+struct RateLimitEntry {
+    count: u32,
+    window_start: Instant,
+}
+
+pub struct RateLimiter {
+    entries: Arc<TokioMutex<HashMap<String, RateLimitEntry>>>,
+    max_requests: u32,   // nombre max de requêtes par fenêtre
+    window: Duration,    // durée de la fenêtre
+}
+
+impl RateLimiter {
+    pub fn new(max_requests: u32, window_secs: u64) -> Self {
+        Self {
+            entries: Arc::new(TokioMutex::new(HashMap::new())),
+            max_requests,
+            window: Duration::from_secs(window_secs),
+        }
+    }
+
+    /// Retourne true si la requête est autorisée, false si le rate limit est atteint
+    pub async fn check(&self, ip: &str) -> bool {
+        let mut map = self.entries.lock().await;
+        let now = Instant::now();
+
+        match map.get_mut(ip) {
+            Some(entry) => {
+                // Si la fenêtre est expirée, on remet à zéro
+                if now.duration_since(entry.window_start) > self.window {
+                    entry.count = 1;
+                    entry.window_start = now;
+                    true
+                } else if entry.count >= self.max_requests {
+                    // Fenêtre active et limite atteinte
+                    false
+                } else {
+                    entry.count += 1;
+                    true
+                }
+            }
+            None => {
+                // Première requête de cette IP
+                map.insert(ip.to_string(), RateLimitEntry {
+                    count: 1,
+                    window_start: now,
+                });
+                true
+            }
+        }
+    }
+
+    /// Nettoyage périodique des entrées expirées pour éviter la fuite mémoire
+    pub fn start_cleanup(self: Arc<Self>) {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let mut map = self.entries.lock().await;
+                let now = Instant::now();
+                map.retain(|_, entry| {
+                    now.duration_since(entry.window_start) <= self.window
+                });
+                println!("[RATE-LIMIT] Nettoyage effectué, {} IPs en mémoire", map.len());
+            }
+        });
+    }
+}
+
 impl MultiCertResolver {
     fn new() -> Self {
         Self {
@@ -620,7 +688,7 @@ async fn add_file_if_exists(
 
 
 
-async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextList, pool: sqlx::PgPool) -> Response<Body> {
+async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextList, pool: sqlx::PgPool, rate_limiter: Arc<RateLimiter>) -> Response<Body> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
@@ -644,6 +712,20 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         return Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .body(Body::from("Requête invalide"))
+            .unwrap();
+    }
+
+    // ✅ RATE LIMITING
+    let client_ip_for_rate = req.extensions()
+        .get::<std::net::SocketAddr>()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
+
+    if !rate_limiter.check(&client_ip_for_rate).await {
+        eprintln!("[RATE-LIMIT] Limite atteinte | ip={}", client_ip_for_rate);
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .body(Body::from("Rate-limit : Trop de requêtes"))
             .unwrap();
     }
 
@@ -1486,12 +1568,16 @@ async fn main() -> Result<()> {
 
     println!("✅ MITM Docker registry en écoute sur https://registry-1.docker.io:443");
 
+    let rate_limiter = Arc::new(RateLimiter::new(100, 60));
+    rate_limiter.clone().start_cleanup();
+
     loop {
         let (stream, addr) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let client = client.clone();
         let pull_contexts = pull_context.clone();
         let pool = pool.clone();
+        let rate_limiter = rate_limiter.clone();
 
         
         tokio::spawn(async move {
@@ -1509,11 +1595,12 @@ async fn main() -> Result<()> {
                         let addr = addr; // passer addr
                         let pull_contexts = pull_contexts.clone();
                         let pool = pool.clone();
+                        let rate_limiter = rate_limiter.clone();
                         async move 
                         { 
                             // stocker addr dans la requête pour handle
                             req.extensions_mut().insert(addr);
-                            Ok::<_, Infallible>(handle(req, client,pull_contexts, pool).await) 
+                            Ok::<_, Infallible>(handle(req, client,pull_contexts, pool, rate_limiter).await) 
                         }
                     });
                 let _ = Http::new()
