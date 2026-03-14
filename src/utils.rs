@@ -927,3 +927,53 @@ pub fn is_registry_allowed(registry: &str) -> bool {
     allowed
 }
 
+/// Vérifie que le contenu reçu correspond au digest sha256 annoncé dans le path
+/// Retourne Ok(()) si le digest est valide, Err(String) sinon
+pub fn verify_content_digest(
+    path: &str,
+    bytes: &[u8],
+    docker_content_digest: Option<&str>,
+) -> Result<(), String> {
+    
+    // ← Les referrers utilisent le digest du manifest cible dans l'URL,
+    // pas le hash du contenu de la réponse — exclure de la vérification
+    if path.contains("/referrers/") {
+        return Ok(());
+    }
+    // Cas 1 : digest dans le path (blobs et manifests par digest)
+    if path.contains("sha256:") {
+        if let Some(pos) = path.find("sha256:") {
+            let digest_clean = path[pos..].trim_start_matches("sha256:");
+            if digest_clean.len() == 64 && digest_clean.chars().all(|c| c.is_ascii_hexdigit()) {
+                let computed = sha256_hex(bytes);
+                if computed != digest_clean {
+                    return Err(format!(
+                        "Digest mismatch | attendu={} calculé={}",
+                        digest_clean, computed
+                    ));
+                }
+                println!("[CRYPTO] Digest vérifié OK (path): {}", digest_clean);
+                return Ok(());
+            }
+        }
+    }
+
+    // Cas 2 : manifest par tag → vérifier via le header Docker-Content-Digest
+    //Cas podman /manifest/latest (manifest list n'est pas demandé par digest)
+    if let Some(header_digest) = docker_content_digest {
+        let digest_clean = header_digest.trim_start_matches("sha256:");
+        if digest_clean.len() == 64 && digest_clean.chars().all(|c| c.is_ascii_hexdigit()) {
+            let computed = sha256_hex(bytes);
+            if computed != digest_clean {
+                return Err(format!(
+                    "Digest mismatch (header) | attendu={} calculé={}",
+                    digest_clean, computed
+                ));
+            }
+            println!("[CRYPTO] Digest vérifié OK (header): {}", digest_clean);
+        }
+    }
+
+    Ok(())
+}
+

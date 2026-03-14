@@ -73,6 +73,7 @@ use utils::{
     dec_active,
     copy_ctx_from_quarantine_to_cache,
     is_registry_allowed,
+    verify_content_digest,
 };
 
 
@@ -645,7 +646,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .body(Body::from("Requête invalide"))
             .unwrap();
     }
-    
+
     // Ping registry
     if path == "/v2/" {
         if req.method() != Method::GET {
@@ -748,7 +749,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     println!("[CLIENT] type détecté: {}", client_type); 
 
     //recupère le contexte du pull en cours
-    // /!\ Attention : Scan de haut niveau appelé dans tout les cas meme si le pull est déjà dans la whitelist ou blacklist, ou même dans le cache (pour le moment) /!\
     let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client, &path, client_type, &pool).await {
         Ok(Some(uuid)) => {
             println!("[Main] Contexte trouvé / créé avec UUID: {}", uuid);
@@ -996,6 +996,23 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         let headers = upstream.headers().clone();
         let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
+        // ✅ VÉRIFICATION CRYPTOGRAPHIQUE
+        let docker_content_digest = headers
+            .get("Docker-Content-Digest")
+            .and_then(|v| v.to_str().ok());
+
+        if method == Method::GET {
+            if let Err(e) = verify_content_digest(&path, &bytes, docker_content_digest) {
+                eprintln!("[SECURITY] {} | ip={} path={}", e, client_ip, path);
+                dec_active(&pull_contexts, context_uuid).await;
+                let mut list = pull_contexts.lock().await;
+                list.retain(|c| c.uuid != context_uuid);
+                return Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body(Body::from("Digest mismatch"))
+                    .unwrap();
+            }
+        }
         //On laisse tout passer
         let mut resp = Response::builder().status(status);
         for (k, v) in headers.iter() {
@@ -1125,8 +1142,23 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
 
+    // ✅ VÉRIFICATION CRYPTOGRAPHIQUE DU DIGEST
+    let docker_content_digest = headers
+        .get("Docker-Content-Digest")
+        .and_then(|v| v.to_str().ok());
 
-
+    if method == Method::GET {
+        if let Err(e) = verify_content_digest(&path, &bytes, docker_content_digest) {
+            eprintln!("[SECURITY] {} | ip={} path={}", e, client_ip, path);
+            dec_active(&pull_contexts, context_uuid).await;
+            let mut list = pull_contexts.lock().await;
+            list.retain(|c| c.uuid != context_uuid);
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("Digest mismatch"))
+                .unwrap();
+        }
+    }
 
     // Vérification architecture
     //On regarde si l'architecture linux/amd64 est présente dans la manifest list
