@@ -248,8 +248,6 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
     // 4️⃣ Lire le manifest depuis le fichier
     // ============================
     let bytes = fs::read(&filename)?;
-    let json: serde_json::Value = serde_json::from_slice(&bytes)?;
-
     // ============================
     // 5️⃣ Initialiser digests avec le manifest racine
     // ============================
@@ -265,7 +263,7 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
     // ============================
     let json: serde_json::Value = serde_json::from_slice(&bytes)?;
 
-    if let Some(manifests) = json.get("manifests") {
+    if let Some(_manifests) = json.get("manifests") {
         //println!("[PREDICT] Parsing manifest list");
 
         let manifest_list: ManifestList = serde_json::from_value(json)?;
@@ -392,7 +390,7 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
 
 
     // Collecter les digests des manifests téléchargés (arch-specific + unknown)
-    let mut manifests_to_process: Vec<String> = digests.iter()
+    let manifests_to_process: Vec<String> = digests.iter()
         .filter(|d| d.value != manifest_list_digest_clean) // exclure le manifest list racine
         .map(|d| format!("sha256:{}", d.value))
         .collect();

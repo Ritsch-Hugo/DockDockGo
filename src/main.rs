@@ -69,7 +69,6 @@ use utils::{
     add_context_to_blacklist_or_whitelist,
     check_timout,
     cleanup_tmp_for_uuid,
-    get_dockerhub_token,
     remove_ctx_digests_from_quarantine,
     dec_active,
     copy_ctx_from_quarantine_to_cache,
@@ -85,7 +84,7 @@ struct Digest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct PullContext 
+pub struct PullContext 
 {
     uuid: Uuid,
     ip_client: String,
@@ -132,7 +131,6 @@ enum PullContextError {
     ContextMismatch,
     DigestNotAllowed,
     BlockingFromTheScanner,
-    ExpiredContext,
     StorageError,
 }
 
@@ -204,10 +202,6 @@ impl ResolvesServerCert for MultiCertResolver {
         self.certs.get(name).cloned()
     }
 }
-
-
-
-
 
 type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
@@ -693,7 +687,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let client_type = detect_client_type(&req);
     println!("[CLIENT] type détecté: {}", client_type); 
 
-    let mut pull_completed = false;
     //recupère le contexte du pull en cours
     // /!\ Attention : Scan de haut niveau appelé dans tout les cas meme si le pull est déjà dans la whitelist ou blacklist, ou même dans le cache (pour le moment) /!\
     let context_uuid = match get_pull_context(&req, &parts, &client_ip, &pull_contexts, &client, &path, client_type, &pool).await {
@@ -745,7 +738,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         let mut list = pull_contexts.lock().await;
         if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
             // Incrémente atomiquement
-            let atomic_count_request = ctx.active_requests.fetch_add(1, Ordering::SeqCst) + 1;
+            let _atomic_count_request: usize = ctx.active_requests.fetch_add(1, Ordering::SeqCst) + 1;
 
             println!(
                 "[CTX] +1 active_requests={:?} uuid={}",
@@ -898,6 +891,9 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             }
             //Les digests deja stockés en quarantaine ne sont pas supprimés 
             dec_active(&pull_contexts, context_uuid).await;
+
+            let mut list = pull_contexts.lock().await;
+            list.retain(|c| c.uuid != context_uuid);
             return resp; // si dans blacklist, on renvoie la réponse FORBIDDEN
         }
     }
@@ -1143,8 +1139,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
                             println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
 
-                            pull_completed = true;
-
                             println!("[HANDLE] - Call API pour scan Final");
 
                             // on clone le notify AVANT de sortir du lock
@@ -1182,11 +1176,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 Some(true) => {
                                     println!("[SECURITY CHECK] Image conforme -> ajout whitelist");
 
-                                    //Ajouter a whitelist
-                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist", &pool).await {
-                                        eprintln!("[WHITELIST ERROR] {}", e);
-                                    }
-
                                     cleanup_tmp_for_uuid(&ctx_clone.uuid);
                                     remove_ctx_digests_from_quarantine(&ctx_clone);
 
@@ -1202,8 +1191,8 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 }
                                 Some(false) => {
 
-                                    //Ajouter a whitelist
-                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "whitelist", &pool).await {
+                                    //Ajouter a blacklist
+                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "blacklist", &pool).await {
                                         eprintln!("[WHITELIST ERROR] {}", e);
                                     }
                                     cleanup_tmp_for_uuid(&ctx_clone.uuid);

@@ -5,8 +5,6 @@ use uuid::Uuid;
 use std::time::Instant;
 use anyhow::Result;
 use crate::registry_auth::RegistryClient;
-use sqlx::{Pool, Postgres};
-
 use crate::{
     PullContext,
     PullContextList,
@@ -16,14 +14,12 @@ use crate::{
 
 use crate::{
     store_digest,
-    get_dockerhub_token,
     get_os_arch_for_digest,
     predict_digests_docker,
     is_allowed,
     add_context_to_blacklist_or_whitelist,
     cleanup_tmp_for_uuid,
     check_manifest_in_list,
-    try_serve_from_cache,
     predict_digests_podman,
 };
 
@@ -68,9 +64,6 @@ pub async fn get_pull_context(
         println!("[PullContext] Path invalide, digest ou tag manquant");
         return Err(PullContextError::InvalidPath);
     }
-
-    // 🔹 Extraire la valeur (digest ou tag)
-    let value = parts[idx + 1];
 
     // Extraire le repository
     let repository = parts[..idx].join("/");
@@ -432,14 +425,6 @@ pub async fn digest_process_for_head(
     // Extraire les headers AVANT de consommer le body
     let headers = manifest_resp.headers().clone();
 
-    // ← log temporaire
-    let body_text = manifest_resp.text().await?;
-    /*println!("[HEAD] Body reçu: {}", body_text);
-    println!("[HEAD] Headers reçus:");
-    for (k, v) in headers.iter() {
-        println!("  {}: {}", k, v.to_str().unwrap_or("invalid"));
-    }*/
-
     // Rate limit (depuis le clone déjà fait)
     if let Some(limit) = headers.get("ratelimit-limit") {
         println!("[RATE-LIMIT] limit = {}", limit.to_str().unwrap_or("invalid"));
@@ -484,7 +469,7 @@ async fn create_context_from_tag(
     tag: &str,
     ip_client: &str,
     pull_contexts: &PullContextList,
-    path: &str,
+    _path: &str,
     client_type: &str,
 ) -> Result<Uuid, PullContextError> {
 

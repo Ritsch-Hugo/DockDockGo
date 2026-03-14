@@ -44,10 +44,6 @@ use crate::{
 };
 
 use crate::digest_process_for_head;
-
-pub fn build_image_key(ctx: &PullContext) -> String {
-    format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag)
-}
 /// 🔑 SHA256 réel (Docker compliant)
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -623,7 +619,7 @@ fn extract_repository_from_path(path: &str) -> Option<String> {
 pub async fn check_manifest_in_list(
     context_uuid: Uuid,
     pull_contexts: &Arc<TokioMutex<Vec<PullContext>>>,
-    method: Method,
+    _method: Method,
     mode: &str,
     pool: &sqlx::PgPool,
 ) -> Option<Response<Body>> {
@@ -752,19 +748,6 @@ pub fn cleanup_tmp_for_uuid(uuid: &Uuid) {
             }
         }
     }
-}
-
-pub async fn get_dockerhub_token(
-    client: &Client,
-    repository: &str,
-) -> Result<String, reqwest::Error> {
-    let url = format!(
-        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
-        repository
-    );
-
-    let resp: serde_json::Value = client.get(url).send().await?.json().await?;
-    Ok(resp["token"].as_str().unwrap().to_string())
 }
 
 pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {

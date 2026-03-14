@@ -15,13 +15,6 @@ impl RegistryClient {
         }
     }
 
-    pub fn registry_host(&self) -> &str {
-        match self {
-            RegistryClient::DockerHub => "registry-1.docker.io",
-            RegistryClient::Generic(r) => r.as_str(),
-        }
-    }
-
     pub async fn get_token(
         &self,
         client: &Client,
@@ -85,43 +78,6 @@ impl RegistryClient {
             }
         }
     }
-}
-
-//fait requete upstream pour recuperer auth token
-async fn get_token_from_www_authenticate(
-    client: &Client,
-    www_auth: &str,
-) -> Result<String, anyhow::Error> {
-    let realm = extract_www_auth_field(www_auth, "realm")
-        .ok_or_else(|| anyhow::anyhow!("realm manquant dans Www-Authenticate"))?;
-    let service = extract_www_auth_field(www_auth, "service").unwrap_or_default();
-    let scope = extract_www_auth_field(www_auth, "scope").unwrap_or_default();
-
-    let mut token_url = format!("{}?", realm);
-    if !service.is_empty() {
-        token_url.push_str(&format!("service={}&", service));
-    }
-    if !scope.is_empty() {
-        token_url.push_str(&format!("scope={}", scope));
-    }
-
-    println!("[AUTH] Token URL: {}", token_url);
-    println!("[AUTH] Www-Authenticate brut: {}", www_auth); // ← ajoute ça
-
-    let resp = client.get(&token_url).send().await?;
-    let text = resp.text().await?;
-    println!("[AUTH] Réponse brute: {}", text); // ← et ça
-
-    let json: serde_json::Value = serde_json::from_str(&text)?;
-
-    //recupèration du token dans la reponse upstream
-    let token = json
-        .get("token")
-        .or_else(|| json.get("access_token"))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Token manquant dans la réponse auth"))?;
-
-    Ok(token.to_string())
 }
 
 //parseur de header
