@@ -104,24 +104,33 @@ pub async fn get_pull_context(
         let ctx = list.iter_mut().find(|c| c.uuid == uuid)
             .ok_or(PullContextError::ContextMismatch)?;
 
-        match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
-            "ALLOW" => {
-                ctx.scan_status = Some("ALLOW".to_string());
-                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
-                    eprintln!("[WHITELIST ERROR] {}", e);
-                }
-                return Ok(Some(uuid));
-            }
-            "PENDING" => return Ok(Some(uuid)),
-            "DENY" => {
-                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
-                    eprintln!("[BLACKLIST ERROR] {}", e);
-                }
-                cleanup_tmp_for_uuid(&ctx.uuid);
-                list.retain(|c| c.uuid != uuid);
+        match is_allowed(ctx, path, "scan_haut_niveau").await 
+        {
+            Err(e) => {
+                eprintln!("[ORCH ERROR] {}", e);
                 return Err(PullContextError::BlockingFromTheScanner);
             }
-            _ => return Err(PullContextError::BlockingFromTheScanner),
+            Ok(state) => match state.as_str() 
+            {
+
+                "ALLOW" => {
+                    ctx.scan_status = Some("ALLOW".to_string());
+                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
+                        eprintln!("[WHITELIST ERROR] {}", e);
+                    }
+                    return Ok(Some(uuid));
+                }
+                "PENDING" => return Ok(Some(uuid)),
+                "DENY" => {
+                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
+                        eprintln!("[BLACKLIST ERROR] {}", e);
+                    }
+                    cleanup_tmp_for_uuid(&ctx.uuid);
+                    list.retain(|c| c.uuid != uuid);
+                    return Err(PullContextError::BlockingFromTheScanner);
+                }
+                _ => return Err(PullContextError::BlockingFromTheScanner),
+            }
         }
     }
 
@@ -165,28 +174,35 @@ pub async fn get_pull_context(
             let ctx = list.iter_mut().find(|c| c.uuid == uuid)
                 .ok_or(PullContextError::ContextMismatch)?;
 
-            match is_allowed(ctx, path, "scan_haut_niveau").await.as_str() {
-                "ALLOW" => {
-                    ctx.scan_status = Some("ALLOW".to_string());
-                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
-                        eprintln!("[BLACKLIST ERROR] {}", e);
-                    }
-                    return Ok(Some(uuid));
-                }
-                "PENDING" => 
-                {
-                    ctx.scan_status = Some("PENDING".to_string());
-                    return Ok(Some(uuid));
-                }
-                "DENY" => {
-                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
-                        eprintln!("[BLACKLIST ERROR] {}", e);
-                    }
-                    cleanup_tmp_for_uuid(&ctx.uuid);
-                    list.retain(|c| c.uuid != uuid);
+            match is_allowed(ctx, path, "scan_haut_niveau").await {
+                Err(e) => {
+                    eprintln!("[ORCH ERROR] {}", e);
                     return Err(PullContextError::BlockingFromTheScanner);
                 }
-                _ => return Err(PullContextError::BlockingFromTheScanner),
+                Ok(state) => match state.as_str() 
+                {
+                    "ALLOW" => {
+                        ctx.scan_status = Some("ALLOW".to_string());
+                        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
+                            eprintln!("[BLACKLIST ERROR] {}", e);
+                        }
+                        return Ok(Some(uuid));
+                    }
+                    "PENDING" => 
+                    {
+                        ctx.scan_status = Some("PENDING".to_string());
+                        return Ok(Some(uuid));
+                    }
+                    "DENY" => {
+                        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
+                            eprintln!("[BLACKLIST ERROR] {}", e);
+                        }
+                        cleanup_tmp_for_uuid(&ctx.uuid);
+                        list.retain(|c| c.uuid != uuid);
+                        return Err(PullContextError::BlockingFromTheScanner);
+                    }
+                    _ => return Err(PullContextError::BlockingFromTheScanner),
+            }
             }
 
         }

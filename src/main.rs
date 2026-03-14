@@ -74,6 +74,7 @@ use utils::{
     copy_ctx_from_quarantine_to_cache,
     is_registry_allowed,
     verify_content_digest,
+    check_blob_size,
 };
 
 
@@ -379,7 +380,13 @@ pub async fn launch_final_scan(
     println!("[SCAN FINAL] lancement pour uuid={}", uuid);
 
     // 2️⃣ appel scanner
-    let state = is_allowed(&mut ctx_clone, path, "scan_final").await;
+    let state = match is_allowed(&mut ctx_clone, path, "scan_final").await {
+        Err(e) => {
+            eprintln!("[ORCH ERROR] {}", e);
+            return Some(false); // ← fail closed
+        }
+        Ok(s) => s,
+    };
 
 
 
@@ -419,7 +426,7 @@ pub async fn launch_final_scan(
     None
 }
 
-async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> String {
+async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct OrchestratorResp {
         pull_id: uuid::Uuid,
@@ -624,48 +631,58 @@ async fn add_file_if_exists(
     }
 
     println!("file_path : {}", base_dir);
-    // 5) POST multipart (inchangé)
-    let client = reqwest::Client::new();
-    let resp = client.post(ORCH_URL).multipart(form).send().await;
 
-    let state = match resp {
-        Ok(r) => {
+
+    // 5) POST multipart 
+    let client = reqwest::Client::new();
+
+    let state: Result<String, String> = match tokio::time::timeout(
+        Duration::from_secs(30),
+        client.post(ORCH_URL).multipart(form).send()
+    ).await {
+        Err(_) => {
+            // ← Err du timeout (elapsed)
+            eprintln!("[ORCH TIMEOUT] Orchestrateur ne répond pas");
+            return Err("Timeout orchestrateur".to_string());
+        }
+        Ok(Err(e)) => {
+            // ← Err réseau
+            eprintln!("[ORCH CALL] request error: {:?}", e);
+            return Err(format!("Erreur réseau: {}", e));
+        }
+        Ok(Ok(r)) => {
             let status = r.status();
             println!("[ORCH CALL] status={}", status);
-
-            // 🔴 lire TOUJOURS la réponse en texte brut
             let text = r.text().await.unwrap_or_default();
             println!("[ORCH RAW RESP] {}", text);
 
             if !status.is_success() {
                 println!("[ORCH ERROR] orchestrateur a renvoyé non-200");
-                return "PENDING".to_string();
+                return Ok("PENDING".to_string());
             }
 
             match serde_json::from_str::<OrchestratorResp>(&text) {
                 Ok(body) => {
-                    println!(
-                        "[ORCH RESP] pull_id={} state={}",
-                        body.pull_id, body.state
-                    );
-                    body.state.trim().to_uppercase()
+                    println!("[ORCH RESP] pull_id={} state={}", body.pull_id, body.state);
+                    Ok(body.state.trim().to_uppercase())
                 }
                 Err(e) => {
                     println!("[ORCH PARSE ERROR] {:?}", e);
-                    "PENDING".to_string()
+                    Ok("PENDING".to_string())
                 }
             }
-        }
-        Err(e) => {
-            println!("[ORCH CALL] request error: {:?}", e);
-            "PENDING".to_string()
         }
     };
 
 
     println!("==================================================================================");
 
-    match state.as_str() {
+    let state_str = match state {
+        Ok(ref s) => s.clone(),
+        Err(ref e) => return Err(e.clone()),
+    };
+
+    match state_str.as_str() {
         "ALLOW" => {
             println!("Pull autorisé par l'orchestrateur");
             ctx.scan_status = Some("ALLOW".to_string());
@@ -683,7 +700,7 @@ async fn add_file_if_exists(
         }
     }
 
-    state
+    Ok(state_str)
 }
 
 
@@ -1076,6 +1093,18 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         //On extrait la reponse upstream
         let status = upstream.status();
         let headers = upstream.headers().clone();
+
+        // ✅ LIMITE TAILLE DES BLOBS
+        if let Err(e) = check_blob_size(&path, &headers) {
+            eprintln!("[SECURITY] {} | ip={} path={}", e, client_ip, path);
+            dec_active(&pull_contexts, context_uuid).await;
+            let mut list = pull_contexts.lock().await;
+            list.retain(|c| c.uuid != context_uuid);
+            return Response::builder()
+                .status(StatusCode::PAYLOAD_TOO_LARGE)
+                .body(Body::from("Blob trop volumineux"))
+                .unwrap();
+        }
         let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
         // ✅ VÉRIFICATION CRYPTOGRAPHIQUE
@@ -1221,6 +1250,18 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     //On extrait la reponse upstream
     let status = upstream.status();
     let headers = upstream.headers().clone();
+
+    // ✅ LIMITE TAILLE DES BLOBS
+    if let Err(e) = check_blob_size(&path, &headers) {
+        eprintln!("[SECURITY] {} | ip={} path={}", e, client_ip, path);
+        dec_active(&pull_contexts, context_uuid).await;
+        let mut list = pull_contexts.lock().await;
+        list.retain(|c| c.uuid != context_uuid);
+        return Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .body(Body::from("Blob trop volumineux"))
+            .unwrap();
+    }
     let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
 
@@ -1434,61 +1475,74 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 {
                     // On continue ou on stop le pull en fonction du scan de sécurité
                     println!("[GetPullContext] - Call API pour scan par digest");
-                    match is_allowed(ctx, &path, "scan_par_digest").await.as_str() 
+                    match is_allowed(ctx, &path, "scan_par_digest").await
                     {
-                        "DENY" => 
-                        {
-                            //
-                            //------------- Cas ou le fichier est refusé par le scan de sécurité -------------
-                            println!("[SCAN BY DIGEST] Digest DENY -> bloquage du pull + ajout image en blacklist");
-
-                            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid).cloned() 
-                            {
-                                println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
-
-                                // blacklist
-                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
-                                    eprintln!("[BLACKLIST ERROR] {}", e);
-                                }
-
-                                cleanup_tmp_for_uuid(&ctx.uuid);
-                                remove_ctx_digests_from_quarantine(&ctx);
-
-
-                            }
-                            else 
-                            {
-                                println!("[DEBUG] Aucun contexte trouvé pour UUID={}", context_uuid);
-                            }
-
-                            drop(list);
+                        Err(e) => {
+                            eprintln!("[ORCH ERROR] {}", e);
                             dec_active(&pull_contexts, context_uuid).await;
-
                             let mut list = pull_contexts.lock().await;
                             list.retain(|c| c.uuid != context_uuid);
-                            //Cas ou l'image est refusé par le scan de securité 
                             return Response::builder()
                                 .status(StatusCode::FORBIDDEN)
-                                .body(Body::from("Image refusée par le scan de sécurité"))
+                                .body(Body::from("Erreur orchestrateur"))
                                 .unwrap();
                         }
-                        "ALLOW" => 
+                        Ok(state) => match state.as_str() 
                         {
-                            println!("[SCAN BY DIGEST] Digest ALLOW -> continuation du pull + ajout image en whitelist");
-                            //Ajout a la whitelist
-                            if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
-                                eprintln!("[WHITELIST ERROR] {}", e);   
-                            
+                            "DENY" => 
+                            {
+                                //
+                                //------------- Cas ou le fichier est refusé par le scan de sécurité -------------
+                                println!("[SCAN BY DIGEST] Digest DENY -> bloquage du pull + ajout image en blacklist");
+
+                                if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid).cloned() 
+                                {
+                                    println!("[DEBUG] Contexte trouvé pour UUID={}", context_uuid);
+
+                                    // blacklist
+                                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
+                                        eprintln!("[BLACKLIST ERROR] {}", e);
+                                    }
+
+                                    cleanup_tmp_for_uuid(&ctx.uuid);
+                                    remove_ctx_digests_from_quarantine(&ctx);
+
+
+                                }
+                                else 
+                                {
+                                    println!("[DEBUG] Aucun contexte trouvé pour UUID={}", context_uuid);
+                                }
+
+                                drop(list);
+                                dec_active(&pull_contexts, context_uuid).await;
+
+                                let mut list = pull_contexts.lock().await;
+                                list.retain(|c| c.uuid != context_uuid);
+                                //Cas ou l'image est refusé par le scan de securité 
+                                return Response::builder()
+                                    .status(StatusCode::FORBIDDEN)
+                                    .body(Body::from("Image refusée par le scan de sécurité"))
+                                    .unwrap();
                             }
-                        }
-                        "PENDING" => 
-                        {
-                            println!("[SCAN BY DIGEST] Digest PENDING -> continuation du pull");
-                        }
-                        other => 
-                        {
-                            eprintln!("[WARNING] État inattendu de l'orchestrateur: {}", other);
-                            //par défaut on considère comme PENDING
+                            "ALLOW" => 
+                            {
+                                println!("[SCAN BY DIGEST] Digest ALLOW -> continuation du pull + ajout image en whitelist");
+                                //Ajout a la whitelist
+                                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
+                                    eprintln!("[WHITELIST ERROR] {}", e);   
+                                
+                                }
+                            }
+                            "PENDING" => 
+                            {
+                                println!("[SCAN BY DIGEST] Digest PENDING -> continuation du pull");
+                            }
+                            other => 
+                            {
+                                eprintln!("[WARNING] État inattendu de l'orchestrateur: {}", other);
+                                //par défaut on considère comme PENDING
+                            }
                         }
                     }
                 }
