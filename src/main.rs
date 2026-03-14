@@ -45,8 +45,8 @@ use pull_context::{
 
 // Déclare le module
 mod predict_digests_utils;
-
 mod registry_auth;
+mod validation;
 
 // Puis importe les fonctions dont tu as besoin
 use predict_digests_utils::{
@@ -633,16 +633,36 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     // Découper le path pour extraire repo, tag, digest
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
 
+    // ✅ VALIDATION HEADERS — avant tout, y compris /v2/
+    if let Err(e) = validation::validate_headers(&req) {
+        let client_ip = req.extensions()
+            .get::<std::net::SocketAddr>()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
+        eprintln!("[SECURITY] Headers invalides | ip={} err={}", client_ip, e);
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from("Requête invalide"))
+            .unwrap();
+    }
+    
     // Ping registry
     if path == "/v2/" {
+        if req.method() != Method::GET {
+            return Response::builder()
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .body(Body::empty())
+                .unwrap();
+        }
         return Response::builder().status(StatusCode::OK).body(Body::empty()).unwrap();
     }
 
-    if req.method() == Method::PUT {
-        println!("[PUT] Requête PUT non supportée");
-    }
-    if req.method() == Method::POST {
-        println!("[POST] Requête POST non supportée");
+    if req.method() != Method::GET && req.method() != Method::HEAD {
+        eprintln!("[SECURITY] Méthode non autorisée: {} {}", method, path);
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::from("Méthode non autorisée"))
+            .unwrap();
     }
 
     // Redirection des requêtes /token vers le vrai registre
@@ -683,6 +703,46 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .body(Body::from("Registre non autorisé"))
             .unwrap();
     }
+
+    // ✅ VALIDATION DES INPUTS
+    if path.contains("..") || path.contains('\\') {
+        eprintln!("[SECURITY] Path traversal détecté: {}", path);
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from("Requête invalide"))
+            .unwrap();
+    }
+
+    // Extraire repository et tag/digest depuis parts pour valider
+    let repo_and_tag_valid = (|| -> Result<(), &'static str> {
+        // Trouver l'index de "manifests", "blobs" ou "referrers"
+        let idx = parts.iter().position(|p| {
+            *p == "manifests" || *p == "blobs" || *p == "referrers"
+        }).ok_or("resource type manquant")?;
+
+        if idx + 1 >= parts.len() {
+            return Err("tag ou digest manquant");
+        }
+
+        let repository = parts[..idx].join("/");
+        let tag_or_digest = parts[parts.len() - 1];
+
+        //appel de la fonction de validation
+        validation::validate_request_components(&host, &repository, tag_or_digest)
+            .map_err(|_| "composants invalides")?;
+
+        Ok(())
+    })();
+
+    //Si validation echoue
+    if let Err(e) = repo_and_tag_valid {
+        eprintln!("[SECURITY] Validation échouée: {}", e);
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::from("Requête invalide"))
+            .unwrap();
+    }
+
 
     let client_type = detect_client_type(&req);
     println!("[CLIENT] type détecté: {}", client_type); 
@@ -1351,16 +1411,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    
-    
-    /*let certs = load_certs("certs-mitm/registry-1.docker.io.crt")?;
-    let key = load_private_key("certs-mitm/registry-1.docker.io.key")?;
-
-    let tls = ServerConfig::builder()
-        .with_safe_defaults()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?;
-    */
 
     //Gestion Multi-Certificats
     let content = std::fs::read_to_string("registry_whitelist.json")
@@ -1434,7 +1484,10 @@ async fn main() -> Result<()> {
                             Ok::<_, Infallible>(handle(req, client,pull_contexts, pool).await) 
                         }
                     });
-                let _ = Http::new().serve_connection(tls, service).await;
+                let _ = Http::new()
+                .max_buf_size(16 * 1024)        // 16 KB max buffer
+                .serve_connection(tls, service)
+                .await;
             }
         });
     }

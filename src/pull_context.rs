@@ -71,11 +71,6 @@ pub async fn get_pull_context(
     let tag_ou_digest = parts[parts.len() - 1];
     let ip_client = client_ip.to_string();
 
-    /*println!(
-        "[PullContext] registry={}, repository={}, tag/digest={}, client_ip={}\n",
-        registry, repository, tag_ou_digest, ip_client
-    );*/
-
     // 🔹 HEAD → création d’un nouveau contexte pour un tag
     if req.method() == Method::HEAD {
 
