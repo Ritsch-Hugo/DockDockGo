@@ -11,3 +11,5 @@ clap = { version = "4.5", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 tar = "0.4"
 flate2 = "1.0"
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
