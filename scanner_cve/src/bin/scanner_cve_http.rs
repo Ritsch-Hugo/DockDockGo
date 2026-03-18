@@ -21,7 +21,7 @@ async fn main() {
         .route("/v1/scan-upload", post(scan_upload))
         .layer(DefaultBodyLimit::max(1024 * 1024 * 1024)); // 1GB
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3002));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3002));
     println!("🚀 CVE Scanner listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr)

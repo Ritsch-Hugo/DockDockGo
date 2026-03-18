@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# Rust
+target
+**/target
+
+# Env / tmp
+.env
+tmp
+/tmp
+
+# Samples (inutile dans image)
+samples
+
+# Node (au cas où)
+node_modules
+
+# Docker useless
+Dockerfile
+.dockerignore
+
+# OS
+.DS_Store

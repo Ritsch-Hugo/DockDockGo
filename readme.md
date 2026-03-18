@@ -1,128 +1,199 @@
-# 🚀 Scanner CVE – DockDockGo
+# 🚀 Scanner CVE - DockDockGo
 
-Ce scanner analyse des images OCI (Docker) **sans Docker daemon** en reconstruisant le filesystem à partir des layers, puis en exécutant un scan de vulnérabilités avec **Trivy**.
-
----
-
-## ⚙️ Prérequis
-
-### 1. Installer Trivy
-
-```bash
-sudo snap install trivy
-```
-
-ou :
-
-```bash
-brew install trivy
-```
+Scanner de vulnérabilités basé sur Trivy, conçu pour analyser des images OCI à partir de leurs artefacts (manifest, config, layers) **sans utiliser Docker daemon**.
 
 ---
 
-### 2. Initialiser la base de vulnérabilités
+## 🎯 Objectif
 
-⚠️ À faire une seule fois :
+Ce scanner permet :
+
+* d’analyser une image OCI **à partir de fichiers bruts**
+* de reconstruire dynamiquement le filesystem
+* d’exécuter Trivy en mode filesystem
+* de produire un rapport JSON structuré (CVE, sévérité, CVSS)
+
+Il est conçu pour être intégré dans l’écosystème **DockDockGo** via un orchestrateur.
+
+---
+
+## ⚙️ Fonctionnement
+
+1. Réception des fichiers :
+
+   * manifest.json
+   * config.json (optionnel)
+   * blobs (layers)
+
+2. Reconstruction du filesystem (rootfs)
+
+3. Scan avec Trivy :
+
+   * mode filesystem (`trivy fs`)
+
+4. Parsing des résultats
+
+5. Retour d’un JSON structuré
+
+---
+
+## 🐳 Lancer avec Docker (recommandé)
+
+### 1. Build l’image
 
 ```bash
-trivy fs /
+docker build -t scanner-cve .
+```
+
+### 2. Lancer le service
+
+```bash
+docker run -p 3002:3002 scanner-cve
 ```
 
 ---
 
-## ▶️ Lancer le scanner
-
-```bash
-cargo run --bin scanner_cve_http
-```
-
----
-
-## ❤️ Health check
+## ❤️ Healthcheck
 
 ```bash
 curl http://localhost:3002/health
 ```
 
-Résultat attendu :
+Réponse attendue :
 
-```
+```text
 ok
 ```
 
 ---
 
-## 🧪 Test du scan
+## 🔍 Scan d’une image
 
-### 1. Générer un sample OCI
-
-```bash
-docker pull alpine
-docker save alpine -o alpine.tar
-```
-
-### 2. Extraire
+Depuis la racine du projet :
 
 ```bash
-mkdir samples
-tar -xf alpine.tar -C samples
-```
-
-### 3. Lancer le scan
-
-```bash
-curl -X POST http://localhost:3002/v1/scan-upload   -F "manifest=@samples/manifest.json"   $(for f in samples/blobs/sha256/*; do echo -n "-F blob=@$f "; done)
+curl -X POST http://localhost:3002/v1/scan-upload \
+  -F "manifest=@samples/manifest.json" \
+  $(for f in samples/blobs/sha256/*; do echo -n "-F blob=@$f "; done)
 ```
 
 ---
 
-## 📊 Résultat attendu
+## 📦 Exemple de réponse
 
 ```json
 {
+  "request_id": "uuid",
   "status": "COMPLETE",
   "summary": {
     "vulnerabilities_total": 30,
     "severity_count": {
-      "low": 3,
-      "medium": 21,
+      "critical": 2,
       "high": 4,
-      "critical": 2
+      "medium": 21,
+      "low": 3,
+      "unknown": 0
     }
-  }
+  },
+  "findings": [
+    {
+      "cve_id": "CVE-XXXX",
+      "package": "openssl",
+      "installed_version": "x.x.x",
+      "fixed_version": "x.x.x",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "title": "Example vulnerability"
+    }
+  ]
 }
 ```
 
 ---
 
-## 🧠 Fonctionnement
+## ⚠️ Notes importantes
 
-1. Réception des fichiers (manifest + blobs)
-2. Reconstruction du root filesystem
-3. Scan avec Trivy
-4. Parsing des résultats
-5. Retour JSON structuré
-
----
-
-## ⚡ Notes
-
-- Utilise `--skip-db-update` → scan rapide
-- Cache Trivy local utilisé automatiquement
-- Workspace temporaire dans `/tmp/dockdockgo-cve-*`
-
-👉 Oui : **le /tmp est automatiquement nettoyé après chaque scan** grâce au CleanupGuard.
+* Le **premier scan est plus lent** (téléchargement de la base Trivy)
+* Les scans suivants sont rapides
+* Le scanner est **stateless** (workspace temporaire supprimé après exécution)
+* Aucun `docker pull` n’est nécessaire
 
 ---
 
-## 🔌 Endpoint
+## 🧪 Mode CLI (optionnel)
 
-```
-POST /v1/scan-upload
+```bash
+cd scanner_cve
+
+cargo run --bin scanner_cve -- -r ../samples/request.json --pretty
 ```
 
 ---
 
-## 👤 Auteur
+## 🧠 Architecture
 
-Projet DockDockGo – Scanner CVE
+```text
+Client / Orchestrator
+        ↓
+  Scanner CVE (HTTP API)
+        ↓
+ Reconstruction rootfs
+        ↓
+     Trivy scan
+        ↓
+   JSON structuré
+```
+
+---
+
+## 🔧 CI/CD
+
+Le projet inclut :
+
+* ✔ Format (`cargo fmt`)
+* ✔ Lint (`cargo clippy`)
+* ✔ Tests (`cargo test`)
+* ✔ Build automatique
+* ✔ Build Docker automatique
+
+---
+
+## 📁 Structure
+
+```text
+scanner_cve/
+├── src/
+├── Cargo.toml
+samples/
+├── manifest.json
+├── blobs/
+Dockerfile
+README.md
+```
+
+---
+
+## 🔥 Features
+
+* Stateless scanning
+* OCI-compatible
+* No Docker daemon required
+* Trivy integration
+* Microservice-ready (HTTP API)
+* Orchestrator-friendly
+
+---
+
+## 🚀 Intégration
+
+Ce scanner est conçu pour être appelé par un orchestrateur DockDockGo via une requête HTTP multipart contenant :
+
+* manifest
+* blobs
+* (optionnel) pull_context
+
+---
+
+## 👨‍💻 Auteur
+
+Projet développé dans le cadre de DockDockGo (DevSecOps / Container Security).
