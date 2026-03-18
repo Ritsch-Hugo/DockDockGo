@@ -1,0 +1,76 @@
+name: Rust (scanner_cve)
+
+on:
+  push:
+    branches: ["Static-scan"]
+  pull_request:
+    branches: ["Static-scan"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-scanner-cve-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scanner_cve
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            scanner_cve -> target
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --verbose --all-features
+
+      - name: Tests
+        run: cargo test --all-features
+
+      - name: Docs
+        run: cargo doc --no-deps --all-features
+
+  rustsec_audit:
+    name: RustSec (cargo audit)
+    runs-on: ubuntu-latest
+    needs: [checks]
+    defaults:
+      run:
+        working-directory: scanner_cve
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            scanner_cve -> target
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: RustSec audit
+        run: cargo audit
