@@ -1,10 +1,6 @@
 use std::path::Path;
 
-pub fn check_layers(
-    blob_store: &str,
-    layers: &[String],
-) -> (bool, Vec<String>) {
-
+pub fn check_layers(blob_store: &str, layers: &[String]) -> (bool, Vec<String>) {
     let mut missing = Vec::new();
 
     for digest in layers {

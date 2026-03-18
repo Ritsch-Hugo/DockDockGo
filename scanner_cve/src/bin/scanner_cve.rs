@@ -4,7 +4,10 @@ use scanner_cve::engine;
 use scanner_cve::models::ScanRequest;
 
 #[derive(Debug, Parser)]
-#[command(name = "scanner_cve", about = "DocDockGo - Static CVE scanner (V1 CLI)")]
+#[command(
+    name = "scanner_cve",
+    about = "DocDockGo - Static CVE scanner (V1 CLI)"
+)]
 struct Args {
     /// Path to request.json
     #[arg(long, short = 'r')]

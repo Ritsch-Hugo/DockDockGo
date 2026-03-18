@@ -24,17 +24,12 @@ pub struct ParsedManifest {
 }
 
 pub fn parse_manifest(path: &str) -> Result<ParsedManifest> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read manifest {}", path))?;
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("failed to read manifest {}", path))?;
 
-    let manifest: Manifest =
-        serde_json::from_str(&raw).context("invalid manifest JSON")?;
+    let manifest: Manifest = serde_json::from_str(&raw).context("invalid manifest JSON")?;
 
-    let layer_digests = manifest
-        .layers
-        .into_iter()
-        .map(|l| l.digest)
-        .collect();
+    let layer_digests = manifest.layers.into_iter().map(|l| l.digest).collect();
 
     Ok(ParsedManifest {
         config_digest: manifest.config.digest,
