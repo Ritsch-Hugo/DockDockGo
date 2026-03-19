@@ -2,9 +2,9 @@ name: Rust (scanner_compliance)
 
 on:
   push:
-    branches: ["Static-scan"]
+    branches: ["feature/compliance"]
   pull_request:
-    branches: ["Static-scan"]
+    branches: ["feature/compliance"]
   workflow_dispatch:
 
 env:
