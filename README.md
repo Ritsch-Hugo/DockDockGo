@@ -1,46 +1,186 @@
-# scanner_compliance (DockDockGo)
+# 🚀 Scanner Compliance - DocDockGo
 
-Stateless OCI/Docker image compliance scanner (image-level only).
+Scanner de conformité pour images OCI, conçu pour analyser des artefacts (manifest, config, layers) **sans utiliser Docker daemon**.
 
-## What it does
-- Parses an **OCI manifest** (`manifest_raw`) and tracks artifact availability.
-- Parses the **OCI config blob** (best-effort) to extract runtime metadata:
-  - USER, ENV, LABELS, ENTRYPOINT/CMD, WORKDIR, EXPOSED PORTS, VOLUMES
-- Reads **filesystem layers** (`tar` / `tar.gz`) in **streaming mode** (no full read in memory, no disk writes).
-- Builds a **final in-memory filesystem view** (overlay) when all FS layers are present:
-  - Applies layers in order
-  - Supports whiteouts:
-    - `.wh.<file>`
-    - `.wh..wh..opq`
-- Runs rules returning: `PASS / WARN / FAIL / SKIP`
-- Outputs a JSON report **for every call**.
+---
 
-## What it does NOT do
-- No Docker daemon, no `docker pull/run`, no Dockerfile, no build policy.
-- No state stored between calls.
-- No symlink resolution, no advanced permission model.
+## 🎯 Objectif
 
-## Input: ScanRequest (JSON)
-The binary expects a JSON payload like:
+Ce scanner permet :
 
-- `stage`: scan stage (e.g. `manifest_only`, `final`)
-- `manifest_raw`: raw OCI manifest JSON string
-- `blobs`: list of available blobs (config and layers)
-  - `digest`: `sha256:...`
-  - `path`: local path to the blob (present => blob is available)
+* d’analyser une image OCI à partir de fichiers bruts
+* de reconstruire dynamiquement le filesystem
+* d’appliquer des règles de conformité (sécurité, bonnes pratiques)
+* de produire un rapport JSON structuré
 
-The caller can invoke the scanner multiple times as blobs arrive progressively.
+Il est conçu pour être utilisé dans l’écosystème **DocDockGo** via un orchestrateur.
 
-## Output: Report (JSON)
-Report contains:
-- `scan.inputs`: `has_manifest`, `has_config`, `has_fs`, layer counts
-- `findings[]`: per-rule results with evidence
-- `missing_artifacts[]`: artifacts still missing
-- `pseudo_dockerfile` (final-only): best-effort informational output derived from config + final FS
+---
 
-Output is deterministic (sorted findings / missing artifacts).
+## ⚙️ Fonctionnement
 
-## Run
-Manifest-only:
+1. Réception des artefacts :
+
+   * manifest.json
+   * blobs (layers + config)
+
+2. Reconstruction du filesystem
+
+3. Application des règles :
+
+   * sécurité filesystem
+   * configuration OCI
+   * bonnes pratiques container
+
+4. Génération d’un rapport :
+
+   * PASS / WARN / FAIL
+   * findings détaillés
+   * pseudo-Dockerfile
+
+---
+
+## 🐳 Lancer avec Docker (recommandé)
+
+### 1. Build l’image
+
 ```bash
-cargo run --bin scanner_compliance -- samples/request_manifest_only.json
+docker build -t scanner-compliance .
+```
+
+### 2. Lancer le service
+
+```bash
+docker run -p 3001:3001 scanner-compliance
+```
+
+---
+
+## ❤️ Test du service
+
+```bash
+curl http://localhost:3001/v1/scan
+```
+
+👉 doit répondre une erreur → serveur OK
+
+---
+
+## 🔍 Scan d’une image (multipart)
+
+Depuis la racine du projet :
+
+```bash
+curl -X POST http://localhost:3001/v1/scan-upload \
+  -F "manifest=@quarantaine/library/testcases/fs-secrets-pass/latest/manifests/000.json" \
+  $(for f in quarantaine/library/testcases/fs-secrets-pass/latest/blobs/sha256/*; do echo -n "-F blob=@$f "; done)
+```
+
+---
+
+## 📦 Exemple de réponse
+
+```json
+{
+  "status": "PASS",
+  "summary": {
+    "pass": 14,
+    "warn": 1,
+    "fail": 0
+  },
+  "findings": [
+    {
+      "rule_id": "NON_ROOT_USER",
+      "status": "PASS",
+      "message": "Container runs as non-root user"
+    }
+  ]
+}
+```
+
+---
+
+## ⚠️ Notes importantes
+
+* Le scanner est **stateless**
+* Les fichiers sont stockés temporairement puis supprimés
+* Aucun `docker pull` requis
+* Compatible orchestrateur DocDockGo
+
+---
+
+## 🧪 Mode CLI (optionnel)
+
+```bash
+cd scanner_compliance
+
+cargo run --bin scanner_compliance -- -r ../samples/request.json
+```
+
+---
+
+## 🧠 Architecture
+
+```
+Orchestrator
+     ↓
+Scanner Compliance (HTTP)
+     ↓
+Reconstruction FS
+     ↓
+Rules Engine
+     ↓
+JSON Report
+```
+
+---
+
+## 🔧 CI/CD
+
+Le projet inclut :
+
+* ✔ Format (`cargo fmt`)
+* ✔ Lint (`cargo clippy`)
+* ✔ Tests (`cargo test`)
+* ✔ Audit sécurité (`cargo audit`)
+* ✔ Build Docker
+
+---
+
+## 📁 Structure
+
+```
+scanner_compliance/
+├── src/
+├── Cargo.toml
+Dockerfile
+README.md
+```
+
+---
+
+## 🔥 Features
+
+* Stateless scanning
+* OCI-compatible
+* No Docker daemon required
+* Rules-based compliance engine
+* Microservice-ready (HTTP API)
+* Orchestrator-friendly
+
+---
+
+## 🚀 Intégration
+
+Le scanner est conçu pour être appelé via HTTP multipart :
+
+* `manifest`
+* `blob` (layers)
+
+Compatible avec le modèle **PullContext** de DocDockGo.
+
+---
+
+## 👨‍💻 Auteur
+
+Projet développé dans le cadre de DocDockGo (DevSecOps / Container Security).

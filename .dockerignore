@@ -1,0 +1,17 @@
+# Rust
+target
+scanner_compliance/target
+
+# Git
+.git
+.gitignore
+
+# Temp
+tmp
+
+# Samples (inutile en prod)
+samples
+
+# OS / divers
+.DS_Store
+node_modules

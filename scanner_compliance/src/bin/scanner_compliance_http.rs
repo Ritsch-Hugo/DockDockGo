@@ -3,18 +3,21 @@ use axum::{
 };
 use scanner_compliance::models::{RawBlob, ScanRequest, Stage};
 use scanner_compliance::pipeline;
+
 use std::fs;
 use std::io::Write;
+use std::net::SocketAddr;
+
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
     let app = Router::new()
-        .route("/v1/scan", post(scan_handler)) // JSON endpoint
-        .route("/v1/scan-upload", post(upload_handler)); // Multipart endpoint
+        .route("/v1/scan", post(scan_handler))
+        .route("/v1/scan-upload", post(upload_handler));
 
-    let addr = "127.0.0.1:3001";
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
 
     println!("🚀 Scanner HTTP listening on http://{}", addr);
 
@@ -43,7 +46,7 @@ async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
 /* ---------------- MULTIPART ENDPOINT ---------------- */
 
 async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
-    // 1️⃣ Workspace
+    // Workspace
     let request_id = Uuid::new_v4().to_string();
     let workspace_path = format!("./tmp/scans/{}", request_id);
 
@@ -60,17 +63,43 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     let mut manifest_path: Option<String> = None;
     let mut blobs: Vec<RawBlob> = Vec::new();
 
-    // 2️⃣ Lecture multipart
-    while let Some(field) = multipart.next_field().await.unwrap() {
+    // Lecture multipart (SAFE)
+    while let Some(field) = match multipart.next_field().await {
+        Ok(f) => f,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Multipart error: {}", e)).into_response();
+        }
+    } {
         let field_name = field.name().unwrap_or("").to_string();
         let file_name = field.file_name().unwrap_or("unknown").to_string();
-        let data = field.bytes().await.unwrap();
+
+        let data = match field.bytes().await {
+            Ok(d) => d,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, format!("Read error: {}", e)).into_response();
+            }
+        };
 
         let file_path = format!("{}/{}", workspace_path, file_name);
 
-        let mut file = fs::File::create(&file_path).expect("Failed to create file");
+        let mut file = match fs::File::create(&file_path) {
+            Ok(f) => f,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("File create error: {}", e),
+                )
+                    .into_response();
+            }
+        };
 
-        file.write_all(&data).expect("Failed to write file");
+        if let Err(e) = file.write_all(&data) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Write error: {}", e),
+            )
+                .into_response();
+        }
 
         println!("📥 Received '{}' -> {}", field_name, file_path);
 
@@ -86,12 +115,12 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
                 media_type: None,
                 size: None,
                 path: Some(file_path.clone()),
-                bytes_b64: None, // ✅ FIX ICI
+                bytes_b64: None,
             });
         }
     }
 
-    // 3️⃣ Vérification manifest
+    // Vérification manifest
     let manifest_path = match manifest_path {
         Some(p) => p,
         None => {
@@ -100,7 +129,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         }
     };
 
-    // 4️⃣ Lire manifest
+    // Lire manifest
     let manifest_raw = match fs::read_to_string(&manifest_path) {
         Ok(m) => m,
         Err(e) => {
@@ -113,7 +142,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         }
     };
 
-    // 5️⃣ Construire ScanRequest
+    // Construire ScanRequest
     let req = ScanRequest {
         image_ref: Some("upload".into()),
         manifest_raw,
@@ -121,7 +150,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         stage: Stage::Final,
     };
 
-    // 6️⃣ Pipeline
+    // Pipeline
     let image = match pipeline::image_from_scan_request(req) {
         Ok(img) => img,
         Err(e) => {
@@ -132,7 +161,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
 
     let report = pipeline::scan_image(&image);
 
-    // 7️⃣ Cleanup
+    // Cleanup
     if let Err(e) = fs::remove_dir_all(&workspace_path) {
         eprintln!("Cleanup error: {}", e);
     }
