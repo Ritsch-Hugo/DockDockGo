@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "llm-common",
+    "llm-manager",
+    "llm-decision",
+]
+resolver = "2"
