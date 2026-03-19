@@ -26,13 +26,13 @@ pub fn run_rules(image: &ImageData, rules: &[Box<dyn Rule>]) -> Report {
     }
 
     Report {
-    meta: image.meta.clone(),
-    scan: image.scan.clone(),
-    missing_artifacts: image.missing_artifacts.clone(),
-    summary,
-    findings,
-    pseudo_dockerfile: None,
-}
+        meta: image.meta.clone(),
+        scan: image.scan.clone(),
+        missing_artifacts: image.missing_artifacts.clone(),
+        summary,
+        findings,
+        pseudo_dockerfile: None,
+    }
 }
 
 /// Retourne la liste des chemins du filesystem.
@@ -40,11 +40,7 @@ pub fn run_rules(image: &ImageData, rules: &[Box<dyn Rule>]) -> Report {
 /// - Sinon, on fallback sur fs_paths
 pub fn all_paths(image: &ImageData) -> Vec<String> {
     if !image.fs_entries.is_empty() {
-        return image
-            .fs_entries
-            .iter()
-            .map(|e| e.path.clone())
-            .collect();
+        return image.fs_entries.iter().map(|e| e.path.clone()).collect();
     }
     image.fs_paths.clone()
 }

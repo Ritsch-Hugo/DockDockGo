@@ -24,8 +24,13 @@ pub fn generate_pseudo_dockerfile(image: &ImageData) -> Option<String> {
 
     let mut lines: Vec<String> = Vec::new();
 
-    lines.push("# PSEUDO-DOCKERFILE (best-effort, derived from OCI config + final filesystem)".to_string());
-    lines.push("# NOTE: this is informational only; it does not represent the original Dockerfile.".to_string());
+    lines.push(
+        "# PSEUDO-DOCKERFILE (best-effort, derived from OCI config + final filesystem)".to_string(),
+    );
+    lines.push(
+        "# NOTE: this is informational only; it does not represent the original Dockerfile."
+            .to_string(),
+    );
 
     // Petit hint FS
     lines.push(format!("# FS entries: {}", image.fs_entries.len()));
@@ -57,7 +62,10 @@ pub fn generate_pseudo_dockerfile(image: &ImageData) -> Option<String> {
 
     // ENTRYPOINT / CMD
     if !image.config.entrypoint.is_empty() {
-        lines.push(format!("ENTRYPOINT {}", quote_shell_words(&image.config.entrypoint)));
+        lines.push(format!(
+            "ENTRYPOINT {}",
+            quote_shell_words(&image.config.entrypoint)
+        ));
     }
     if !image.config.cmd.is_empty() {
         lines.push(format!("CMD {}", quote_shell_words(&image.config.cmd)));

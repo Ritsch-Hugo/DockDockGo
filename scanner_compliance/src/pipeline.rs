@@ -20,9 +20,8 @@ fn empty_config() -> ImageConfig {
 }
 
 fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
-    let v: Value =
-        serde_json::from_str(manifest_raw)
-            .map_err(|e| format!("invalid manifest_raw JSON: {e}"))?;
+    let v: Value = serde_json::from_str(manifest_raw)
+        .map_err(|e| format!("invalid manifest_raw JSON: {e}"))?;
 
     // mediaType
     let media_type = v
@@ -69,14 +68,9 @@ fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
                 .map(|s| s.to_string());
 
             // ⚠️ IMPORTANT : seulement si ton struct a size
-            let size = layer
-                .get("size")
-                .and_then(|x| x.as_u64());
+            let size = layer.get("size").and_then(|x| x.as_u64());
 
-            layers.push(ManifestLayer {
-                digest,
-                media_type,
-            });
+            layers.push(ManifestLayer { digest, media_type });
         }
     }
 
@@ -88,7 +82,6 @@ fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
         layers,
     })
 }
-
 
 /// Convertit un ScanRequest en ImageData (pipeline identique à ton CLI actuel)
 pub fn image_from_scan_request(req: ScanRequest) -> Result<ImageData, String> {
@@ -194,7 +187,10 @@ pub fn image_from_scan_request(req: ScanRequest) -> Result<ImageData, String> {
         out
     };
 
-    let image_ref = req.image_ref.clone().unwrap_or_else(|| "unknown".to_string());
+    let image_ref = req
+        .image_ref
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     Ok(ImageData {
         meta: ImageMeta {
@@ -219,7 +215,11 @@ pub fn image_from_scan_request(req: ScanRequest) -> Result<ImageData, String> {
 
         missing_artifacts: avail.missing.clone(),
 
-        config: if final_has_config { parsed_config } else { empty_config() },
+        config: if final_has_config {
+            parsed_config
+        } else {
+            empty_config()
+        },
 
         fs_paths: Vec::new(),
         fs_entries,
@@ -260,14 +260,12 @@ pub fn default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(RequiredLabelsRule),
         Box::new(ExposedPortsRule),
         Box::new(VolumesRule),
-
         // FS rules
         Box::new(ForbiddenBinariesRule),
         Box::new(DangerousPermissionsRule),
         Box::new(FsSecretsRule),
         Box::new(FsHygieneRule),
         Box::new(FsWeakConfigsRule),
-
         // Manifest rules
         Box::new(ManifestMediaTypeRule),
         Box::new(ManifestLayersCountRule),

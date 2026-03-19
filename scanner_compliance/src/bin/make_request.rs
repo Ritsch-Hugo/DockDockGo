@@ -260,7 +260,9 @@ fn main() {
 
         println!("Wrote: samples/request_step4_2.json");
     } else {
-        eprintln!("Note: chosen manifest has no second layer blob present -> step4_2 not generated.");
+        eprintln!(
+            "Note: chosen manifest has no second layer blob present -> step4_2 not generated."
+        );
     }
 
     println!("Chosen manifest: {:?}", chosen);

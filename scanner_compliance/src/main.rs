@@ -31,8 +31,7 @@ fn main() {
 
     let report = scanner_compliance::pipeline::scan_image(&image);
 
-    let json = serde_json::to_string_pretty(&report)
-        .expect("serialize report");
+    let json = serde_json::to_string_pretty(&report).expect("serialize report");
 
     println!("{json}");
 

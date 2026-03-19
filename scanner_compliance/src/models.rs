@@ -39,7 +39,7 @@ pub struct ImageData {
     pub manifest: Option<ManifestData>,
 
     #[serde(default)]
-pub missing_artifacts: Vec<MissingArtifact>,
+    pub missing_artifacts: Vec<MissingArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,9 +109,9 @@ pub struct InputsSummary {
 
     #[serde(default)]
     pub layers_total: u32,
-    
+
     #[serde(default)]
-pub layers_received: u32,
+    pub layers_received: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -143,12 +143,11 @@ pub struct Report {
     pub findings: Vec<Finding>,
 
     #[serde(default)]
-pub missing_artifacts: Vec<MissingArtifact>,
+    pub missing_artifacts: Vec<MissingArtifact>,
 
     /// Pseudo-Dockerfile informatif (FINAL ONLY)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pseudo_dockerfile: Option<String>,
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -194,7 +193,6 @@ pub struct ManifestData {
     #[serde(default)]
     pub layers: Vec<ManifestLayer>,
 }
-
 
 /// --- NOUVEAU : contrat d’entrée raw (Étape 1: manifest-only) ---
 
@@ -245,4 +243,3 @@ pub enum MissingArtifactKind {
     Config,
     Layer,
 }
-

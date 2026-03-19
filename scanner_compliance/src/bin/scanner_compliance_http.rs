@@ -1,22 +1,17 @@
 use axum::{
-    routing::post,
-    Router,
-    Json,
-    http::StatusCode,
-    response::IntoResponse,
-    extract::Multipart,
+    extract::Multipart, http::StatusCode, response::IntoResponse, routing::post, Json, Router,
 };
-use scanner_compliance::models::{ScanRequest, RawBlob, Stage};
+use scanner_compliance::models::{RawBlob, ScanRequest, Stage};
 use scanner_compliance::pipeline;
-use tokio::net::TcpListener;
-use uuid::Uuid;
 use std::fs;
 use std::io::Write;
+use tokio::net::TcpListener;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
     let app = Router::new()
-        .route("/v1/scan", post(scan_handler))          // JSON endpoint
+        .route("/v1/scan", post(scan_handler)) // JSON endpoint
         .route("/v1/scan-upload", post(upload_handler)); // Multipart endpoint
 
     let addr = "127.0.0.1:3001";
@@ -27,25 +22,16 @@ async fn main() {
         .await
         .expect("Failed to bind address");
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    axum::serve(listener, app).await.expect("Server error");
 }
 
 /* ---------------- JSON ENDPOINT ---------------- */
 
-async fn scan_handler(
-    Json(req): Json<ScanRequest>,
-) -> impl IntoResponse {
-
+async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
     let image = match pipeline::image_from_scan_request(req) {
         Ok(img) => img,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("Invalid request: {}", e),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, format!("Invalid request: {}", e)).into_response();
         }
     };
 
@@ -56,10 +42,7 @@ async fn scan_handler(
 
 /* ---------------- MULTIPART ENDPOINT ---------------- */
 
-async fn upload_handler(
-    mut multipart: Multipart,
-) -> impl IntoResponse {
-
+async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     // 1️⃣ Workspace
     let request_id = Uuid::new_v4().to_string();
     let workspace_path = format!("./tmp/scans/{}", request_id);
@@ -79,18 +62,15 @@ async fn upload_handler(
 
     // 2️⃣ Lecture multipart
     while let Some(field) = multipart.next_field().await.unwrap() {
-
         let field_name = field.name().unwrap_or("").to_string();
         let file_name = field.file_name().unwrap_or("unknown").to_string();
         let data = field.bytes().await.unwrap();
 
         let file_path = format!("{}/{}", workspace_path, file_name);
 
-        let mut file = fs::File::create(&file_path)
-            .expect("Failed to create file");
+        let mut file = fs::File::create(&file_path).expect("Failed to create file");
 
-        file.write_all(&data)
-            .expect("Failed to write file");
+        file.write_all(&data).expect("Failed to write file");
 
         println!("📥 Received '{}' -> {}", field_name, file_path);
 
@@ -106,7 +86,7 @@ async fn upload_handler(
                 media_type: None,
                 size: None,
                 path: Some(file_path.clone()),
-                bytes_b64: None,   // ✅ FIX ICI
+                bytes_b64: None, // ✅ FIX ICI
             });
         }
     }
@@ -116,11 +96,7 @@ async fn upload_handler(
         Some(p) => p,
         None => {
             let _ = fs::remove_dir_all(&workspace_path);
-            return (
-                StatusCode::BAD_REQUEST,
-                "No manifest provided",
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, "No manifest provided").into_response();
         }
     };
 
@@ -150,11 +126,7 @@ async fn upload_handler(
         Ok(img) => img,
         Err(e) => {
             let _ = fs::remove_dir_all(&workspace_path);
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("ScanRequest error: {}", e),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, format!("ScanRequest error: {}", e)).into_response();
         }
     };
 

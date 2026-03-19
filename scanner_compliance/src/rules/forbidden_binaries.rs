@@ -31,27 +31,27 @@ impl Rule for ForbiddenBinariesRule {
 
         let mut hits: Vec<String> = Vec::new();
 
-if !image.fs_entries.is_empty() {
-    for e in &image.fs_entries {
-        let kind = e.kind.as_deref().unwrap_or("other");
-        if kind != "file" {
-            continue;
-        }
+        if !image.fs_entries.is_empty() {
+            for e in &image.fs_entries {
+                let kind = e.kind.as_deref().unwrap_or("other");
+                if kind != "file" {
+                    continue;
+                }
 
-        let path = format!("/{}", e.path.trim_start_matches('/'));
-        if forbidden.iter().any(|f| path == *f) {
-            hits.push(e.path.clone());
+                let path = format!("/{}", e.path.trim_start_matches('/'));
+                if forbidden.iter().any(|f| path == *f) {
+                    hits.push(e.path.clone());
+                }
+            }
+        } else {
+            // Legacy fallback: fs_paths
+            for p in &image.fs_paths {
+                let path = format!("/{}", p.trim_start_matches('/'));
+                if forbidden.iter().any(|f| path == *f) {
+                    hits.push(p.clone());
+                }
+            }
         }
-    }
-} else {
-    // Legacy fallback: fs_paths
-    for p in &image.fs_paths {
-        let path = format!("/{}", p.trim_start_matches('/'));
-        if forbidden.iter().any(|f| path == *f) {
-            hits.push(p.clone());
-        }
-    }
-}
 
         if hits.is_empty() {
             return Finding {

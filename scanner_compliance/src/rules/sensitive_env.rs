@@ -37,13 +37,13 @@ impl Rule for SensitiveEnvRule {
 
     fn evaluate(&self, image: &ImageData) -> Finding {
         if !image.has_config {
-    return Finding {
-        rule_id: self.id().to_string(),
-        status: Status::SKIP,
-        message: "Config blob not available yet (stage too early)".to_string(),
-        evidence: HashMap::new(),
-    };
-}
+            return Finding {
+                rule_id: self.id().to_string(),
+                status: Status::SKIP,
+                message: "Config blob not available yet (stage too early)".to_string(),
+                evidence: HashMap::new(),
+            };
+        }
 
         let mut found: Vec<(String, String)> = Vec::new();
 

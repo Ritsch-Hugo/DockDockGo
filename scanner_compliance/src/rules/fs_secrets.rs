@@ -49,11 +49,15 @@ impl Rule for FsSecretsRule {
             if allow_exact_files.iter().any(|x| lower == *x) {
                 continue;
             }
-            if allow_prefixes.iter().any(|pref| lower.starts_with(pref)) && lower.ends_with(".pem") {
+            if allow_prefixes.iter().any(|pref| lower.starts_with(pref)) && lower.ends_with(".pem")
+            {
                 continue;
             }
 
-            if suspicious_exact.iter().any(|x| lower.ends_with(x) || lower.contains(x)) {
+            if suspicious_exact
+                .iter()
+                .any(|x| lower.ends_with(x) || lower.contains(x))
+            {
                 hits.push(p);
                 continue;
             }

@@ -11,13 +11,13 @@ impl Rule for FsWeakConfigsRule {
 
     fn evaluate(&self, image: &ImageData) -> Finding {
         if !image.has_fs {
-    return Finding {
-        rule_id: self.id().to_string(),
-        status: Status::SKIP,
-        message: "Filesystem not available yet (layers not assembled)".to_string(),
-        evidence: HashMap::new(),
-    };
-}
+            return Finding {
+                rule_id: self.id().to_string(),
+                status: Status::SKIP,
+                message: "Filesystem not available yet (layers not assembled)".to_string(),
+                evidence: HashMap::new(),
+            };
+        }
 
         let paths = all_paths(image);
 
@@ -49,4 +49,3 @@ impl Rule for FsWeakConfigsRule {
         }
     }
 }
-

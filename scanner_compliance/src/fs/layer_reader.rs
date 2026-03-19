@@ -6,7 +6,6 @@ use std::path::Path;
 use tar::Archive;
 use tar::EntryType;
 
-
 fn normalize_path(p: &str) -> Option<String> {
     // tar entries can be like "./etc/passwd"
     let mut s = p.trim().to_string();
@@ -59,60 +58,58 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
     let mut out: Vec<FsEntry> = Vec::new();
 
     let entries = match ar.entries() {
-    Ok(e) => e,
-    Err(e) => {
-        // not a tar layer (could be attestation/SBOM/other blob)
-        eprintln!("layer is not a tar archive, skipping: {e}");
-        return Ok(Vec::new());
-    }
-};
-
-
-  for e in entries {
-    let entry = match e {
-        Ok(en) => en,
+        Ok(e) => e,
         Err(e) => {
-            eprintln!("layer tar entry read failed, skipping whole layer: {e}");
+            // not a tar layer (could be attestation/SBOM/other blob)
+            eprintln!("layer is not a tar archive, skipping: {e}");
             return Ok(Vec::new());
         }
     };
 
-    // ✅ récupérer le path de l'entrée tar
-    let entry_path = match entry.path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("tar: invalid path, skipping entry: {e}");
-            continue;
+    for e in entries {
+        let entry = match e {
+            Ok(en) => en,
+            Err(e) => {
+                eprintln!("layer tar entry read failed, skipping whole layer: {e}");
+                return Ok(Vec::new());
+            }
+        };
+
+        // ✅ récupérer le path de l'entrée tar
+        let entry_path = match entry.path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("tar: invalid path, skipping entry: {e}");
+                continue;
+            }
+        };
+
+        let path_str = match entry_path.to_str() {
+            Some(s) => s,
+            _ => continue,
+        };
+
+        let norm = match normalize_path(path_str) {
+            Some(s) => s,
+            _ => continue,
+        };
+
+        let mode = entry.header().mode().ok().map(|m| m as u32);
+
+        let kind = match entry.header().entry_type() {
+            EntryType::Directory => "dir",
+            EntryType::Regular => "file",
+            EntryType::Symlink => "symlink",
+            _ => "other",
         }
-    };
+        .to_string();
 
-    let path_str = match entry_path.to_str() {
-        Some(s) => s,
-        _ => continue,
-    };
-
-    let norm = match normalize_path(path_str) {
-        Some(s) => s,
-        _ => continue,
-    };
-
-    let mode = entry.header().mode().ok().map(|m| m as u32);
-
-    let kind = match entry.header().entry_type() {
-        EntryType::Directory => "dir",
-        EntryType::Regular => "file",
-        EntryType::Symlink => "symlink",
-        _ => "other",
+        out.push(FsEntry {
+            path: norm,
+            mode,
+            kind: Some(kind),
+        });
     }
-    .to_string();
-
-    out.push(FsEntry {
-        path: norm,
-        mode,
-        kind: Some(kind),
-    });
-}
-
 
     Ok(out)
 }

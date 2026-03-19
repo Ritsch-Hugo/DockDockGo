@@ -11,13 +11,13 @@ impl Rule for RequiredLabelsRule {
 
     fn evaluate(&self, image: &ImageData) -> Finding {
         if !image.has_config {
-    return Finding {
-        rule_id: self.id().to_string(),
-        status: Status::SKIP,
-        message: "Config blob not available yet (stage too early)".to_string(),
-        evidence: HashMap::new(),
-    };
-}
+            return Finding {
+                rule_id: self.id().to_string(),
+                status: Status::SKIP,
+                message: "Config blob not available yet (stage too early)".to_string(),
+                evidence: HashMap::new(),
+            };
+        }
 
         // Liste minimale (tu pourras l'étendre)
         let required = [
@@ -35,10 +35,7 @@ impl Rule for RequiredLabelsRule {
         }
 
         let mut evidence = HashMap::new();
-        evidence.insert(
-            "missing_labels".to_string(),
-            missing.join(", "),
-        );
+        evidence.insert("missing_labels".to_string(), missing.join(", "));
 
         if labels.is_empty() {
             return Finding {
