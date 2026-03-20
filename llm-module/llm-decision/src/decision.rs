@@ -159,3 +159,78 @@ pub async fn run_decision(
         }
     }
 }
+
+// ============================================================
+// Tests unitaires
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_parse_worker_response_valide() {
+        let raw = r#"{
+            "run_static_scan": true,
+            "run_compliance_scan": false,
+            "run_dynamic_scan": true,
+            "confidence": 0.85,
+            "reasoning": "Packages suspects détectés"
+        }"#;
+        let vote = parse_worker_response("test-model", raw);
+        assert!(vote.is_some());
+        let vote = vote.unwrap();
+        assert_eq!(vote.model_id, "test-model");
+        assert!(vote.run_static_scan);
+        assert!(!vote.run_compliance_scan);
+        assert!(vote.run_dynamic_scan);
+        assert_eq!(vote.confidence, 0.85);
+    }
+
+    #[test]
+    fn test_parse_worker_response_json_invalide() {
+        let vote = parse_worker_response("test-model", "ceci n'est pas du json");
+        assert!(vote.is_none());
+    }
+
+    #[test]
+    fn test_parse_worker_response_champ_manquant() {
+        // run_compliance_scan manquant → doit retourner None
+        let raw = r#"{
+            "run_static_scan": true,
+            "run_dynamic_scan": false,
+            "confidence": 0.75,
+            "reasoning": "Champ manquant"
+        }"#;
+        let vote = parse_worker_response("test-model", raw);
+        assert!(vote.is_none());
+    }
+
+    #[test]
+    fn test_parse_worker_response_confidence_clampee() {
+        // confidence > 1.0 doit être ramenée à 1.0
+        let raw = r#"{
+            "run_static_scan": true,
+            "run_compliance_scan": true,
+            "run_dynamic_scan": false,
+            "confidence": 9.99,
+            "reasoning": "Trop confiant"
+        }"#;
+        let vote = parse_worker_response("test-model", raw);
+        assert!(vote.is_some());
+        assert_eq!(vote.unwrap().confidence, 1.0);
+    }
+
+    #[test]
+    fn test_fail_safe_tous_scans_actives() {
+        let id = Uuid::new_v4();
+        let decision = fail_safe_decision(id);
+        assert_eq!(decision.pull_id, id);
+        assert!(decision.run_static_scan);
+        assert!(decision.run_compliance_scan);
+        assert!(decision.run_dynamic_scan);
+        assert_eq!(decision.final_confidence, 0.0);
+        assert!(decision.votes.is_empty());
+    }
+}

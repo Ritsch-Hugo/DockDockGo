@@ -18,7 +18,7 @@ const MAX_SBOM_CHARS: usize = 5_000;
 /// Stratégie : on tronque à MAX_ARTIFACT_CHARS et on entoure le contenu
 /// de balises explicites. Le system prompt avertit le LLM que tout ce qui
 /// est entre ces balises est une donnée non fiable, pas des instructions.
-fn sanitize(content: &str, max_len: usize) -> String {
+pub(crate) fn sanitize(content: &str, max_len: usize) -> String {
     if content.len() <= max_len {
         content.to_string()
     } else {
@@ -121,6 +121,43 @@ pub fn build_worker_prompt(bundle: &ArtifactBundle) -> Vec<ChatMessage> {
     );
 
     vec![system, ChatMessage::user(user_content)]
+}
+
+// ============================================================
+// Tests unitaires
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_contenu_court() {
+        let result = sanitize("contenu court", 100);
+        assert_eq!(result, "contenu court");
+    }
+
+    #[test]
+    fn test_sanitize_tronque_contenu_long() {
+        let contenu = "a".repeat(200);
+        let result = sanitize(&contenu, 100);
+        assert!(result.starts_with(&"a".repeat(100)));
+        assert!(result.contains("tronqué"));
+    }
+
+    #[test]
+    fn test_sanitize_longueur_exacte() {
+        // Exactement max_len caractères → pas de troncature
+        let contenu = "a".repeat(100);
+        let result = sanitize(&contenu, 100);
+        assert_eq!(result, contenu);
+    }
+
+    #[test]
+    fn test_sanitize_contenu_vide() {
+        let result = sanitize("", 100);
+        assert_eq!(result, "");
+    }
 }
 
 // ============================================================
