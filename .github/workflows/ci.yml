@@ -63,6 +63,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Convertir le nom du owner en minuscules
+        run: echo "OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Build & Push llm-manager
         uses: docker/build-push-action@v5
         with:
@@ -70,8 +73,8 @@ jobs:
           file: llm-module/llm-manager/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/llm-manager:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/llm-manager:latest
+            ghcr.io/${{ env.OWNER }}/llm-manager:${{ github.ref_name }}
+            ghcr.io/${{ env.OWNER }}/llm-manager:latest
 
       - name: Build & Push llm-decision
         uses: docker/build-push-action@v5
@@ -80,5 +83,5 @@ jobs:
           file: llm-module/llm-decision/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/llm-decision:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/llm-decision:latest
+            ghcr.io/${{ env.OWNER }}/llm-decision:${{ github.ref_name }}
+            ghcr.io/${{ env.OWNER }}/llm-decision:latest
