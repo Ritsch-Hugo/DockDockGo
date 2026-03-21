@@ -31,6 +31,11 @@ pub struct Config {
 
     /// Port d'écoute du service llm-manager.
     pub manager_port: u16,
+
+    /// Hôte du service llm-manager (pour llm-decision).
+    /// Valeur par défaut : localhost (dev local)
+    /// En Docker/Kubernetes : IP ou nom du service manager.
+    pub manager_host: String,
 }
 
 impl Config {
@@ -72,11 +77,14 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3003),
+
+            manager_host: std::env::var("MANAGER_HOST")
+                .unwrap_or_else(|_| "localhost".to_string()),
         }
     }
 
     /// URL complète du service llm-manager (utilisée par llm-decision au démarrage).
     pub fn manager_url(&self) -> String {
-        format!("http://localhost:{}", self.manager_port)
+        format!("http://{}:{}", self.manager_host, self.manager_port)
     }
 }
