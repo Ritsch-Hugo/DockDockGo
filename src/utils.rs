@@ -634,11 +634,15 @@ pub async fn check_manifest_in_list(
         None => return None,
     };
 
-    let image_key = format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag);
-
-    let found = crate::db::is_image_in_list(pool, &image_key, mode)
-        .await
-        .unwrap_or(false);
+    let found = crate::db::is_image_in_list(
+        pool,
+        &ctx.registry,
+        &ctx.repository,
+        &ctx.tag,
+        mode,
+    )
+    .await
+    .unwrap_or(false);
 
     if !found {
         return None;
@@ -646,7 +650,7 @@ pub async fn check_manifest_in_list(
 
     match mode {
         "blacklist" => {
-            println!("[BLACKLIST CHECK] {} -> pull refusé", image_key);
+            println!("[BLACKLIST CHECK] {}/{} :{} -> pull refusé", ctx.registry, ctx.repository, ctx.tag);
             Some(
                 Response::builder()
                     .status(StatusCode::FORBIDDEN)
@@ -655,7 +659,7 @@ pub async fn check_manifest_in_list(
             )
         }
         "whitelist" => {
-            println!("[WHITELIST CHECK] {} -> pull autorisé", image_key);
+            println!("[WHITELIST CHECK] {}/{} :{} -> pull autorisé", ctx.registry, ctx.repository, ctx.tag);
             Some(
                 Response::builder()
                     .status(StatusCode::OK)
@@ -674,11 +678,16 @@ pub async fn add_context_to_blacklist_or_whitelist(
     list_type: &str,
     pool: &sqlx::PgPool,
 ) -> Result<()> {
-    let image_key = format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag);
+    crate::db::add_image_to_list(
+        pool,
+        &ctx.registry,
+        &ctx.repository,
+        &ctx.tag,
+        list_type,
+    )
+    .await?;
 
-    crate::db::add_image_to_list(pool, &image_key, list_type).await?;
-
-    println!("[{}] {} ajouté", list_type.to_uppercase(), image_key);
+    println!("[{}] {}/{} :{} ajouté", list_type.to_uppercase(), ctx.registry, ctx.repository, ctx.tag);
     Ok(())
 }
 

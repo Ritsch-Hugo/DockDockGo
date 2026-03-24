@@ -221,17 +221,22 @@ impl RateLimiter {
         }
     }
 
-    /// Nettoyage périodique des entrées expirées pour éviter la fuite mémoire
+    //Nettoyage périodique des entrées expirées pour éviter la fuite mémoire
+    
     pub fn start_cleanup(self: Arc<Self>) {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 let mut map = self.entries.lock().await;
                 let now = Instant::now();
+                let before = map.len();
                 map.retain(|_, entry| {
                     now.duration_since(entry.window_start) <= self.window
                 });
-                println!("[RATE-LIMIT] Nettoyage effectué, {} IPs en mémoire", map.len());
+                let removed = before - map.len();
+                if removed > 0 {
+                    println!("[RATE-LIMIT] Nettoyage effectué, {} IPs supprimées ({} restantes)", removed, map.len());
+                }
             }
         });
     }
@@ -276,7 +281,7 @@ impl ResolvesServerCert for MultiCertResolver {
 type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
 // Définir le timeout désiré (ex : 30 secondes)
-const CONTEXT_TIMEOUT: Duration = Duration::from_secs(200);
+const CONTEXT_TIMEOUT: Duration = Duration::from_secs(200000);
 
 //static UPSTREAM: &str = "https://registry-1.docker.io";
 
@@ -480,8 +485,6 @@ async fn add_file_if_exists(
         }
     }
 }
-
-
 
     let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
 
@@ -1460,6 +1463,12 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         //-------------Cas ou le fichier n'est ni en cache, ni en whitelist, ni en blacklist et on ets pas a la dernière requete -------------
         // -> Cas ou on scan les digests un par un 
 
+
+        //--------------------------------------------------------------------------------------------------------------------------------
+        //CETTE PARTIE DU FAIT L'APPEL ORCHESTRATEUR POUR CHAQUES DIGESTS (1 PAR 1) -> DOIT ETRE COMMENTÉE POUR DES RAISON DE PERFORMANCES 
+        //--------------------------------------------------------------------------------------------------------------------------------
+
+        /* 
         //[Appel API] -> pour envoyer les données au scan de sécurité
 
         //Proxy -> API -> Scanner
@@ -1548,16 +1557,19 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 }
             }
         }
+        */
+        //--------------------------------------------------------------------------------------------------------------------------------
+        //FIN DE LA PARTIE CALL PAR DIGEST  
+        //--------------------------------------------------------------------------------------------------------------------------------
     }
 
-    //------------- Cas ou le digest est accepté par le scan de sécurité -------------
+    //------------- Cas des digests demandés par le client avant le dernier digest -------------
+    // /!\ Le fait de ne pas scanner digests par digests implique de laisser passer tout digests le scan final /!\
+    // /!\ Si certain digests sont deja present en local -> pull completé avant que la condition prediction de digests soit satisfaite -> pas de scan final /!\
 
-
-    //Appeller la fonction qui va supprimer le digest de la quarantaine et le mettre en cache 
     
 
     dec_active(&pull_contexts, context_uuid).await; //Appel is_allowed ici
-
 
     // Construire la réponse finale pour le client -> 200 OK
     let mut resp = Response::builder().status(status);

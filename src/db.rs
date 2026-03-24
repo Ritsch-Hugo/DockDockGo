@@ -1,5 +1,6 @@
 use anyhow::Result;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 /// Initialise le pool de connexions PostgreSQL
 pub async fn init_pool(database_url: &str) -> Result<PgPool> {
@@ -12,17 +13,26 @@ pub async fn init_pool(database_url: &str) -> Result<PgPool> {
 /// Retourne true si trouvée
 pub async fn is_image_in_list(
     pool: &PgPool,
-    image_key: &str,
-    list: &str, // "whitelist" ou "blacklist"
+    registry: &str,
+    repository: &str,
+    tag: &str,
+    list: &str,
 ) -> Result<bool> {
-    let query = match list {
-        "whitelist" => "SELECT COUNT(*) FROM whitelist WHERE image = $1",
-        "blacklist" => "SELECT COUNT(*) FROM blacklist WHERE image = $1",
+    let table = match list {
+        "whitelist" => "whitelist",
+        "blacklist" => "blacklist",
         _ => return Ok(false),
     };
 
-    let count: i64 = sqlx::query_scalar(query)
-        .bind(image_key)
+    let query = format!(
+        "SELECT COUNT(*) FROM {} WHERE registry = $1 AND repository = $2 AND tag = $3",
+        table
+    );
+
+    let count: i64 = sqlx::query_scalar(&query)
+        .bind(registry)
+        .bind(repository)
+        .bind(tag)
         .fetch_one(pool)
         .await?;
 
@@ -32,20 +42,32 @@ pub async fn is_image_in_list(
 /// Ajoute une image dans la whitelist ou blacklist
 pub async fn add_image_to_list(
     pool: &PgPool,
-    image_key: &str,
-    list: &str, // "whitelist" ou "blacklist"
+    registry: &str,
+    repository: &str,
+    tag: &str,
+    list: &str,
 ) -> Result<()> {
-    let query = match list {
-        "whitelist" => "INSERT INTO whitelist (image) VALUES ($1) ON CONFLICT DO NOTHING",
-        "blacklist" => "INSERT INTO blacklist (image) VALUES ($1) ON CONFLICT DO NOTHING",
+    let table = match list {
+        "whitelist" => "whitelist",
+        "blacklist" => "blacklist",
         _ => return Ok(()),
     };
 
-    sqlx::query(query)
-        .bind(image_key)
+    let query = format!(
+        "INSERT INTO {} (id, registry, repository, tag) 
+        VALUES ($1::uuid, $2, $3, $4) 
+        ON CONFLICT DO NOTHING",
+        table
+    );
+
+    sqlx::query(&query)
+        .bind(Uuid::new_v4().to_string())
+        .bind(registry)
+        .bind(repository)
+        .bind(tag)
         .execute(pool)
         .await?;
 
-    println!("[DB] Ajouté dans {} : {}", list, image_key);
+    println!("[DB] Ajouté dans {} : {}/{} :{}", list, registry, repository, tag);
     Ok(())
 }
