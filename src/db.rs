@@ -156,24 +156,3 @@ pub async fn upsert_cache_file(
     .await?;
     Ok(())
 }
-
-/// Supprime un fichier de la table cache
-pub async fn delete_cache_file(
-    pool: &PgPool,
-    registry: &str,
-    repository: &str,
-    digest: &str,
-    file_type: &str,
-) -> Result<()> {
-    sqlx::query(
-        "DELETE FROM cache
-         WHERE registry = $1 AND repository = $2 AND digest = $3 AND type = $4"
-    )
-    .bind(registry)
-    .bind(repository)
-    .bind(digest)
-    .bind(file_type)
-    .execute(pool)
-    .await?;
-    Ok(())
-}

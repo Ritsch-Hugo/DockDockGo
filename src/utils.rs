@@ -9,7 +9,6 @@ use sqlx::PgPool;
 
 // ===== Tokio =====
 use tokio::sync::Mutex as TokioMutex;
-use tokio::time::sleep;
 use crate::registry_auth::RegistryClient;
 
 // ===== Hyper =====

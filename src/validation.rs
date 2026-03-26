@@ -131,28 +131,4 @@ pub fn validate_request_components(
     Ok(())
 }
 
-/// Vérifie que la taille du blob ne dépasse pas la limite autorisée
-/// Retourne Ok(()) si la taille est acceptable, Err(String) sinon
-pub fn check_blob_size(path: &str, headers: &reqwest::header::HeaderMap) -> Result<(), String> {
-    const MAX_BLOB_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
-
-    if !path.contains("/blobs/") {
-        return Ok(());
-    }
-
-    if let Some(content_length) = headers
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
-    {
-        if content_length > MAX_BLOB_SIZE {
-            return Err(format!(
-                "Blob trop volumineux | size={} max={}",
-                content_length, MAX_BLOB_SIZE
-            ));
-        }
-    }
-
-    Ok(())
-}
 
