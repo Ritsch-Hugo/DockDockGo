@@ -1,7 +1,12 @@
 use axum::extract::DefaultBodyLimit;
 use axum::{
-    extract::Multipart, http::StatusCode, response::IntoResponse, routing::post, Json, Router,
+    extract::Multipart,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
 };
+mod auth;
 use bytes::Bytes;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -22,9 +27,13 @@ struct HighLevelResp {
 
 const HL_URL: &str = "http://127.0.0.1:4000/v1/high-level";
 static COMPLIANCE_URL: &str = "http://127.0.0.1:3001/v1/scan-upload";
+static STATIC_SCAN_URL: &str = "http://127.0.0.1:3002/v1/scan-upload";
 
 static MANIFESTS: Lazy<DashMap<Uuid, Bytes>> = Lazy::new(DashMap::new);
 static PENDING_BLOBS: Lazy<DashMap<Uuid, Vec<Bytes>>> = Lazy::new(DashMap::new);
+
+static STATIC_MANIFESTS: Lazy<DashMap<Uuid, Bytes>> = Lazy::new(DashMap::new);
+static STATIC_PENDING_BLOBS: Lazy<DashMap<Uuid, Vec<Bytes>>> = Lazy::new(DashMap::new);
 
 // ===================
 // PullContext INCHANGÉ
@@ -82,7 +91,12 @@ fn sha256_digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", h.finalize())
 }
 
-async fn send_to_compliance(manifest: Bytes, blob: Bytes) -> Result<serde_json::Value, String> {
+async fn send_manifest_blob_to_service(
+    service_name: &str,
+    service_url: &str,
+    manifest: Bytes,
+    blob: Bytes,
+) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
 
     let form = multipart::Form::new()
@@ -102,20 +116,20 @@ async fn send_to_compliance(manifest: Bytes, blob: Bytes) -> Result<serde_json::
         );
 
     let resp = client
-        .post(COMPLIANCE_URL)
+        .post(service_url)
         .multipart(form)
         .send()
         .await
-        .map_err(|e| format!("compliance unreachable: {e}"))?;
+        .map_err(|e| format!("{service_name} unreachable: {e}"))?;
 
     let status = resp.status();
     let text = resp.text().await.map_err(|e| e.to_string())?;
 
     if !status.is_success() {
-        return Err(format!("compliance http {}: {}", status, text));
+        return Err(format!("{service_name} http {status}: {text}"));
     }
 
-    serde_json::from_str(&text).map_err(|e| format!("bad json from compliance: {e}"))
+    serde_json::from_str(&text).map_err(|e| format!("bad json from {service_name}: {e}"))
 }
 
 // ---------------------------
@@ -144,10 +158,10 @@ impl ScanType {
 // Stub “IA agentique”: choix aléatoire pour l’instant
 fn agent_choose_scan(_ctx: &PullContext, kind: &str, digest: &str) -> ScanType {
     let choices = [
-        ScanType::Compliance,
-        ScanType::Sbom,
+        // ScanType::Compliance,
+        //   ScanType::Sbom,
         ScanType::Statique,
-        ScanType::Dynamique,
+        //     ScanType::Dynamique,
     ];
     let mut rng = thread_rng();
     let pick = *choices.choose(&mut rng).unwrap();
@@ -183,7 +197,14 @@ async fn dispatch_to_scanner(
                 if let Some((_k, mut pending)) = PENDING_BLOBS.remove(&ctx.uuid) {
                     if let Some(man) = MANIFESTS.get(&ctx.uuid).map(|v| v.value().clone()) {
                         for b in pending.drain(..) {
-                            match send_to_compliance(man.clone(), b).await {
+                            match send_manifest_blob_to_service(
+                                "compliance",
+                                COMPLIANCE_URL,
+                                man.clone(),
+                                b,
+                            )
+                            .await
+                            {
                                 Ok(v) => println!(
                                     "[ORCH][COMPLIANCE] ok pull_id={} resp={}",
                                     ctx.uuid, v
@@ -207,7 +228,9 @@ async fn dispatch_to_scanner(
                         digest,
                         bytes.len()
                     );
-                    match send_to_compliance(man, bytes).await {
+                    match send_manifest_blob_to_service("compliance", COMPLIANCE_URL, man, bytes)
+                        .await
+                    {
                         Ok(v) => println!("[ORCH][COMPLIANCE] ok pull_id={} resp={}", ctx.uuid, v),
                         Err(e) => {
                             println!("[ORCH][COMPLIANCE] error pull_id={} err={}", ctx.uuid, e)
@@ -236,14 +259,68 @@ async fn dispatch_to_scanner(
             // sbom_scan(bytes, digest, ctx).await;
         }
         ScanType::Statique => {
-            println!(
-                "[ORCH][SCAN][STATIQUE] pull_id={} kind={} digest={} size={}",
-                ctx.uuid,
-                kind,
-                digest,
-                bytes.len()
-            );
-            // static_scan(bytes, digest, ctx).await;
+            if kind == "manifest" {
+                STATIC_MANIFESTS.insert(ctx.uuid, bytes.clone());
+                println!(
+                    "[ORCH][STATIQUE] manifest stored pull_id={} digest={}",
+                    ctx.uuid, digest
+                );
+
+                if let Some((_k, mut pending)) = STATIC_PENDING_BLOBS.remove(&ctx.uuid) {
+                    if let Some(man) = STATIC_MANIFESTS.get(&ctx.uuid).map(|v| v.value().clone()) {
+                        for b in pending.drain(..) {
+                            match send_manifest_blob_to_service(
+                                "statique",
+                                STATIC_SCAN_URL,
+                                man.clone(),
+                                b,
+                            )
+                            .await
+                            {
+                                Ok(v) => {
+                                    println!("[ORCH][STATIQUE] ok pull_id={} resp={}", ctx.uuid, v)
+                                }
+                                Err(e) => println!(
+                                    "[ORCH][STATIQUE] error pull_id={} err={}",
+                                    ctx.uuid, e
+                                ),
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
+            if kind == "blob" {
+                if let Some(man) = STATIC_MANIFESTS.get(&ctx.uuid).map(|v| v.value().clone()) {
+                    println!(
+                        "[ORCH][STATIQUE] forwarding blob pull_id={} digest={} size={}",
+                        ctx.uuid,
+                        digest,
+                        bytes.len()
+                    );
+                    match send_manifest_blob_to_service("statique", STATIC_SCAN_URL, man, bytes)
+                        .await
+                    {
+                        Ok(v) => println!("[ORCH][STATIQUE] ok pull_id={} resp={}", ctx.uuid, v),
+                        Err(e) => {
+                            println!("[ORCH][STATIQUE] error pull_id={} err={}", ctx.uuid, e)
+                        }
+                    }
+                } else {
+                    println!(
+                        "[ORCH][STATIQUE] blob buffered (manifest missing) pull_id={} digest={}",
+                        ctx.uuid, digest
+                    );
+                    STATIC_PENDING_BLOBS
+                        .entry(ctx.uuid)
+                        .or_default()
+                        .push(bytes);
+                }
+                return;
+            }
+
+            println!("[ORCH][STATIQUE] ignoring kind={}", kind);
         }
         ScanType::Dynamique => {
             println!(
@@ -425,7 +502,13 @@ async fn decide(mut mp: Multipart) -> impl IntoResponse {
 #[tokio::main]
 async fn main() {
     let app = Router::new()
+        // API existante
         .route("/v1/decision", post(decide))
+        // Dashboard / login
+        .route("/", get(auth::login_page))
+        .route("/login", post(auth::login_submit))
+        .route("/dashboard/dev", get(auth::dev_dashboard))
+        .route("/dashboard/rssi", get(auth::rssi_dashboard))
         // Axum : désactive la limite par défaut (souvent ~2MB selon version/config)
         .layer(DefaultBodyLimit::disable())
         // Tower : fixe ta limite réelle (mets une valeur réaliste, pas forcément MAX)
