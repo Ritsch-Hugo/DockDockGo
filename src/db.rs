@@ -71,3 +71,109 @@ pub async fn add_image_to_list(
     println!("[DB] Ajouté dans {} : {}/{} :{}", list, registry, repository, tag);
     Ok(())
 }
+
+/// Ajoute ou met à jour un fichier dans la table quarantine
+pub async fn upsert_quarantine_file(
+    pool: &PgPool,
+    registry: &str,
+    repository: &str,
+    digest: &str,        // "sha256:abc123..."
+    file_type: &str,     // "manifest", "blob", "referrer"
+    digest_algo: &str,   // "sha256"
+    file_path: &str,
+    size_bytes: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO quarantine (id, registry, repository, digest, type, digest_algo, file_path, size_bytes, added_at)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, NOW())
+         ON CONFLICT (registry, repository, digest, type)
+         DO UPDATE SET file_path = EXCLUDED.file_path,
+                       size_bytes = EXCLUDED.size_bytes,
+                       added_at = NOW()"
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(registry)
+    .bind(repository)
+    .bind(digest)
+    .bind(file_type)
+    .bind(digest_algo)
+    .bind(file_path)
+    .bind(size_bytes)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Supprime un fichier de la table quarantine
+pub async fn delete_quarantine_file(
+    pool: &PgPool,
+    registry: &str,
+    repository: &str,
+    digest: &str,
+    file_type: &str,
+) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM quarantine
+         WHERE registry = $1 AND repository = $2 AND digest = $3 AND type = $4"
+    )
+    .bind(registry)
+    .bind(repository)
+    .bind(digest)
+    .bind(file_type)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Ajoute ou met à jour un fichier dans la table cache
+pub async fn upsert_cache_file(
+    pool: &PgPool,
+    registry: &str,
+    repository: &str,
+    digest: &str,
+    file_type: &str,
+    digest_algo: &str,
+    file_path: &str,
+    size_bytes: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO cache (id, registry, repository, digest, type, digest_algo, file_path, size_bytes, added_at)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, NOW())
+         ON CONFLICT (registry, repository, digest, type)
+         DO UPDATE SET file_path = EXCLUDED.file_path,
+                       size_bytes = EXCLUDED.size_bytes,
+                       added_at = NOW()"
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(registry)
+    .bind(repository)
+    .bind(digest)
+    .bind(file_type)
+    .bind(digest_algo)
+    .bind(file_path)
+    .bind(size_bytes)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Supprime un fichier de la table cache
+pub async fn delete_cache_file(
+    pool: &PgPool,
+    registry: &str,
+    repository: &str,
+    digest: &str,
+    file_type: &str,
+) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM cache
+         WHERE registry = $1 AND repository = $2 AND digest = $3 AND type = $4"
+    )
+    .bind(registry)
+    .bind(repository)
+    .bind(digest)
+    .bind(file_type)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

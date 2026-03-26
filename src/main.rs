@@ -9,6 +9,7 @@ use hyper::server::conn::Http;
 use reqwest::Client;
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
+use serde_json::to_string;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
@@ -124,6 +125,12 @@ pub struct PullContext
     pub notify_zero: Arc<Notify>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanDecision {
+    PENDING,
+    ALLOW,
+    DENY,
+}
 
 // Erreurs possibles lors de la récupération du contexte PullContext2
 #[derive(Debug)]
@@ -363,7 +370,7 @@ pub async fn launch_final_scan(
     uuid: Uuid,
     path: &str,
     pool: &sqlx::PgPool,
-) -> Option<bool>
+) -> Option<ScanDecision>
 {
 
     // 1️⃣ récupérer le contexte
@@ -388,7 +395,7 @@ pub async fn launch_final_scan(
     let state = match is_allowed(&mut ctx_clone, path, "scan_final").await {
         Err(e) => {
             eprintln!("[ORCH ERROR] {}", e);
-            return Some(false); // ← fail closed
+            return None; // ← fail closed
         }
         Ok(s) => s,
     };
@@ -398,23 +405,39 @@ pub async fn launch_final_scan(
     let mut list = pull_contexts.lock().await;
     let ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
 
-    if state == "ALLOW" || state == "PENDING" {
+    if state == "ALLOW" //|| state == "PENDING" {
+    {
         println!("[SCAN FINAL] OK → cache");
 
         //Ajouter a whitelist 
         if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await{
             eprintln!("[WHITELIST ERROR] {}", e);
         }
-        copy_ctx_from_quarantine_to_cache(ctx);
+        copy_ctx_from_quarantine_to_cache(ctx, &pool);
         cleanup_tmp_for_uuid(&ctx.uuid);
-        remove_ctx_digests_from_quarantine(ctx);
+        remove_ctx_digests_from_quarantine(ctx, &pool);
+
+        sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', scan_completed = true, last_activity = NOW() WHERE uuid = $1::uuid")
+        .bind(uuid.to_string())
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision ALLOW: {}", e); Default::default() });
 
         list.retain(|c| c.uuid != uuid);
-        return Some(true);
+        return Some(ScanDecision::ALLOW);
     }
+     
+    if state == "PENDING" 
+    {
+        cleanup_tmp_for_uuid(&ctx.uuid);
+
+        list.retain(|c| c.uuid != uuid);
+
+        return Some(ScanDecision::PENDING);
+    }
+    
 
     if state == "DENY" {
-        println!("[SCAN FINAL] REFUSÉ");
 
         //Ajouter a blacklist
         if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await{
@@ -422,9 +445,16 @@ pub async fn launch_final_scan(
         }
 
         cleanup_tmp_for_uuid(&ctx.uuid);
-        remove_ctx_digests_from_quarantine(ctx);
+        remove_ctx_digests_from_quarantine(ctx, &pool);
+
+        sqlx::query("UPDATE pulls SET decision_final = 'DENY', scan_completed = true, last_activity = NOW() WHERE uuid = $1::uuid")
+        .bind(uuid.to_string())
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision DENY: {}", e); Default::default() });
+
         list.retain(|c| c.uuid != uuid);
-        return Some(false);
+        return Some(ScanDecision::DENY);
     }
 
     println!("[SCAN FINAL] état inconnu");
@@ -952,8 +982,15 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
                                     eprintln!("[WHITELIST ERROR] {}", e);
                                 }
+
+                                sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                                    .bind(context_uuid.to_string())
+                                    .execute(&pool)
+                                    .await
+                                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
+
                                 cleanup_tmp_for_uuid(&ctx.uuid);
-                                remove_ctx_digests_from_quarantine(&ctx);
+                                remove_ctx_digests_from_quarantine(ctx, &pool);
 
                                 should_cleanup = true;
 
@@ -962,7 +999,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 eprintln!("[PullContext] Pull invalide");
                                 //
                                 cleanup_tmp_for_uuid(&ctx.uuid);
-                                remove_ctx_digests_from_quarantine(&ctx);
+                                remove_ctx_digests_from_quarantine(ctx, &pool);
                                 drop(list);
                                 dec_active(&pull_contexts, context_uuid).await;
 
@@ -1151,6 +1188,13 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     Ok(DigestVerificationState::Completed) => 
                     {
                         println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
+
+                        sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                            .bind(context_uuid.to_string())
+                            .execute(&pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
+
                         //Mettre la variable scan_completed a true
                         ctx.pull_completed = true;
 
@@ -1183,7 +1227,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     || path.contains("/referrers/")
                 {
                     println!("Ecriture des fichiers en cache");
-                    save_to_cache(&path, &bytes, ctx);
+                    save_to_cache(&path, &bytes, ctx, &pool);
                 }
             }
         } 
@@ -1325,7 +1369,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             println!("Ecriture des fichiers en quarantaine");
             let list = pull_contexts.lock().await;
             if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
-                save_to_quarantine(&path, &bytes, ctx);
+                save_to_quarantine(&path, &bytes, ctx, &pool);
             }
         }
     }
@@ -1391,12 +1435,18 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 launch_final_scan(&pull_contexts, context_uuid, &path, &pool).await;
 
                             match status_scan_final {
-                                Some(true) => {
+                                Some(ScanDecision::ALLOW) => {
+
+                                    sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                                    .bind(context_uuid.to_string())
+                                    .execute(&pool)
+                                    .await
+                                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
+
                                     println!("[SECURITY CHECK] Image conforme -> ajout whitelist");
 
                                     cleanup_tmp_for_uuid(&ctx_clone.uuid);
-                                    remove_ctx_digests_from_quarantine(&ctx_clone);
-
+                                    remove_ctx_digests_from_quarantine(&ctx_clone, &pool);
 
                                     let mut list = pull_contexts.lock().await;
                                     list.retain(|c| c.uuid != context_uuid);
@@ -1407,14 +1457,21 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                     }
                                     return resp.body(Body::from(bytes)).unwrap();
                                 }
-                                Some(false) => {
+                                Some(ScanDecision::DENY) => {
+                                    
+                                    sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'DENY', last_activity = NOW() WHERE uuid = $1::uuid")
+                                    .bind(context_uuid.to_string())
+                                    .execute(&pool)
+                                    .await
+                                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
+
 
                                     //Ajouter a blacklist
                                     if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_clone.clone(), "blacklist", &pool).await {
                                         eprintln!("[WHITELIST ERROR] {}", e);
                                     }
                                     cleanup_tmp_for_uuid(&ctx_clone.uuid);
-                                    remove_ctx_digests_from_quarantine(&ctx_clone);
+                                    remove_ctx_digests_from_quarantine(&ctx_clone, &pool);
 
                                     println!("[SECURITY CHECK] Image non conforme -> bloquage du pull");
 
@@ -1425,6 +1482,47 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                         .body(Body::from("Image refused by security scan"))
                                         .unwrap();
                                 }
+                                /* 
+                                Some(ScanDecision::PENDING) => 
+                                {
+
+                                    sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                                    .bind(context_uuid.to_string())
+                                    .execute(&pool)
+                                    .await
+                                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
+
+                                    println!("[SECURITY CHECK] Image conforme -> ajout whitelist");
+
+                                    cleanup_tmp_for_uuid(&ctx_clone.uuid);
+                                    remove_ctx_digests_from_quarantine(&ctx_clone, &pool);
+
+                                    let mut list = pull_contexts.lock().await;
+                                    list.retain(|c| c.uuid != context_uuid);
+
+                                    let mut resp = Response::builder().status(status);
+                                    for (k, v) in headers.iter() {
+                                        resp = resp.header(k, v);
+                                    }
+                                    return resp.body(Body::from(bytes)).unwrap();
+                                }*/
+
+                                
+                                Some(ScanDecision::PENDING) => {
+
+                                    //Image continue d'etre scanné puis est soit ajouté a la blacklist / whitelist ( + cache) coté orchestrateur   
+                                    //Notify dashboard user quand image prete   
+
+                                    println!("[SCAN FINAL] PENDING -> Scan en cours");
+                                    
+                                    let mut list = pull_contexts.lock().await;
+                                    list.retain(|c| c.uuid != context_uuid);
+                                    return Response::builder()
+                                        .status(StatusCode::FORBIDDEN)
+                                        .body(Body::from("Image en cours de scan"))
+                                        .unwrap();
+                                }
+                                
                                 None => {
                                     println!("[SECURITY CHECK]- Race condition détectée ou erreur lors du scan final");
 
@@ -1514,7 +1612,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                     }
 
                                     cleanup_tmp_for_uuid(&ctx.uuid);
-                                    remove_ctx_digests_from_quarantine(&ctx);
+                                    remove_ctx_digests_from_quarantine(ctx, &pool);
 
 
                                 }
@@ -1629,7 +1727,7 @@ async fn main() -> Result<()> {
     let pull_context: PullContextList = Arc::new(TokioMutex::new(Vec::new()));
 
     //Ajout de la fonction de timout 
-    check_timout(pull_context.clone());
+    check_timout(pull_context.clone(), &pool);
 
 
     println!("✅ MITM Docker registry en écoute sur https://registry-1.docker.io:443");

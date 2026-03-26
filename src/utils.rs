@@ -4,6 +4,8 @@ use std::fs::create_dir_all;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use sqlx::PgPool;
+
 
 // ===== Tokio =====
 use tokio::sync::Mutex as TokioMutex;
@@ -56,6 +58,7 @@ pub fn save_to_quarantine(
     path: &str,
     bytes: &[u8],
     ctx: &PullContext,
+    pool: &sqlx::PgPool,
 ) {
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
     if parts.len() < 4 {
@@ -104,6 +107,21 @@ pub fn save_to_quarantine(
                 Some("json"),
             );
             println!("Manifest racine (par tag) Ajouté a la quarantaine");
+
+            if let Some(racine) = &ctx.manifest_racine_digest {
+                let fp = format!("{}/manifests/sha256/{}.json", base_dir, racine.value);
+                let size = bytes.len() as i64;
+                let pool2 = pool.clone();
+                let registry2 = ctx.registry.clone();
+                let repository2 = ctx.repository.clone();
+                let digest2 = format!("sha256:{}", racine.value);
+                tokio::spawn(async move {
+                    let _ = crate::db::upsert_quarantine_file(
+                        &pool2, &registry2, &repository2,
+                        &digest2, "manifest", "sha256", &fp, size,
+                    ).await;
+                });
+            }
         } else {
             eprintln!("[QUARANTINE] manifest par tag mais manifest_racine_digest absent du ctx");
         }
@@ -124,6 +142,22 @@ pub fn save_to_quarantine(
             Some("json"),
         );
         println!("Manifest Ajouté a la quarantaine");
+
+        {
+            let digest_value = parts[3].trim_start_matches("sha256:");
+            let fp = format!("{}/manifests/sha256/{}.json", base_dir, digest_value);
+            let size = bytes.len() as i64;
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest_value);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_quarantine_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "manifest", "sha256", &fp, size,
+                ).await;
+            });
+        }
     }
 
     // ===== BLOB =====
@@ -142,6 +176,22 @@ pub fn save_to_quarantine(
             None,
         );
         println!("Blob Ajouté a la quarantaine");
+
+        {
+            let digest_value = parts[3].trim_start_matches("sha256:");
+            let fp = format!("{}/blobs/sha256/{}", base_dir, digest_value);
+            let size = bytes.len() as i64;
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest_value);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_quarantine_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "blob", "sha256", &fp, size,
+                ).await;
+            });
+        }
     }
 
     // ===== REFERRERS =====
@@ -160,6 +210,23 @@ pub fn save_to_quarantine(
             Some("json"),
         );
         println!("Refferer Ajouté a la quarantaine");
+        
+        {
+            let digest_value = parts[3].trim_start_matches("sha256:");
+            let fp = format!("{}/referrers/sha256/{}.json", base_dir, digest_value);
+            let size = bytes.len() as i64;
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest_value);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_quarantine_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "referrer", "sha256", &fp, size,
+                ).await;
+            });
+        }
+
     }
 }
 
@@ -167,6 +234,7 @@ pub fn save_to_cache(
     path: &str,
     bytes: &[u8],
     ctx: &PullContext,
+    pool: &sqlx::PgPool,
 ) {
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
     if parts.len() < 4 {
@@ -215,6 +283,21 @@ pub fn save_to_cache(
                 Some("json"),
             );
             println!("Manifest racine (par tag) Ajouté a la quarantaine");
+          
+            if let Some(racine) = &ctx.manifest_racine_digest {
+                let fp = format!("{}/manifests/sha256/{}.json", base_dir, racine.value);
+                let size = bytes.len() as i64;
+                let pool2 = pool.clone();
+                let registry2 = ctx.registry.clone();
+                let repository2 = ctx.repository.clone();
+                let digest2 = format!("sha256:{}", racine.value);
+                tokio::spawn(async move {
+                    let _ = crate::db::upsert_cache_file(
+                        &pool2, &registry2, &repository2,
+                        &digest2, "manifest", "sha256", &fp, size,
+                    ).await;
+                });
+            }
         } else {
             eprintln!("[QUARANTINE] manifest par tag mais manifest_racine_digest absent du ctx");
         }
@@ -235,6 +318,22 @@ pub fn save_to_cache(
             Some("json"),
         );
         println!("Manifest Ajouté au cache");
+
+        {
+            let digest_value = parts[3].trim_start_matches("sha256:");
+            let fp = format!("{}/manifests/sha256/{}.json", base_dir, digest_value);
+            let size = bytes.len() as i64;
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest_value);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_cache_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "manifest", "sha256", &fp, size,
+                ).await;
+            });
+        }
     }
 
     // ===== BLOB =====
@@ -253,6 +352,22 @@ pub fn save_to_cache(
             None,
         );
         println!("Blob Ajouté au cache");
+
+        {
+            let digest_value = parts[3].trim_start_matches("sha256:");
+            let fp = format!("{}/blobs/sha256/{}", base_dir, digest_value);
+            let size = bytes.len() as i64;
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest_value);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_cache_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "blob", "sha256", &fp, size,
+                ).await;
+            });
+        }
     }
 
     // ===== REFERRERS =====
@@ -276,6 +391,22 @@ pub fn save_to_cache(
             Some("json"),
         );
         println!("Refferer Ajouté au cache");
+        
+        {
+            let digest_value = parts[3].trim_start_matches("sha256:");
+            let fp = format!("{}/referrers/sha256/{}.json", base_dir, digest_value);
+            let size = bytes.len() as i64;
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest_value);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_cache_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "referrer", "sha256", &fp, size,
+                ).await;
+            });
+        }
     }
 }
 
@@ -693,43 +824,46 @@ pub async fn add_context_to_blacklist_or_whitelist(
 
 
 //Check si aucune requetes envoyé dans le laspe de temps CONTEXT_TIMEOUT
-pub fn check_timout(pull_contexts: PullContextList) {
+pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
 
-    //tache asyncrone qui s'appelles toutes les secondes 
+    let pool_clone = pool.clone();
+
     tokio::spawn(async move {
         loop {
-            sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
 
-            let mut expired_uuids = Vec::new();
+            let mut expired_contexts = Vec::new(); // On stocke les objets expirés ici
 
             let mut list = pull_contexts.lock().await;
             let before = list.len();
 
-            //garde 
             list.retain(|ctx| {
-                //garde les contextes qui ne depassent pas le timout 
                 let alive = ctx.last_activity.elapsed() < CONTEXT_TIMEOUT;
                 if !alive {
-                    println!(
-                        "[Timeout-Reach] Contexte expiré supprimé | uuid={}",
-                        ctx.uuid
-                    );
-                    // 🧹 suppression quarantaine AVANT suppression du ctx
-                    remove_ctx_digests_from_quarantine(ctx);
-                    expired_uuids.push(ctx.uuid);
+                    println!("[Timeout-Reach] Contexte expiré détecté | uuid={}", ctx.uuid);
+                    expired_contexts.push(ctx.clone()); // On mémorise pour plus tard
                 }
                 alive
             });
 
-            drop(list); // 🔓 libérer le lock avant l'acces au contexte pour supprimer 
+            drop(list); // 🔓 On libère le lock AVANT les appels async
 
-            // 🧹 Suppression des dossiers tmp/<uuid>
-            for uuid in expired_uuids 
-            {
-                cleanup_tmp_for_uuid(&uuid);
+
+            for ctx in &expired_contexts {
+                // L'UPDATE en base de données avec .await
+                let _ = sqlx::query("UPDATE pulls SET decision_final = 'TIMEOUT', last_activity = NOW() WHERE uuid = $1::uuid")
+                    .bind(ctx.uuid.to_string())
+                    .execute(&pool_clone)
+                    .await
+                    .unwrap_or_else(|e| { 
+                        eprintln!("[DB] Erreur UPDATE pulls timeout: {}", e); 
+                        Default::default() 
+                    });
+
+                remove_ctx_digests_from_quarantine(ctx, &pool_clone);
+                cleanup_tmp_for_uuid(&ctx.uuid);
             }
 
-            //Si la liste n'a plus la meme taille 
             if before != pull_contexts.lock().await.len() {
                 println!(
                     "[Timeout-Reach] Nettoyage effectué: {} → {}",
@@ -759,7 +893,7 @@ pub fn cleanup_tmp_for_uuid(uuid: &Uuid) {
     }
 }
 
-pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
+pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext, pool: &sqlx::PgPool) {
     let registry = &ctx.registry;
     let repo = &ctx.repository;
 
@@ -798,12 +932,36 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             }
         }
 
+        {
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest.value);
+            tokio::spawn(async move {
+                let _ = crate::db::delete_quarantine_file(
+                    &pool2, &registry2, &repository2, &digest2, "manifest",
+                ).await;
+            });
+        }
+
         if Path::new(&blob).exists() {
             if let Err(e) = fs::remove_file(&blob) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
             } else {
                 println!("[QUARANTINE CLEAN] supprimé {}", blob);
             }
+        }
+
+        {
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest.value);
+            tokio::spawn(async move {
+                let _ = crate::db::delete_quarantine_file(
+                    &pool2, &registry2, &repository2, &digest2, "blob",
+                ).await;
+            });
         }
         
         if Path::new(&referrers).exists() {
@@ -812,6 +970,18 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext) {
             } else {
                 println!("[QUARANTINE CLEAN] supprimé {}", referrers);
             }
+        }
+
+        {
+            let pool2 = pool.clone();
+            let registry2 = ctx.registry.clone();
+            let repository2 = ctx.repository.clone();
+            let digest2 = format!("sha256:{}", digest.value);
+            tokio::spawn(async move {
+                let _ = crate::db::delete_quarantine_file(
+                    &pool2, &registry2, &repository2, &digest2, "referrer",
+                ).await;
+            });
         }
     }
 }
@@ -848,65 +1018,99 @@ pub async fn dec_active(
     notify.notify_waiters();
 }
 
-pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext) {
+pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext, pool: &sqlx::PgPool) {
     let registry = &ctx.registry;
     let repo = &ctx.repository;
 
     let base_q = format!("quarantaine/{}/{}/", registry, repo);
     let base_c = format!("cache/{}/{}/", registry, repo);
 
-    //println!("LOG -> manifests : {:?}, blobs : {:?}, referrers : {:?}", &ctx.manifest_digests, &ctx.blob_digests, &ctx.referrers_digests);
     // -------- MANIFESTS --------
     for digest in &ctx.manifest_digests {
         let q = format!("{}manifests/sha256/{}.json", base_q, digest.value);
         let c = format!("{}manifests/sha256/{}.json", base_c, digest.value);
-        copy_if_exists(&q, &c);
+        if copy_if_exists(&q, &c) {
+            let pool2 = pool.clone();
+            let registry2 = registry.to_string();
+            let repository2 = repo.to_string();
+            let digest2 = format!("sha256:{}", digest.value);
+            let c2 = c.clone();
+            let size = std::fs::metadata(&c2).map(|m| m.len() as i64).unwrap_or(0);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_cache_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "manifest", "sha256", &c2, size,
+                ).await;
+            });
+        }
     }
 
     // -------- BLOBS --------
     for digest in &ctx.blob_digests {
         let q = format!("{}blobs/sha256/{}", base_q, digest.value);
         let c = format!("{}blobs/sha256/{}", base_c, digest.value);
-        copy_if_exists(&q, &c);
+        if copy_if_exists(&q, &c) {
+            let pool2 = pool.clone();
+            let registry2 = registry.to_string();
+            let repository2 = repo.to_string();
+            let digest2 = format!("sha256:{}", digest.value);
+            let c2 = c.clone();
+            let size = std::fs::metadata(&c2).map(|m| m.len() as i64).unwrap_or(0);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_cache_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "blob", "sha256", &c2, size,
+                ).await;
+            });
+        }
     }
 
     // -------- REFERRERS --------
     for digest in &ctx.referrers_digests {
         let q = format!("{}referrers/sha256/{}.json", base_q, digest.value);
         let c = format!("{}referrers/sha256/{}.json", base_c, digest.value);
-        copy_if_exists(&q, &c);
+        if copy_if_exists(&q, &c) {
+            let pool2 = pool.clone();
+            let registry2 = registry.to_string();
+            let repository2 = repo.to_string();
+            let digest2 = format!("sha256:{}", digest.value);
+            let c2 = c.clone();
+            let size = std::fs::metadata(&c2).map(|m| m.len() as i64).unwrap_or(0);
+            tokio::spawn(async move {
+                let _ = crate::db::upsert_cache_file(
+                    &pool2, &registry2, &repository2,
+                    &digest2, "referrer", "sha256", &c2, size,
+                ).await;
+            });
+        }
     }
-    /* 
-    println!(
-        "[CACHE COPY] Image copiée quarantaine → cache | {} {}:{}",
-        ctx.registry, ctx.repository, ctx.tag
-    );*/
 }
 
-fn copy_if_exists(src: &str, dst: &str) {
+fn copy_if_exists(src: &str, dst: &str) -> bool {
     let src_path = Path::new(src);
     if !src_path.exists() {
-        return;
+        return false;
     }
 
     let dst_path = Path::new(dst);
 
-    // créer dossier parent
     if let Some(parent) = dst_path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             eprintln!("[CACHE COPY] mkdir error {}", e);
-            return;
+            return false;
         }
     }
 
-    // skip si déjà en cache
     if dst_path.exists() {
-        return;
+        return false; // déjà présent, pas besoin de réinsérer en BDD
     }
 
     match fs::copy(src_path, dst_path) {
-        Ok(_) => {/*println!("[CACHE COPY] {}", dst)*/},
-        Err(e) => eprintln!("[CACHE COPY] error {} -> {}", src, e),
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("[CACHE COPY] error {} -> {}", src, e);
+            false
+        }
     }
 }
 

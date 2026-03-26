@@ -4,6 +4,8 @@ use reqwest::Client;
 use uuid::Uuid;
 use std::time::Instant;
 use anyhow::Result;
+use sqlx::PgPool;
+
 use crate::registry_auth::RegistryClient;
 use crate::{
     PullContext,
@@ -76,7 +78,7 @@ pub async fn get_pull_context(
 
         let uuid = create_context_from_tag(
             client, &registry, &repository, tag_ou_digest,
-            &ip_client, pull_contexts, path, client_type
+            &ip_client, pull_contexts, path, client_type, pool
         ).await?;
 
         // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
@@ -125,6 +127,13 @@ pub async fn get_pull_context(
                     if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
                         eprintln!("[BLACKLIST ERROR] {}", e);
                     }
+
+                    sqlx::query("UPDATE pulls SET decision_final = 'DENY', scan_completed = true, last_activity = NOW() WHERE uuid = $1::uuid")
+                    .bind(uuid.to_string())
+                    .execute(pool)
+                    .await
+                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision DENY: {}", e); Default::default() });
+                
                     cleanup_tmp_for_uuid(&ctx.uuid);
                     list.retain(|c| c.uuid != uuid);
                     return Err(PullContextError::BlockingFromTheScanner);
@@ -147,7 +156,7 @@ pub async fn get_pull_context(
             // Même fonction que HEAD → UUID déterministe, pas de doublon
             let uuid = create_context_from_tag(
                 client, &registry, &repository, digest_str,
-                &ip_client, pull_contexts, path, client_type
+                &ip_client, pull_contexts, path, client_type, pool
             ).await?;
 
             // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
@@ -247,18 +256,65 @@ pub async fn get_pull_context(
                     "manifests" => {
                         if !ctx.manifest_digests.contains(&digest_struct) {
                             ctx.manifest_digests.push(digest_struct.clone());
+
+                            // Ajout a la bdd
+                            sqlx::query(
+                                "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW())
+                                ON CONFLICT DO NOTHING"
+                            )
+                            .bind(Uuid::new_v4().to_string())
+                            .bind(ctx.uuid.to_string())
+                            .bind(&digest_struct.value)
+                            .bind(&digest_struct.algorithm)
+                            .bind(resource_type)  // "manifests", "blobs", "referrers"
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pull_digests: {}", e); Default::default() });
+
                             println!("[PullContext] Digest ajouté à manifest_digests: {}", digest_struct.as_str());
                         }
                     }
                     "blobs" => {
                         if !ctx.blob_digests.contains(&digest_struct) {
                             ctx.blob_digests.push(digest_struct.clone());
+
+                            // Ajout a la bdd
+                            sqlx::query(
+                                "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW())
+                                ON CONFLICT DO NOTHING"
+                            )
+                            .bind(Uuid::new_v4().to_string())
+                            .bind(ctx.uuid.to_string())
+                            .bind(&digest_struct.value)
+                            .bind(&digest_struct.algorithm)
+                            .bind(resource_type)  // "manifests", "blobs", "referrers"
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pull_digests: {}", e); Default::default() });
+
                             println!("[PullContext] Digest ajouté à blob_digests: {}", digest_struct.as_str());
                         }
                     }
                     "referrers" => {
                         if !ctx.referrers_digests.contains(&digest_struct) {
                             ctx.referrers_digests.push(digest_struct.clone());
+
+                            //Ajout a la bdd
+                            sqlx::query(
+                                "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW())
+                                ON CONFLICT DO NOTHING"
+                            )
+                            .bind(Uuid::new_v4().to_string())
+                            .bind(ctx.uuid.to_string())
+                            .bind(&digest_struct.value)
+                            .bind(&digest_struct.algorithm)
+                            .bind(resource_type)  // "manifests", "blobs", "referrers"
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pull_digests: {}", e); Default::default() });
                             println!("[PullContext] Digest ajouté à referrers_digests: {}", digest_struct.as_str());
                         }
                     }
@@ -297,6 +353,15 @@ pub async fn get_pull_context(
                             // Stocker dans PullContext
                             ctx.os = os;
                             ctx.arch = arch;
+
+                            //mise a jour bdd
+                            sqlx::query("UPDATE pulls SET os = $1, arch = $2 WHERE uuid = $3::uuid")
+                                .bind(&ctx.os)
+                                .bind(&ctx.arch)
+                                .bind(ctx.uuid.to_string())
+                                .execute(pool)
+                                .await
+                                .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls os/arch: {}", e); Default::default() });
 
                             println!(
                                 "[GET] Digest {} → OS={}, ARCH={}",
@@ -360,6 +425,7 @@ pub async fn get_pull_context(
                     }
                     else {
                         //cas ou le digest GET est le digest racine (normal, ne rien faire)
+
                         return Ok(Some(ctx.uuid));
                     }   
                 } 
@@ -482,6 +548,7 @@ async fn create_context_from_tag(
     pull_contexts: &PullContextList,
     _path: &str,
     client_type: &str,
+    pool: &PgPool,
 ) -> Result<Uuid, PullContextError> {
 
     // 1️⃣ Récupérer le digest racine upstream
@@ -602,6 +669,39 @@ async fn create_context_from_tag(
     {
         let mut list = pull_contexts.lock().await;
         list.push(ctx.clone());
+        // Après list.push(ctx.clone())
+
+        //Mis a jour de bdd
+        sqlx::query(
+            "INSERT INTO pulls (uuid, ip_client, registry, repository, tag, client_type, started_at, last_activity, scan_completed, decision_final)
+            VALUES ($1::uuid, $2, $3, $4, $5, $6, NOW(), NOW(), false, 'PENDING')"
+        )
+        .bind(uuid.to_string())
+        .bind(ip_client)
+        .bind(registry)
+        .bind(repository)
+        .bind(tag)
+        .bind(client_type)
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pulls: {}", e); Default::default() });
+
+        if let Some(racine) = &ctx.manifest_racine_digest {
+            sqlx::query(
+                "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                ON CONFLICT DO NOTHING"
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(uuid.to_string())
+            .bind(&racine.value)
+            .bind(&racine.algorithm)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine: {}", e); Default::default() });
+            
+            //println!("[DB] Digest racine enregistré à la création : {}", racine.value);
+        }
     }
 
     println!(
