@@ -23,7 +23,7 @@ Il permet de :
 ## ⚙️ Fonctionnement
 
 1. **HEAD** — Le proxy intercepte la première requête, crée un `PullContext` (session du pull courant) et appelle le **scanner de haut niveau**
-2. **GET manifests/blobs/referrers** — Comporement defini en fonction de si l'image est presente en cache, whitelist ou blacklist
+2. **GET manifests/blobs/referrers** — Comporement defini en fonction de si l'image est presente en cache, whitelist ou blacklist | Si client Podman on crée le `PullContext` des le premier GET
 3. **Scan final** — Quand tous les digests attendus sont reçus, le proxy déclenche le **scan final** complet
 4. **Décision** :
    - `ALLOW` → copie quarantaine → cache, ajout whitelist, réponse 200
@@ -61,8 +61,11 @@ docker run \
 ## 🔐 Gestion des certificats MITM
 
 Le proxy présente un certificat TLS signé par sa propre CA pour chaque registre intercepté. Le client doit faire confiance à cette CA.
+Le certificat **myca.crt** (signé par le proxy MITM) doit etre placé dans le dossier client **/usr/local/share/ca-certificate** 
 
 ### Ajouter un nouveau registre
+
+Exemple avec quay.io
 
 ```bash
 cd certs-mitm/
@@ -70,7 +73,7 @@ cd certs-mitm/
 # 1. Générer la clé privée
 openssl genrsa -out quay.io.key 2048
 
-# 2. Générer le CSR
+# 2. Générer le CSR (Certificate Signing Request)
 openssl req -new -key quay.io.key -out quay.io.csr -subj "/CN=quay.io"
 
 # 3. Signer avec la CA du proxy
