@@ -7,6 +7,8 @@ use axum::{
     Json, Router,
 };
 mod auth;
+mod dashboard;
+
 use bytes::Bytes;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -507,8 +509,8 @@ async fn main() {
         // Dashboard / login
         .route("/", get(auth::login_page))
         .route("/login", post(auth::login_submit))
-        .route("/dashboard/dev", get(auth::dev_dashboard))
-        .route("/dashboard/rssi", get(auth::rssi_dashboard))
+        .route("/logout", get(auth::logout))
+        .nest("/dashboard", dashboard::router())
         // Axum : désactive la limite par défaut (souvent ~2MB selon version/config)
         .layer(DefaultBodyLimit::disable())
         // Tower : fixe ta limite réelle (mets une valeur réaliste, pas forcément MAX)

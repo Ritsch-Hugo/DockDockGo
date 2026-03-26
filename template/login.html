@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocDockGo — Connexion</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-primary: #1c1c1a;
+    --bg-secondary: #252523;
+    --bg-tertiary: #161614;
+    --bg-info: #0c447c;
+    --text-primary: #e8e6e0;
+    --text-secondary: #a09e97;
+    --text-tertiary: #5f5e5a;
+    --text-info: #85b7eb;
+    --border: rgba(255,255,255,0.08);
+    --border-md: rgba(255,255,255,0.15);
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --font: 'Segoe UI', system-ui, sans-serif;
+    --blue: #378ADD;
+    --red: #E24B4A;
+  }
+
+  body {
+    font-family: var(--font);
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .login-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    width: 100%;
+    max-width: 360px;
+    padding: 0 16px;
+  }
+
+  .logo-block {
+    text-align: center;
+  }
+
+  .logo-title {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+  }
+
+  .logo-sub {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+  }
+
+  .login-card {
+    width: 100%;
+    background: var(--bg-primary);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 28px 24px;
+  }
+
+  .card-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    font-size: 11px;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  .field label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+
+  .field input {
+    padding: 9px 12px;
+    border: 0.5px solid var(--border-md);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: var(--font);
+    transition: border-color .15s;
+    outline: none;
+    width: 100%;
+  }
+
+  .field input:focus {
+    border-color: var(--blue);
+  }
+
+  .field input::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  .submit-btn {
+    width: 100%;
+    margin-top: 8px;
+    padding: 10px 0;
+    border: 0.5px solid #b5d4f4;
+    border-radius: var(--radius-md);
+    background: var(--bg-info);
+    color: var(--text-info);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font);
+    cursor: pointer;
+    transition: opacity .15s;
+  }
+
+  .submit-btn:hover {
+    opacity: 0.85;
+  }
+
+  .footer-note {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="login-wrapper">
+
+  <div class="logo-block">
+    <div class="logo-title">DocDockGo</div>
+    <div class="logo-sub">Security Proxy — Dashboard</div>
+  </div>
+
+  <div class="login-card">
+    <div class="card-title">Connexion</div>
+    <form action="/login" method="post">
+      <div class="field">
+        <label for="username">Utilisateur</label>
+        <input type="text" id="username" name="username" placeholder="dev ou rssi" required autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="password">Mot de passe</label>
+        <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+      </div>
+      <button class="submit-btn" type="submit">Se connecter</button>
+    </form>
+  </div>
+
+  <div class="footer-note">Accès réservé aux membres de l'équipe</div>
+
+</div>
+
+</body>
+</html>

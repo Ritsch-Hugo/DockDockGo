@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocDockGo — Dashboard RSSI</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-primary: #1c1c1a;
+    --bg-secondary: #252523;
+    --bg-tertiary: #161614;
+    --bg-info: #0c447c;
+    --bg-success: #27500a;
+    --bg-warning: #633806;
+    --bg-danger: #791f1f;
+    --text-primary: #e8e6e0;
+    --text-secondary: #a09e97;
+    --text-tertiary: #5f5e5a;
+    --text-info: #85b7eb;
+    --text-success: #c0dd97;
+    --text-warning: #fac775;
+    --text-danger: #f09595;
+    --border: rgba(255,255,255,0.08);
+    --border-md: rgba(255,255,255,0.15);
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --font: 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
+    --blue: #378ADD;
+    --green: #639922;
+    --amber: #BA7517;
+    --red: #E24B4A;
+  }
+
+  body { font-family: var(--font); font-size: 14px; color: var(--text-primary); background: var(--bg-tertiary); height: 100vh; overflow: hidden; }
+
+  .shell { display: flex; height: 100vh; }
+
+  /* SIDEBAR */
+  .sidebar { width: 210px; min-width: 210px; background: var(--bg-primary); border-right: 0.5px solid var(--border); display: flex; flex-direction: column; padding: 16px 0; }
+  .logo { padding: 0 16px 14px; border-bottom: 0.5px solid var(--border); margin-bottom: 8px; }
+  .logo-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+  .logo-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
+  .role-badge { display: flex; padding: 8px 16px; margin-bottom: 4px; }
+  .role-label { flex: 1; padding: 5px 0; font-size: 11px; border: 0.5px solid #b5d4f4; border-radius: var(--radius-md); background: var(--bg-info); color: var(--text-info); text-align: center; font-family: var(--font); }
+  .nav-section { font-size: 10px; color: var(--text-tertiary); padding: 10px 16px 4px; text-transform: uppercase; letter-spacing: .06em; }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 16px; cursor: pointer; color: var(--text-secondary); font-size: 13px; border-left: 2px solid transparent; transition: all .1s; }
+  .nav-item:hover { background: var(--bg-secondary); color: var(--text-primary); }
+  .nav-item.active { background: var(--bg-secondary); color: var(--text-primary); border-left: 2px solid var(--blue); }
+  .nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-md); flex-shrink: 0; }
+  .nav-dot.green { background: var(--green); }
+  .nav-dot.red { background: var(--red); }
+  .nav-dot.amber { background: var(--amber); }
+  .nav-dot.blue { background: var(--blue); }
+  .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 0.5px solid var(--border); }
+  .avatar { display: flex; align-items: center; gap: 8px; }
+  .av-circle { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-info); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-info); flex-shrink: 0; }
+  .av-name { font-size: 12px; font-weight: 500; }
+  .av-role { font-size: 10px; color: var(--text-tertiary); }
+  .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; }
+  .logout-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
+
+  /* MAIN */
+  .main { flex: 1; overflow-y: auto; padding: 22px 26px; background: var(--bg-tertiary); }
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .page-title { font-size: 18px; font-weight: 500; }
+
+  /* BADGES */
+  .badge { display: inline-flex; align-items: center; font-size: 11px; padding: 3px 8px; border-radius: var(--radius-md); font-weight: 500; }
+  .badge-green { background: var(--bg-success); color: var(--text-success); }
+  .badge-red { background: var(--bg-danger); color: var(--text-danger); }
+  .badge-amber { background: var(--bg-warning); color: var(--text-warning); }
+  .badge-blue { background: var(--bg-info); color: var(--text-info); }
+  .badge-gray { background: var(--bg-secondary); color: var(--text-secondary); }
+
+  /* METRICS */
+  .metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 18px; }
+  .metric-card { background: var(--bg-secondary); border-radius: var(--radius-md); padding: 12px 14px; }
+  .metric-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+  .metric-value { font-size: 24px; font-weight: 500; }
+  .metric-value.green { color: var(--text-success); }
+  .metric-value.red { color: var(--text-danger); }
+  .metric-value.amber { color: var(--text-warning); }
+  .metric-value.blue { color: var(--text-info); }
+
+  /* CARDS */
+  .card { background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 14px; }
+  .section-title { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+
+  /* TABLE */
+  .table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .table th { text-align: left; color: var(--text-secondary); font-weight: 500; padding: 0 8px 8px; border-bottom: 0.5px solid var(--border); }
+  .table td { padding: 8px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
+  .table tr:last-child td { border-bottom: none; }
+  .table tr:hover td { background: var(--bg-secondary); }
+
+  /* PROGRESS */
+  .progress-bar { height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; min-width: 80px; border: 0.5px solid var(--border); }
+  .progress-fill { height: 100%; border-radius: 3px; background: var(--blue); }
+  .progress-fill.green { background: var(--green); }
+
+  /* ALERTS */
+  .alert-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--border); }
+  .alert-row:last-child { border-bottom: none; }
+  .alert-icon { width: 20px; height: 20px; border-radius: 50%; background: var(--bg-danger); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .alert-icon-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+  .alert-text { font-size: 12px; line-height: 1.5; }
+  .alert-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+
+  /* BUTTONS */
+  .btn { padding: 5px 12px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; font-size: 12px; cursor: pointer; color: var(--text-primary); font-family: var(--font); transition: background .1s; }
+  .btn:hover { background: var(--bg-secondary); }
+  .btn-danger { border-color: #f09595; color: var(--text-danger); }
+  .btn-danger:hover { background: var(--bg-danger); }
+  .btn-success { border-color: #c0dd97; color: var(--text-success); }
+  .btn-success:hover { background: var(--bg-success); }
+
+  /* SEARCH BAR */
+  .search-bar { display: flex; gap: 8px; margin-bottom: 14px; }
+  .search-bar input, .search-bar select { padding: 7px 10px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); font-size: 12px; background: var(--bg-primary); color: var(--text-primary); font-family: var(--font); }
+  .search-bar input { flex: 1; }
+  .search-bar input:focus, .search-bar select:focus { outline: none; border-color: var(--blue); }
+
+  /* CHIP */
+  .chip { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 7px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); margin-right: 4px; border: 0.5px solid var(--border); }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- SIDEBAR -->
+<div class="sidebar">
+  <div class="logo">
+    <div class="logo-title">DocDockGo</div>
+    <div class="logo-sub">Security Proxy</div>
+  </div>
+  <div class="role-badge">
+    <div class="role-label">RSSI</div>
+  </div>
+
+  <div class="nav-section">Supervision</div>
+  <div class="nav-item active" onclick="showPage('overview', this)"><div class="nav-dot green"></div>Vue globale</div>
+  <div class="nav-item" onclick="showPage('pulls', this)"><div class="nav-dot blue"></div>Pulls en cours</div>
+  <div class="nav-item" onclick="showPage('quarantine', this)"><div class="nav-dot amber"></div>Quarantaine</div>
+  <div class="nav-item" onclick="showPage('cache', this)"><div class="nav-dot green"></div>Cache</div>
+  <div class="nav-section">Sécurité</div>
+  <div class="nav-item" onclick="showPage('lists', this)"><div class="nav-dot red"></div>White / Blacklist</div>
+  <div class="nav-item" onclick="showPage('history', this)"><div class="nav-dot"></div>Historique</div>
+  <div class="nav-item" onclick="showPage('search', this)"><div class="nav-dot"></div>Recherche</div>
+
+  <div class="sidebar-footer">
+    <div class="avatar">
+      <div class="av-circle">RS</div>
+      <div>
+        <div class="av-name">A. Martin</div>
+        <div class="av-role">RSSI</div>
+      </div>
+    </div>
+    <form action="/logout" method="post">
+      <button class="logout-btn" type="submit">Se déconnecter</button>
+    </form>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main" id="main-content">
+
+<!-- PAGE: overview -->
+<div id="page-overview">
+  <div class="topbar">
+    <div class="page-title">Vue globale</div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:11px;color:var(--text-tertiary)">Mise à jour : il y a 2s</span>
+      <span class="badge badge-green">En ligne</span>
+    </div>
+  </div>
+  <div class="metrics">
+    <div class="metric-card"><div class="metric-label">Pulls en cours</div><div class="metric-value blue">7</div></div>
+    <div class="metric-card"><div class="metric-label">Bloqués aujourd'hui</div><div class="metric-value red">3</div></div>
+    <div class="metric-card"><div class="metric-label">En quarantaine</div><div class="metric-value amber">12</div></div>
+    <div class="metric-card"><div class="metric-label">Images en cache</div><div class="metric-value green">48</div></div>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <div class="section-title">Alertes actives</div>
+      <div class="alert-row">
+        <div class="alert-icon"><div class="alert-icon-dot"></div></div>
+        <div><div class="alert-text"><strong>DENY</strong> — library/ubuntu:latest</div><div class="alert-text" style="color:var(--text-secondary)">172.16.0.14 · registry-1.docker.io</div><div class="alert-time">Il y a 3 min</div></div>
+      </div>
+      <div class="alert-row">
+        <div class="alert-icon"><div class="alert-icon-dot"></div></div>
+        <div><div class="alert-text"><strong>DENY</strong> — nginx:1.25-alpine</div><div class="alert-text" style="color:var(--text-secondary)">172.16.0.22 · registry-1.docker.io</div><div class="alert-time">Il y a 18 min</div></div>
+      </div>
+      <div class="alert-row">
+        <div class="alert-icon" style="background:var(--bg-warning)"><div class="alert-icon-dot" style="background:var(--amber)"></div></div>
+        <div><div class="alert-text"><strong>PENDING</strong> — python:3.12-slim</div><div class="alert-text" style="color:var(--text-secondary)">172.16.0.8 · registry-1.docker.io</div><div class="alert-time">Il y a 42 min</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Décisions — 24 dernières heures</div>
+      <div style="display:flex;flex-direction:column;gap:10px;padding-top:4px">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>ALLOW</span><span style="color:var(--text-success);font-weight:500">64</span></div>
+          <div class="progress-bar"><div class="progress-fill green" style="width:74%"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>PENDING</span><span style="color:var(--text-warning);font-weight:500">19</span></div>
+          <div class="progress-bar"><div class="progress-fill" style="width:22%;background:var(--amber)"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>DENY</span><span style="color:var(--text-danger);font-weight:500">3</span></div>
+          <div class="progress-bar"><div class="progress-fill" style="width:4%;background:var(--red)"></div></div>
+        </div>
+      </div>
+      <div style="margin-top:12px;padding-top:10px;border-top:0.5px solid var(--border);display:flex;gap:8px;flex-wrap:wrap">
+        <span class="chip">86 pulls total</span>
+        <span class="chip">3 depuis le cache</span>
+        <span class="chip">5 nouvelles images</span>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="section-title">Pulls actifs</div>
+    <table class="table">
+      <tr><th>Image</th><th>IP client</th><th>Client</th><th>Progression</th><th>Statut</th></tr>
+      <tr><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">172.16.0.5</td><td><span class="chip">docker</span></td><td><div class="progress-bar" style="width:100px"><div class="progress-fill green" style="width:80%"></div></div></td><td><span class="badge badge-green">ALLOW</span></td></tr>
+      <tr><td>python:3.12-slim</td><td style="color:var(--text-secondary)">172.16.0.8</td><td><span class="chip">podman</span></td><td><div class="progress-bar" style="width:100px"><div class="progress-fill" style="width:45%"></div></div></td><td><span class="badge badge-amber">PENDING</span></td></tr>
+      <tr><td>node:20-bookworm</td><td style="color:var(--text-secondary)">172.16.0.12</td><td><span class="chip">docker</span></td><td><div class="progress-bar" style="width:100px"><div class="progress-fill" style="width:20%"></div></div></td><td><span class="badge badge-amber">PENDING</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- PAGE: pulls -->
+<div id="page-pulls" class="hidden">
+  <div class="topbar"><div class="page-title">Pulls en cours</div><span class="badge badge-blue">7 actifs</span></div>
+  <div class="card">
+    <table class="table">
+      <tr><th>UUID</th><th>Image</th><th>IP</th><th>OS/Arch</th><th>Digests</th><th>Statut</th><th>Action</th></tr>
+      <tr>
+        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">a3f2…c891</td>
+        <td>library/alpine:3.19</td><td style="color:var(--text-secondary)">172.16.0.5</td>
+        <td><span class="chip">linux/amd64</span></td>
+        <td><div class="progress-bar" style="width:80px"><div class="progress-fill green" style="width:80%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">8/10</div></td>
+        <td><span class="badge badge-green">ALLOW</span></td>
+        <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Forcer DENY</button></td>
+      </tr>
+      <tr>
+        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">b7d1…4412</td>
+        <td>python:3.12-slim</td><td style="color:var(--text-secondary)">172.16.0.8</td>
+        <td><span class="chip">linux/amd64</span></td>
+        <td><div class="progress-bar" style="width:80px"><div class="progress-fill" style="width:45%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">5/11</div></td>
+        <td><span class="badge badge-amber">PENDING</span></td>
+        <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Forcer DENY</button></td>
+      </tr>
+      <tr>
+        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">f9c3…7730</td>
+        <td>node:20-bookworm</td><td style="color:var(--text-secondary)">172.16.0.12</td>
+        <td><span class="chip">linux/amd64</span></td>
+        <td><div class="progress-bar" style="width:80px"><div class="progress-fill" style="width:20%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">2/10</div></td>
+        <td><span class="badge badge-amber">PENDING</span></td>
+        <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Forcer DENY</button></td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- PAGE: quarantine -->
+<div id="page-quarantine" class="hidden">
+  <div class="topbar"><div class="page-title">Quarantaine</div><span class="badge badge-amber">12 images</span></div>
+  <div class="card">
+    <table class="table">
+      <tr><th>Image</th><th>Registry</th><th>Taille</th><th>Depuis</th><th>Digests</th><th>Actions</th></tr>
+      <tr>
+        <td>library/ubuntu:22.04</td><td style="color:var(--text-secondary)">registry-1.docker.io</td>
+        <td>78 MB</td><td style="color:var(--text-secondary)">14 min</td>
+        <td><span class="chip">3 manifests</span><span class="chip">8 blobs</span></td>
+        <td><button class="btn btn-success" style="font-size:11px;padding:3px 8px;margin-right:4px">Valider</button><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Rejeter</button></td>
+      </tr>
+      <tr>
+        <td>redis:7-alpine</td><td style="color:var(--text-secondary)">registry-1.docker.io</td>
+        <td>12 MB</td><td style="color:var(--text-secondary)">31 min</td>
+        <td><span class="chip">2 manifests</span><span class="chip">4 blobs</span></td>
+        <td><button class="btn btn-success" style="font-size:11px;padding:3px 8px;margin-right:4px">Valider</button><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Rejeter</button></td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- PAGE: cache -->
+<div id="page-cache" class="hidden">
+  <div class="topbar"><div class="page-title">Cache</div><span class="badge badge-green">48 images validées</span></div>
+  <div class="search-bar">
+    <input type="text" placeholder="Filtrer par image...">
+    <select><option>Tous les registres</option><option>registry-1.docker.io</option><option>ghcr.io</option></select>
+  </div>
+  <div class="card">
+    <table class="table">
+      <tr><th>Image</th><th>Registry</th><th>Taille</th><th>Mis en cache le</th><th>Actions</th></tr>
+      <tr><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">registry-1.docker.io</td><td>8 MB</td><td style="color:var(--text-secondary)">aujourd'hui 09:14</td><td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Supprimer</button></td></tr>
+      <tr><td>library/nginx:latest</td><td style="color:var(--text-secondary)">registry-1.docker.io</td><td>54 MB</td><td style="color:var(--text-secondary)">hier 16:42</td><td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Supprimer</button></td></tr>
+      <tr><td>library/postgres:16</td><td style="color:var(--text-secondary)">registry-1.docker.io</td><td>132 MB</td><td style="color:var(--text-secondary)">hier 11:03</td><td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Supprimer</button></td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- PAGE: lists -->
+<div id="page-lists" class="hidden">
+  <div class="topbar"><div class="page-title">White / Blacklist</div></div>
+  <div class="two-col">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="section-title" style="margin:0">Whitelist</div>
+        <span class="badge badge-green">24 entrées</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input type="text" placeholder="registry/repo:tag" style="flex:1;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <button class="btn btn-success" style="font-size:11px">Ajouter</button>
+      </div>
+      <table class="table">
+        <tr><th>Image</th><th>Ajouté le</th><th></th></tr>
+        <tr><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">2024-01-15</td><td><button class="btn" style="font-size:10px;padding:2px 6px">Retirer</button></td></tr>
+        <tr><td>library/nginx:latest</td><td style="color:var(--text-secondary)">2024-01-14</td><td><button class="btn" style="font-size:10px;padding:2px 6px">Retirer</button></td></tr>
+        <tr><td>library/postgres:16</td><td style="color:var(--text-secondary)">2024-01-12</td><td><button class="btn" style="font-size:10px;padding:2px 6px">Retirer</button></td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="section-title" style="margin:0">Blacklist</div>
+        <span class="badge badge-red">3 entrées</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input type="text" placeholder="registry/repo:tag" style="flex:1;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <button class="btn btn-danger" style="font-size:11px">Ajouter</button>
+      </div>
+      <table class="table">
+        <tr><th>Image</th><th>Bloquée le</th><th></th></tr>
+        <tr><td>library/ubuntu:latest</td><td style="color:var(--text-secondary)">2024-01-16</td><td><button class="btn btn-success" style="font-size:10px;padding:2px 6px">→ WL</button></td></tr>
+        <tr><td>nginx:1.25-alpine</td><td style="color:var(--text-secondary)">2024-01-16</td><td><button class="btn btn-success" style="font-size:10px;padding:2px 6px">→ WL</button></td></tr>
+        <tr><td>malicious/img:v2</td><td style="color:var(--text-secondary)">2024-01-10</td><td><button class="btn btn-success" style="font-size:10px;padding:2px 6px">→ WL</button></td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE: history -->
+<div id="page-history" class="hidden">
+  <div class="topbar"><div class="page-title">Historique</div><button class="btn" style="font-size:12px">Export CSV</button></div>
+  <div class="search-bar">
+    <input type="text" placeholder="Rechercher une image...">
+    <select><option>Toutes décisions</option><option>ALLOW</option><option>DENY</option><option>PENDING</option></select>
+    <select><option>Tous registres</option><option>registry-1.docker.io</option><option>ghcr.io</option></select>
+  </div>
+  <div class="card">
+    <table class="table">
+      <tr><th>Horodatage</th><th>Image</th><th>IP</th><th>Client</th><th>Décision</th><th>Cache</th></tr>
+      <tr><td style="color:var(--text-secondary)">16/01 14:32</td><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">172.16.0.5</td><td><span class="chip">docker</span></td><td><span class="badge badge-green">ALLOW</span></td><td><span class="badge badge-gray">Non</span></td></tr>
+      <tr><td style="color:var(--text-secondary)">16/01 14:28</td><td>library/ubuntu:latest</td><td style="color:var(--text-secondary)">172.16.0.14</td><td><span class="chip">docker</span></td><td><span class="badge badge-red">DENY</span></td><td><span class="badge badge-gray">Non</span></td></tr>
+      <tr><td style="color:var(--text-secondary)">16/01 13:55</td><td>library/nginx:latest</td><td style="color:var(--text-secondary)">172.16.0.3</td><td><span class="chip">podman</span></td><td><span class="badge badge-green">ALLOW</span></td><td><span class="badge badge-green">Oui</span></td></tr>
+      <tr><td style="color:var(--text-secondary)">16/01 11:20</td><td>nginx:1.25-alpine</td><td style="color:var(--text-secondary)">172.16.0.22</td><td><span class="chip">docker</span></td><td><span class="badge badge-red">DENY</span></td><td><span class="badge badge-gray">Non</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- PAGE: search -->
+<div id="page-search" class="hidden">
+  <div class="topbar"><div class="page-title">Recherche d'image</div></div>
+  <div class="card">
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input type="text" placeholder="Ex: registry-1.docker.io/library/ubuntu:22.04" style="flex:1;padding:8px 12px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:13px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+      <button class="btn">Rechercher</button>
+    </div>
+    <div style="padding:12px;background:var(--bg-secondary);border-radius:var(--radius-md)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-weight:500;font-size:13px">library/ubuntu:22.04</span>
+        <span class="badge badge-red">Blacklistée</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">
+        <div><span style="color:var(--text-secondary)">Registry</span><br>registry-1.docker.io</div>
+        <div><span style="color:var(--text-secondary)">Dernier pull</span><br>16/01/2024 14:28</div>
+        <div><span style="color:var(--text-secondary)">Pulls total</span><br>7</div>
+        <div><span style="color:var(--text-secondary)">En cache</span><br>Non</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+function showPage(page, el) {
+  document.querySelectorAll('[id^="page-"]').forEach(p => p.classList.add('hidden'));
+  document.getElementById('page-' + page).classList.remove('hidden');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  if (el) el.classList.add('active');
+}
+</script>
+</body>
+</html>
