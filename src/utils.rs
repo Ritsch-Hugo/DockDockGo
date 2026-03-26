@@ -855,9 +855,9 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
                     .bind(ctx.uuid.to_string())
                     .execute(&pool_clone)
                     .await
-                    .unwrap_or_else(|e| { 
+                    .unwrap_or_else(|e| {
                         eprintln!("[DB] Erreur UPDATE pulls timeout: {}", e); 
-                        Default::default() 
+                        Default::default()
                     });
 
                 remove_ctx_digests_from_quarantine(ctx, &pool_clone);
