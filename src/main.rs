@@ -20,6 +20,7 @@ use sha2::{Digest as ShaDigest, Sha256};
 use std::net::SocketAddr;
 use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
+use crate::auth::OidcState;
 
 #[derive(Deserialize)]
 struct HighLevelResp {
@@ -503,22 +504,33 @@ async fn decide(mut mp: Multipart) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() {
+    let oidc_state = OidcState::default();
+ 
     let app = Router::new()
-        // API existante
+        // ─── API proxy ───────────────────────────────────────────────────
         .route("/v1/decision", post(decide))
-        // Dashboard / login
-        .route("/", get(auth::login_page))
-        .route("/login", post(auth::login_submit))
+ 
+        // ─── Auth OIDC ───────────────────────────────────────────────────
+        .route("/", get(auth::login_handler))
+        .route("/callback", get(auth::callback_handler))
+        // CHANGEMENT CLÉ : logout est maintenant GET, pas POST
+        // Le navigateur navigue directement vers cette URL → pas de CORS
         .route("/logout", get(auth::logout))
+        .route("/logged-out", get(auth::logged_out_handler))
+ 
+        // ─── Dashboard ───────────────────────────────────────────────────
         .nest("/dashboard", dashboard::router())
-        // Axum : désactive la limite par défaut (souvent ~2MB selon version/config)
+ 
+        // ─── State partagé (OIDC) ────────────────────────────────────────
+        .with_state(oidc_state)
+ 
+        // ─── Limites ─────────────────────────────────────────────────────
         .layer(DefaultBodyLimit::disable())
-        // Tower : fixe ta limite réelle (mets une valeur réaliste, pas forcément MAX)
-        .layer(RequestBodyLimitLayer::new(1024 * 1024 * 1024)); // ex: 1GB
-
+        .layer(RequestBodyLimitLayer::new(1024 * 1024 * 1024));
+ 
     let addr: SocketAddr = "0.0.0.0:3000".parse().unwrap();
     println!("Orchestrateur listening on http://{addr}");
-
+ 
     axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
         .await
         .unwrap();

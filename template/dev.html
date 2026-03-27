@@ -155,9 +155,14 @@
         <div class="av-role">Dev</div>
       </div>
     </div>
-    <form action="/logout" method="post">
-      <button class="logout-btn" type="submit">Se déconnecter</button>
-    </form>
+      <button class="logout-btn" onclick="logout()">Se déconnecter</button>
+
+      <script>
+      async function logout() {
+        await fetch('/logout', { method: 'POST' });
+        window.location.href = '/';
+      }
+      </script>
   </div>
 </div>
 

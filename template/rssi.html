@@ -35,7 +35,6 @@
   }
 
   body { font-family: var(--font); font-size: 14px; color: var(--text-primary); background: var(--bg-tertiary); height: 100vh; overflow: hidden; }
-
   .shell { display: flex; height: 100vh; }
 
   /* SIDEBAR */
@@ -59,7 +58,7 @@
   .av-circle { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-info); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-info); flex-shrink: 0; }
   .av-name { font-size: 12px; font-weight: 500; }
   .av-role { font-size: 10px; color: var(--text-tertiary); }
-  .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; }
+  .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; display: block; text-align: center; text-decoration: none; }
   .logout-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
 
   /* MAIN */
@@ -161,9 +160,9 @@
         <div class="av-role">RSSI</div>
       </div>
     </div>
-    <form action="/logout" method="post">
-      <button class="logout-btn" type="submit">Se déconnecter</button>
-    </form>
+    <!-- CHANGEMENT : <a> au lieu de <button> + fetch.
+         window.location.href = navigation directe = pas de CORS -->
+    <a href="/logout" class="logout-btn">Se déconnecter</a>
   </div>
 </div>
 
