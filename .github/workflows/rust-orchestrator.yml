@@ -2,9 +2,9 @@ name: Rust (orchestrateur)
 
 on:
   push:
-    branches: ["orchestrateur"]
+    branches: ["feature/dashboard"]
   pull_request:
-    branches: ["orchestrateur"]
+    branches: ["feature/dashboard"]
   workflow_dispatch:
 
 env:
