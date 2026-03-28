@@ -1,7 +1,7 @@
 # ============================================================
 # ÉTAPE 1 : BUILD (Compilation)
 # ============================================================
-FROM rust:1.75-slim-bookworm as builder
+FROM rust:slim-bookworm as builder
 
 # Installation des dépendances système pour compiler (notamment pour reqwest/rustls et openssl si besoin)
 RUN apt-get update && apt-get install -y \
