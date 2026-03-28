@@ -13,15 +13,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// ─── Config Zitadel ───────────────────────────────────────────────────────────
-
 const ZITADEL_ISSUER: &str = "https://docdockgo-kgfmnj.eu1.zitadel.cloud";
 const CLIENT_ID: &str = "365975639251042712";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
-// ⚠️ Doit être enregistrée dans Zitadel → App → Post Logout Redirect URIs
 const POST_LOGOUT_REDIRECT_URI: &str = "http://localhost:3000/logged-out";
-
-// ─── State partagé ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Default)]
 pub struct OidcState {
@@ -29,37 +24,25 @@ pub struct OidcState {
     pub nonce: Arc<Mutex<Option<String>>>,
 }
 
-// ─── Construction du client OIDC ─────────────────────────────────────────────
-
 pub async fn build_oidc_client() -> CoreClient {
-    let issuer_url = IssuerUrl::new(ZITADEL_ISSUER.to_string())
-        .expect("Issuer URL invalide");
-
+    let issuer_url = IssuerUrl::new(ZITADEL_ISSUER.to_string()).expect("Issuer URL invalide");
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, async_http_client)
         .await
         .expect("Echec de la decouverte OIDC Zitadel");
-
     CoreClient::from_provider_metadata(
         provider_metadata,
         ClientId::new(CLIENT_ID.to_string()),
         None,
     )
-    .set_redirect_uri(
-        RedirectUrl::new(REDIRECT_URI.to_string()).expect("Redirect URI invalide"),
-    )
+    .set_redirect_uri(RedirectUrl::new(REDIRECT_URI.to_string()).expect("Redirect URI invalide"))
 }
-
-// ─── Handler GET / — redirige vers Zitadel ───────────────────────────────────
 
 pub async fn login_handler(State(oidc_state): State<OidcState>) -> impl IntoResponse {
     let client = build_oidc_client().await;
-
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let nonce = Nonce::new_random();
-
     *oidc_state.pkce_verifier.lock().await = Some(pkce_verifier.secret().clone());
     *oidc_state.nonce.lock().await = Some(nonce.secret().clone());
-
     let (auth_url, _csrf_token, _nonce) = client
         .authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
@@ -71,11 +54,8 @@ pub async fn login_handler(State(oidc_state): State<OidcState>) -> impl IntoResp
         .add_scope(Scope::new("email".to_string()))
         .set_pkce_challenge(pkce_challenge)
         .url();
-
     Redirect::to(auth_url.as_str())
 }
-
-// ─── Callback OIDC ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct CallbackParams {
@@ -106,11 +86,9 @@ pub async fn callback_handler(
         }
     };
 
-    let pkce_verifier = PkceCodeVerifier::new(verifier_secret);
-
     let token_response = match client
         .exchange_code(AuthorizationCode::new(params.code))
-        .set_pkce_verifier(pkce_verifier)
+        .set_pkce_verifier(PkceCodeVerifier::new(verifier_secret))
         .request_async(async_http_client)
         .await
     {
@@ -129,7 +107,10 @@ pub async fn callback_handler(
         }
     };
 
-    let claims_str = match decode_jwt_payload(id_token.to_string().as_str()) {
+    // Garder le JWT brut pour le passer à end_session lors du logout
+    let id_token_raw = id_token.to_string();
+
+    let claims_str = match decode_jwt_payload(&id_token_raw) {
         Some(s) => s,
         None => {
             eprintln!("[AUTH] Impossible de décoder le JWT");
@@ -137,8 +118,8 @@ pub async fn callback_handler(
         }
     };
 
-    // ⚠️ LOG TEMPORAIRE — retire en prod
-    println!("[AUTH] Claims bruts : {}", claims_str);
+    // ⚠️ LOG TEMPORAIRE
+    //println!("[AUTH] Claims bruts : {}", claims_str);
 
     let claims: ZitadelClaims = match serde_json::from_str(&claims_str) {
         Ok(c) => c,
@@ -148,7 +129,7 @@ pub async fn callback_handler(
         }
     };
 
-    println!("[AUTH] User connecte sub={}", claims.sub);
+    //println!("[AUTH] User connecte sub={}", claims.sub);
 
     let role = match determine_role(&claims) {
         Some(r) => r,
@@ -158,50 +139,72 @@ pub async fn callback_handler(
         }
     };
 
-    println!("[AUTH] Role attribue : {}", role);
+    //println!("[AUTH] Role attribue : {}", role);
 
     let mut headers = HeaderMap::new();
-    headers.insert(
+
+    // Cookie rôle (8h)
+    headers.append(
         header::SET_COOKIE,
         format!("role={}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800", role)
             .parse()
             .unwrap(),
     );
 
+    // Cookie id_token pour le logout (même durée que le rôle)
+    // Le JWT ne contient que base64url + points, safe dans un cookie
+    headers.append(
+        header::SET_COOKIE,
+        format!(
+            "id_token={}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800",
+            id_token_raw
+        )
+        .parse()
+        .unwrap(),
+    );
+
     (headers, Redirect::to(&format!("/dashboard/{}", role))).into_response()
 }
 
-// ─── Logout ──────────────────────────────────────────────────────────────────
-// GET /logout — le navigateur navigue directement ici (pas de fetch).
-// 1. Supprime le cookie local
-// 2. Redirige le navigateur vers end_session Zitadel (pas de CORS car c'est
-//    une navigation, pas un fetch XHR)
+// GET /logout
+// Lit l'id_token depuis le cookie, supprime les deux cookies,
+// puis redirige vers end_session Zitadel avec id_token_hint.
+// Sans id_token_hint, Zitadel affiche une page de confirmation
+// et ne détruit pas forcément la session → reconnexion automatique.
+pub async fn logout(headers: HeaderMap) -> Response {
+    let id_token_hint = extract_cookie(&headers, "id_token").unwrap_or_default();
 
-pub async fn logout() -> Response {
-    let mut headers = HeaderMap::new();
+    let mut resp_headers = HeaderMap::new();
 
-    // Supprime le cookie role
-    headers.insert(
+    resp_headers.append(
         header::SET_COOKIE,
         "role=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
             .parse()
             .unwrap(),
     );
-
-    // Redirection navigateur vers Zitadel end_session
-    // Zitadel détruit la session SSO puis renvoie vers /logged-out
-    let end_session_url = format!(
-        "{}/oidc/v1/end_session?post_logout_redirect_uri={}",
-        ZITADEL_ISSUER, POST_LOGOUT_REDIRECT_URI
+    resp_headers.append(
+        header::SET_COOKIE,
+        "id_token=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+            .parse()
+            .unwrap(),
     );
 
-    (headers, Redirect::to(&end_session_url)).into_response()
+    let end_session_url = if id_token_hint.is_empty() {
+        // Cookie absent (déjà expiré ?) → logout local uniquement
+        println!("[AUTH] logout sans id_token_hint");
+        "/logged-out".to_string()
+    } else {
+        println!("[AUTH] logout avec id_token_hint → end_session Zitadel");
+        format!(
+            "{}/oidc/v1/end_session?id_token_hint={}&post_logout_redirect_uri={}",
+            ZITADEL_ISSUER, id_token_hint, POST_LOGOUT_REDIRECT_URI
+        )
+    };
+
+    (resp_headers, Redirect::to(&end_session_url)).into_response()
 }
 
-// ─── Page post-logout ─────────────────────────────────────────────────────────
-// GET /logged-out — Zitadel redirige ici après avoir détruit la session SSO.
-// On affiche un message puis on redirige vers / (qui demandera le login).
-
+// GET /logged-out — Zitadel redirige ici après destruction de la session SSO.
 pub async fn logged_out_handler() -> impl IntoResponse {
     Html(r#"<!DOCTYPE html>
 <html lang="fr">
@@ -211,15 +214,7 @@ pub async fn logged_out_handler() -> impl IntoResponse {
   <title>Déconnecté — DocDockGo</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: #161614;
-      color: #e8e6e0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-    }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #161614; color: #e8e6e0; display: flex; align-items: center; justify-content: center; height: 100vh; }
     .box { text-align: center; }
     .title { font-size: 17px; font-weight: 500; margin-bottom: 8px; }
     .sub { font-size: 12px; color: #5f5e5a; }
@@ -236,7 +231,8 @@ pub async fn logged_out_handler() -> impl IntoResponse {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-pub fn extract_role_from_cookie(headers: &HeaderMap) -> Option<String> {
+pub fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let prefix = format!("{}=", name);
     headers
         .get(header::COOKIE)?
         .to_str()
@@ -244,8 +240,12 @@ pub fn extract_role_from_cookie(headers: &HeaderMap) -> Option<String> {
         .split(';')
         .find_map(|s| {
             let s = s.trim();
-            s.strip_prefix("role=").map(|v| v.to_string())
+            s.strip_prefix(&prefix).map(|v| v.to_string())
         })
+}
+
+pub fn extract_role_from_cookie(headers: &HeaderMap) -> Option<String> {
+    extract_cookie(headers, "role")
 }
 
 fn determine_role(claims: &ZitadelClaims) -> Option<String> {
@@ -255,7 +255,6 @@ fn determine_role(claims: &ZitadelClaims) -> Option<String> {
             return Some(role);
         }
     }
-
     if let Some(ref roles_value) = claims.zitadel_roles {
         if let Some(roles_obj) = roles_value.as_object() {
             for key in roles_obj.keys() {
@@ -266,7 +265,6 @@ fn determine_role(claims: &ZitadelClaims) -> Option<String> {
             }
         }
     }
-
     None
 }
 

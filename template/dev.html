@@ -35,7 +35,6 @@
   }
 
   body { font-family: var(--font); font-size: 14px; color: var(--text-primary); background: var(--bg-tertiary); height: 100vh; overflow: hidden; }
-
   .shell { display: flex; height: 100vh; }
 
   /* SIDEBAR */
@@ -59,7 +58,8 @@
   .av-circle { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-secondary); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; border: 0.5px solid var(--border-md); }
   .av-name { font-size: 12px; font-weight: 500; }
   .av-role { font-size: 10px; color: var(--text-tertiary); }
-  .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; }
+  /* logout-btn utilisé sur un <a> : on retire les styles de bouton natifs */
+  .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; display: block; text-align: center; text-decoration: none; }
   .logout-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
 
   /* MAIN */
@@ -155,14 +155,8 @@
         <div class="av-role">Dev</div>
       </div>
     </div>
-      <button class="logout-btn" onclick="logout()">Se déconnecter</button>
-
-      <script>
-      async function logout() {
-        await fetch('/logout', { method: 'POST' });
-        window.location.href = '/';
-      }
-      </script>
+    <!-- <a> au lieu de <button> + fetch : navigation directe, pas de CORS -->
+    <a href="/logout" class="logout-btn">Se déconnecter</a>
   </div>
 </div>
 
@@ -185,6 +179,7 @@
         <td><div class="progress-bar" style="width:140px"><div class="progress-fill green" style="width:100%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">10/10 digests</div></td>
         <td><span class="badge badge-green">ALLOW</span></td>
       </tr>
+      {{SCAN_ROWS}}
     </table>
   </div>
 </div>
