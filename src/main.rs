@@ -513,8 +513,7 @@ async fn main() {
         // ─── Auth OIDC ───────────────────────────────────────────────────
         .route("/", get(auth::login_handler))
         .route("/callback", get(auth::callback_handler))
-        // CHANGEMENT CLÉ : logout est maintenant GET, pas POST
-        // Le navigateur navigue directement vers cette URL → pas de CORS
+
         .route("/logout", get(auth::logout))
         .route("/logged-out", get(auth::logged_out_handler))
  
