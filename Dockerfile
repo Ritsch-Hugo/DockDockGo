@@ -19,8 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 COPY --from=builder /app/target/release/docker-mitm /app/docker-mitm
 
-RUN mkdir -p /app/cache /app/quarantaine \
+RUN mkdir -p /app/certs-mitm /app/cache /app/quarantaine \
  && chown -R appuser:appuser /app
+
+VOLUME ["/app/certs-mitm", "/app/cache", "/app/quarantaine"]
 
 USER appuser
 EXPOSE 8443
