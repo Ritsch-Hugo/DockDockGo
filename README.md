@@ -43,16 +43,18 @@ docker build -t docdockgo .
 ### 2. Lancer le container
 
 ```bash
-docker run \
-  --user root \
-  -v $(pwd)/registry_whitelist.json:/app/registry_whitelist.json \
-  -v $(pwd)/certs-mitm:/app/certs-mitm \
+docker run -d \
+  --name docdockgo-proxy \
+  -u 10001:10001 \
+  -v $(pwd)/registry_whitelist.json:/app/registry_whitelist.json:ro \
+  -v $(pwd)/certs-mitm:/app/certs-mitm:ro \
   -e DATABASE_URL=postgres://docdockgo_admin:docdockgo@172.17.0.1:5432/docdockgo \
-  -p 443:443 \
+  -p 443:8443 \
   ghcr.io/ritsch-hugo/docdockgo:latest
 ```
 
-> ⚠️ `--user root` est requis car le proxy écoute sur le port 443 (port privilégié < 1024).
+> `-u 10001:10001` force l'exécution du proxy avec un utilisateur non-privilégié pour garantir la sécurité du système hôte
+> `-p 443:8443` redirige le trafic HTTPS standard (443) vers le port interne du proxy (8443), permettant ainsi l'interception sans droits root
 > `172.17.0.1` correspond à l'IP de l'hôte pour la base de donnée
 > `registry_whitelist.json` doit etre ajouté a la racine du projet et doit contenir le json qui indique les registres autorisés
 

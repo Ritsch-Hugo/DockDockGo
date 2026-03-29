@@ -23,5 +23,5 @@ RUN mkdir -p /app/cache /app/quarantaine \
  && chown -R appuser:appuser /app
 
 USER appuser
-EXPOSE 443
+EXPOSE 8443
 CMD ["/app/docker-mitm"]
