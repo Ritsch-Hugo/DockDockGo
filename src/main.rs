@@ -20,7 +20,7 @@ use sha2::{Digest as ShaDigest, Sha256};
 use std::net::SocketAddr;
 use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
-use crate::auth::OidcState;
+use crate::auth::{AppState, OidcState};
 
 #[derive(Deserialize)]
 struct HighLevelResp {
@@ -504,7 +504,21 @@ async fn decide(mut mp: Multipart) -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() {
-    let oidc_state = OidcState::default();
+
+    dotenvy::dotenv().ok();
+
+    // 1. Initialiser la DB (comme dans ton Proxy)
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL doit être défini dans le .env");
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("Echec de connexion à la DB");
+
+    // 2. Créer l'état global
+    let state = AppState {
+        oidc_ctx: OidcState::default(),
+        db: pool,
+    };
  
     let app = Router::new()
         // ─── API proxy ───────────────────────────────────────────────────
@@ -521,7 +535,7 @@ async fn main() {
         .nest("/dashboard", dashboard::router())
  
         // ─── State partagé (OIDC) ────────────────────────────────────────
-        .with_state(oidc_state)
+        .with_state(state)
  
         // ─── Limites ─────────────────────────────────────────────────────
         .layer(DefaultBodyLimit::disable())

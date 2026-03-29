@@ -12,11 +12,19 @@ use openidconnect::{
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use dotenvy::dotenv;
 
 const ZITADEL_ISSUER: &str = "https://docdockgo-kgfmnj.eu1.zitadel.cloud";
 const CLIENT_ID: &str = "365975639251042712";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
 const POST_LOGOUT_REDIRECT_URI: &str = "http://localhost:3000/logged-out";
+
+
+#[derive(Clone)]
+pub struct AppState {
+    pub oidc_ctx: OidcState,
+    pub db: sqlx::PgPool, // Ton pool PostgreSQL
+}
 
 #[derive(Clone, Default)]
 pub struct OidcState {
@@ -37,7 +45,8 @@ pub async fn build_oidc_client() -> CoreClient {
     .set_redirect_uri(RedirectUrl::new(REDIRECT_URI.to_string()).expect("Redirect URI invalide"))
 }
 
-pub async fn login_handler(State(oidc_state): State<OidcState>) -> impl IntoResponse {
+pub async fn login_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let oidc_state = &state.oidc_ctx;
     let client = build_oidc_client().await;
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let nonce = Nonce::new_random();
@@ -66,6 +75,9 @@ pub struct CallbackParams {
 #[derive(Debug, Deserialize)]
 struct ZitadelClaims {
     sub: String,
+    preferred_username: Option<String>,
+    name: Option<String>,   
+    nickname: Option<String>,
     #[serde(rename = "role")]
     role: Option<String>,
     #[serde(rename = "urn:zitadel:iam:org:project:roles")]
@@ -73,9 +85,12 @@ struct ZitadelClaims {
 }
 
 pub async fn callback_handler(
-    State(oidc_state): State<OidcState>,
+    State(app_state): State<AppState>,
     Query(params): Query<CallbackParams>,
 ) -> impl IntoResponse {
+
+    let oidc_state = &app_state.oidc_ctx;
+    let db_pool = &app_state.db;
     let client = build_oidc_client().await;
 
     let verifier_secret = match oidc_state.pkce_verifier.lock().await.take() {
@@ -140,6 +155,45 @@ pub async fn callback_handler(
     };
 
     //println!("[AUTH] Role attribue : {}", role);
+
+    // --- DÉBUT AJOUT BASE DE DONNÉES ---
+
+    // 1. Récupérer les IPs du .env
+    let allowed_ips_raw = std::env::var("ALLOWED_IPS").unwrap_or_default();
+    let allowed_ips: Vec<String> = allowed_ips_raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    // 2. Synchro DB
+    let username = claims.preferred_username
+        .as_ref()
+        .or(claims.name.as_ref())
+        .or(claims.nickname.as_ref())
+        .map(|s| s.as_str())
+        .unwrap_or("unknown");
+
+    match sqlx::query(
+            r#"
+            INSERT INTO users (sub, username, role, allowed_ips, last_login)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (sub) DO UPDATE SET 
+                username = EXCLUDED.username,
+                role = EXCLUDED.role,
+                allowed_ips = EXCLUDED.allowed_ips,
+                last_login = NOW()
+            "#
+        )
+        .bind(&claims.sub)
+        .bind(username)
+        .bind(&role) // <--- AJOUTE LE '&' ICI pour emprunter la valeur
+        .bind(&allowed_ips[..])
+        .execute(db_pool).await {
+            Ok(_) => println!("[DB] User {} synchronisé", username),
+            Err(e) => eprintln!("[DB] Erreur de synchro : {}", e),
+        }
+
+    // --- FIN AJOUT BASE DE DONNÉES ---
 
     let mut headers = HeaderMap::new();
 

@@ -5,9 +5,10 @@ use axum::{
 };
 use crate::auth::{extract_role_from_cookie, OidcState};
 use crate::dashboard::store::SCAN_RESULTS;
+use crate::auth::AppState;
 
 pub async fn dev_dashboard(
-    State(_oidc_state): State<OidcState>,
+    State(_state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
     match extract_role_from_cookie(&headers).as_deref() {
@@ -35,7 +36,7 @@ pub async fn dev_dashboard(
 }
 
 pub async fn rssi_dashboard(
-    State(_oidc_state): State<OidcState>,
+    State(_state): State<AppState>, // On change le type ici aussi
     headers: HeaderMap,
 ) -> Response {
     match extract_role_from_cookie(&headers).as_deref() {
