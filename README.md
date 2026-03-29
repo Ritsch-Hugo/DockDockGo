@@ -170,6 +170,7 @@ DockDockGo/
 
 * Validations inputs
 * Rate limiting par IP
+* Contrôle d'accès réseau : Whitelisting IP par corrélation d'identité (OIDC)
 * Validation cryptographique SHA256 des digests
 * Vérification de la taille des blobs
 * Timeout(s)

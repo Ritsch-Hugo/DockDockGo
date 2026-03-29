@@ -836,6 +836,15 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .unwrap();
     }
 
+    // ✅ VÉRIFICATION IP — l'IP doit être connue dans la table users du dashboard
+    if !db::is_ip_allowed(&pool, &client_ip).await {
+        eprintln!("[SECURITY] Pull refusé — IP non autorisee : {}", client_ip);
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::from("Acces refuse : IP non autorisee"))
+            .unwrap();
+    }
+
     // ✅ VALIDATION DES INPUTS
     if path.contains("..") || path.contains('\\') {
         eprintln!("[SECURITY] Path traversal détecté: {}", path);

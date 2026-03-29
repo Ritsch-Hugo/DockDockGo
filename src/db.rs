@@ -156,3 +156,25 @@ pub async fn upsert_cache_file(
     .await?;
     Ok(())
 }
+
+pub async fn is_ip_allowed(pool: &sqlx::PgPool, ip: &str) -> bool {
+    // On utilise query_scalar sans "!" pour éviter les erreurs de compilation DATABASE_URL
+    let result = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE $1 = ANY(allowed_ips))"
+    )
+    .bind(ip)
+    .fetch_one(pool)
+    .await;
+
+    match result {
+        Ok(true) => {
+            println!("[DB] IP autorisée : {}", ip);
+            true
+        }
+        _ => {
+            // En cas d'erreur ou de non-trouvé, on refuse (Fail Closed)
+            println!("[SECURITY] IP refusée ou erreur DB : {}", ip);
+            false
+        }
+    }
+}
