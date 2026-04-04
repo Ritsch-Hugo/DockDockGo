@@ -78,7 +78,8 @@ use utils::{
     prefetch_expected_to_quarantine,
     serve_from_quarantine,
     validate_manifest_list,
-    all_expected_in_cache
+    all_expected_in_cache,
+    check_blob_authorized,
 };
 
 
@@ -922,7 +923,28 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         }
 
     }
-   
+
+    // ── GARDE BLOB : un blob ne peut pas être demandé sans manifest arch préalable ──
+    if path.contains("/blobs/") && req.method() == Method::GET {
+        let check_result = {
+            let list = pull_contexts.lock().await;
+            list.iter()
+                .find(|c| c.uuid == context_uuid)
+                .map(|ctx| check_blob_authorized(&path, ctx))
+                .unwrap_or_else(|| Err("Contexte introuvable".to_string()))
+        };
+
+        if let Err(reason) = check_result {
+            eprintln!("[SECURITY] Blob refusé | ip={} path={} reason={}", client_ip, path, reason);
+            dec_active(&pull_contexts, context_uuid).await;
+            let mut list = pull_contexts.lock().await;
+            list.retain(|c| c.uuid != context_uuid);
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("Accès refusé"))
+                .unwrap();
+        }
+    }
 
     // Vérifier le cache avant d'aller en upstream
     //si le digest est present dans le cache on retourne la réponse a partir du cache
@@ -955,7 +977,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
                             match verify_downloaded_digests(ctx) 
                             {
-                                Ok(DigestVerificationState::InProgress) => {
+                                  Ok(DigestVerificationState::InProgress) => {
                                     // pull normal, on laisse continuer
                                 }
                                 Ok(DigestVerificationState::Completed) => 

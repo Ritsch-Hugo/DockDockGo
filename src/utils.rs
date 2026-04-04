@@ -1477,4 +1477,74 @@ pub fn all_expected_in_cache(ctx: &PullContext) -> bool {
     );
     true
 }
+/// Vérifie qu'un blob demandé est légitime dans le contexte du pull en cours.
+/// Un blob n'est autorisé que si :
+///   1. Son digest est dans digests_expected (manifest arch préalablement reçu)
+///   2. Le scan final a rendu un verdict ALLOW (image whitelistée)
+///
+/// Retourne Ok(()) si le blob est autorisé, Err(raison) sinon.
+pub fn check_blob_authorized(path: &str, ctx: &PullContext) -> Result<(), String> {
+    // On ne s'applique qu'aux requêtes de blobs
+    if !path.contains("/blobs/") {
+        return Ok(());
+    }
+
+    // Extraire le digest du path
+    let digest_value = match path.find("sha256:") {
+        Some(pos) => {
+            let raw = &path[pos..].trim_start_matches("sha256:");
+            // Nettoyer les éventuels suffixes après le hash
+            raw.split('/').next().unwrap_or("").to_string()
+        }
+        None => {
+            return Err("Blob sans digest sha256 dans le path".to_string());
+        }
+    };
+
+    if digest_value.len() != 64 || !digest_value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("Digest blob mal formé: {}", digest_value));
+    }
+
+    // Règle 1 : digests_expected doit être peuplé
+    // Si vide ou <= 1, le manifest arch n'a jamais été reçu
+    if ctx.digests_expected.len() <= 1 {
+        return Err(format!(
+            "Blob {} refusé — manifest arch-spécifique non reçu (digests_expected vide)",
+            digest_value
+        ));
+    }
+
+    // Règle 2 : le digest doit être dans la liste attendue
+    let expected = ctx
+        .digests_expected
+        .iter()
+        .any(|d| d.value == digest_value);
+
+    if !expected {
+        return Err(format!(
+            "Blob {} refusé — digest non prévu par predict_digests",
+            digest_value
+        ));
+    }
+
+    // Règle 3 : le scan doit avoir rendu ALLOW
+    // (whitelist = scan déjà passé sur une session précédente → ok)
+    // On accepte aussi in_whitelist = Some(true) car la whitelist
+    // implique un scan ALLOW antérieur
+    let scan_ok = matches!(
+        ctx.scan_status.as_deref(),
+        Some("ALLOW")
+    );
+    let whitelisted = ctx.in_whitelist == Some(true);
+
+    if !scan_ok && !whitelisted {
+        return Err(format!(
+            "Blob {} refusé — scan non terminé ou non ALLOW (status={:?})",
+            digest_value,
+            ctx.scan_status
+        ));
+    }
+
+    Ok(())
+}
 
