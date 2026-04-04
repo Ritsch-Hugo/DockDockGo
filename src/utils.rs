@@ -1437,4 +1437,44 @@ pub fn validate_manifest_list(bytes: &[u8]) -> Result<(), String> {
 
     Ok(())
 }
+/// Vérifie que tous les digests attendus (digests_expected) sont présents
+/// dans le cache disque avant de servir depuis celui-ci.
+/// Retourne true seulement si chaque digest est trouvé (manifest ou blob).
+/// Si digests_expected est vide ou contient ≤ 1 élément (pas encore prédit),
+/// retourne false pour laisser passer le flux classique.
+pub fn all_expected_in_cache(ctx: &PullContext) -> bool {
+    if ctx.digests_expected.len() <= 1 {
+        return false;
+    }
+
+    let base = format!("cache/{}/{}", ctx.registry, ctx.repository);
+
+    for digest in &ctx.digests_expected {
+        let manifest_path = format!(
+            "{}/manifests/sha256/{}.json",
+            base, digest.value
+        );
+        let blob_path = format!(
+            "{}/blobs/sha256/{}",
+            base, digest.value
+        );
+
+        let in_cache = Path::new(&manifest_path).exists()
+            || Path::new(&blob_path).exists();
+
+        if !in_cache {
+            println!(
+                "[CACHE GUARD] Digest manquant en cache: {} | image incomplète, fallback upstream",
+                digest.value
+            );
+            return false;
+        }
+    }
+
+    println!(
+        "[CACHE GUARD] Tous les {} digests attendus présents en cache",
+        ctx.digests_expected.len()
+    );
+    true
+}
 

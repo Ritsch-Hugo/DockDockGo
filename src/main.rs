@@ -78,6 +78,7 @@ use utils::{
     prefetch_expected_to_quarantine,
     serve_from_quarantine,
     validate_manifest_list,
+    all_expected_in_cache
 };
 
 
@@ -930,105 +931,112 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         {
             let mut list = pull_contexts.lock().await;
             if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
-                if let Some(resp) = try_serve_from_cache(&req, ctx) {//Si le digest est dans le cache on retourne a partir du digest stocké
-                    
-                    ctx.in_cache = Some(true);
+                let is_manifest_list = ctx.digests_expected.len() <= 1;
+                //Verifie que tous les digests expected sont dans le cache 
+                //Si c'est un manifest list on laisse passer vu qu'on ne connais pas l'arch/os
+                let cache_complete = all_expected_in_cache(ctx);
+                if cache_complete || is_manifest_list
+                {
+                    if let Some(resp) = try_serve_from_cache(&req, ctx) {//Si le digest est dans le cache on retourne a partir du digest stocké
+                        
+                        ctx.in_cache = Some(true);
 
-                    println!("[CACHE] Digest trouvé en cache");
+                        println!("[CACHE] Image trouvée en cache");
 
-                    //Appeler la fonction verify_downloaded_digests pour libèrer le contexte au bon moment 
+                        //Appeler la fonction verify_downloaded_digests pour libèrer le contexte au bon moment 
 
-                    // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
-                    // et que digests_expected contient plus d'un élément
-                    let mut should_cleanup = false;
-                    if ctx.digests_expected.len() > 1
-                    {
-
-                        //On compare les digests expected et ceux réellement téléchargés
-
-                        match verify_downloaded_digests(ctx) 
+                        // On ne déclenche le "Pull COMPLET" que si la requête est un GET pour laisser passer les HEAD
+                        // et que digests_expected contient plus d'un élément
+                        let mut should_cleanup = false;
+                        if ctx.digests_expected.len() > 1
                         {
-                            Ok(DigestVerificationState::InProgress) => {
-                                // pull normal, on laisse continuer
-                            }
-                            Ok(DigestVerificationState::Completed) => 
+
+                            //On compare les digests expected et ceux réellement téléchargés
+
+                            match verify_downloaded_digests(ctx) 
                             {
-                                println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
-                                //Mettre la variable scan_completed a true
-                                ctx.pull_completed = true;
+                                Ok(DigestVerificationState::InProgress) => {
+                                    // pull normal, on laisse continuer
+                                }
+                                Ok(DigestVerificationState::Completed) => 
+                                {
+                                    println!("[PullContext] Pull COMPLET pour uuid={}", ctx.uuid);
+                                    //Mettre la variable scan_completed a true
+                                    ctx.pull_completed = true;
 
-                                sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
-                                    .bind(context_uuid.to_string())
-                                    .execute(&pool)
-                                    .await
-                                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
+                                    sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                                        .bind(context_uuid.to_string())
+                                        .execute(&pool)
+                                        .await
+                                        .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
 
-                                cleanup_tmp_for_uuid(&ctx.uuid);
-                                remove_ctx_digests_from_quarantine(ctx, &pool);
+                                    cleanup_tmp_for_uuid(&ctx.uuid);
+                                    remove_ctx_digests_from_quarantine(ctx, &pool);
 
-                                should_cleanup = true;
+                                    should_cleanup = true;
 
+                                }
+                                Err(_) => {
+                                    eprintln!("[PullContext] Pull invalide");
+                                    //
+                                    cleanup_tmp_for_uuid(&ctx.uuid);
+                                    remove_ctx_digests_from_quarantine(ctx, &pool);
+                                    drop(list);
+                                    dec_active(&pull_contexts, context_uuid).await;
+
+                                    let mut list = pull_contexts.lock().await;
+                                    list.retain(|c| c.uuid != context_uuid);
+                                    return Response::builder()
+                                        .status(StatusCode::FORBIDDEN)
+                                        .body(Body::from("Digest mismatch detected"))
+                                        .unwrap();
+                                }
                             }
-                            Err(_) => {
-                                eprintln!("[PullContext] Pull invalide");
-                                //
-                                cleanup_tmp_for_uuid(&ctx.uuid);
-                                remove_ctx_digests_from_quarantine(ctx, &pool);
-                                drop(list);
-                                dec_active(&pull_contexts, context_uuid).await;
 
-                                let mut list = pull_contexts.lock().await;
-                                list.retain(|c| c.uuid != context_uuid);
+                        }
+
+                        //On clone le notify AVANT de sortir du lock
+                        let notify = {
+                            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                                ctx.notify_zero.clone()
+                            } else {
                                 return Response::builder()
                                     .status(StatusCode::FORBIDDEN)
                                     .body(Body::from("Digest mismatch detected"))
                                     .unwrap();
                             }
-                        }
-
-                    }
-
-                    //On clone le notify AVANT de sortir du lock
-                    let notify = {
-                        if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
-                            ctx.notify_zero.clone()
-                        } else {
-                            return Response::builder()
-                                .status(StatusCode::FORBIDDEN)
-                                .body(Body::from("Digest mismatch detected"))
-                                .unwrap();
-                        }
-                    };
-
-                    drop(list);
-                    // Décrémenter le compteur AVANT de retirer le contexte
-                    dec_active(&pull_contexts, context_uuid).await;
-
-                    if should_cleanup {
-                        // 🔴 CHECK IMMÉDIAT
-                        let zero = {
-                            let list = pull_contexts.lock().await;
-                            if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
-                                ctx.active_requests.load(Ordering::SeqCst) == 0
-                            } else {
-                                true
-                            }
                         };
 
-                        if !zero {
-                            notify.notified().await;
+                        drop(list);
+                        // Décrémenter le compteur AVANT de retirer le contexte
+                        dec_active(&pull_contexts, context_uuid).await;
+
+                        if should_cleanup {
+                            // 🔴 CHECK IMMÉDIAT
+                            let zero = {
+                                let list = pull_contexts.lock().await;
+                                if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
+                                    ctx.active_requests.load(Ordering::SeqCst) == 0
+                                } else {
+                                    true
+                                }
+                            };
+
+                            if !zero {
+                                notify.notified().await;
+                            }
+
+                            let mut list = pull_contexts.lock().await;
+                            list.retain(|c| c.uuid != context_uuid);
                         }
 
-                        let mut list = pull_contexts.lock().await;
-                        list.retain(|c| c.uuid != context_uuid);
+
+                        return resp;
                     }
-
-
-                    return resp;
                 }
                 else 
                 {
-                    println!("[CACHE] Digest pas trouvée dans le cache -> GET upstream -> quarantine ->  Scan");
+                    println!("[CACHE] Image inexistante ou incomplete dans le cache : GET upstream -> quarantine ->  Scan");
                 }
 
             }
@@ -1555,7 +1563,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 .body(Body::from("Image refused by security scan"))
                                 .unwrap();
                         }
-                        /* 
+                         
                         Some(ScanDecision::PENDING) => {
                             println!("[SECURITY CHECK] Image conforme -> autorisation du pull");
 
@@ -1601,9 +1609,9 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                             cleanup_tmp_for_uuid(&ctx_snapshot.uuid);
                             return response;
 
-                        }*/
+                        }
 
-                         
+                        /* 
                         Some(ScanDecision::PENDING) => {
 
                             cleanup_tmp_for_uuid(&ctx_snapshot.uuid);
@@ -1619,7 +1627,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 .status(StatusCode::FORBIDDEN)
                                 .body(Body::from("Image en cours de scan"))
                                 .unwrap();
-                        }
+                        }*/
                         
                         
                         None => {
@@ -1634,6 +1642,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 .body(Body::from("Image refused by security scan"))
                                 .unwrap();
                         }
+                        
                     }
 
                 }
