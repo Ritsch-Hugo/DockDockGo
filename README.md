@@ -45,6 +45,7 @@ docker build -t docdockgo .
 ```bash
 docker run -d \
   --name docdockgo-proxy \
+  --network host \
   -u 10001:10001 \
   -v $(pwd)/registry_whitelist.json:/app/registry_whitelist.json:ro \
   -v $(pwd)/certs-mitm:/app/certs-mitm:ro \

@@ -331,6 +331,29 @@ pub async fn get_pull_context(
                     //si le digest de la requete n'est pas le digest racine -> ajouter les digests contenus dans le manifest demandé
                     if racine.value != digest_value {
 
+                        // Si digests_expected est déjà rempli (scan déjà fait), pas besoin
+                        // de relire tmp/ — on skip toute la logique de prédiction
+                        if ctx.digests_expected.len() > 1 {
+                            let digest_struct = Digest {
+                                algorithm: "sha256".to_string(),
+                                value: digest_value.clone(),
+                            };
+                            match resource_type {
+                                "manifests" => {
+                                    if !ctx.manifest_digests.contains(&digest_struct) {
+                                        ctx.manifest_digests.push(digest_struct);
+                                    }
+                                }
+                                "blobs" => {
+                                    if !ctx.blob_digests.contains(&digest_struct) {
+                                        ctx.blob_digests.push(digest_struct);
+                                    }
+                                }
+                                _ => {}
+                            }
+                            
+                            return Ok(Some(ctx.uuid));
+                        }
                         let manifest_path = format!(
                             "tmp/{}/{}.json",
                             ctx.uuid,
@@ -425,7 +448,13 @@ pub async fn get_pull_context(
                     }
                     else {
                         //cas ou le digest GET est le digest racine (normal, ne rien faire)
-
+                        let digest_struct = Digest {
+                            algorithm: "sha256".to_string(),
+                            value: digest_value.clone(),
+                        };
+                        if !ctx.manifest_digests.contains(&digest_struct) {
+                            ctx.manifest_digests.push(digest_struct);
+                        }
                         return Ok(Some(ctx.uuid));
                     }   
                 } 

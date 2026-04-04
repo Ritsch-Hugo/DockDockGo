@@ -1218,3 +1218,223 @@ pub fn check_blob_size(path: &str, headers: &reqwest::header::HeaderMap) -> Resu
     Ok(())
 }
 
+/// Télécharge tous les digests attendus (manifests + blobs + referrers) en quarantaine.
+/// Appelée après predict_digests, sur le GET du manifest arch-spécifique.
+/// Idempotente : skip si le fichier est déjà présent.
+pub async fn prefetch_expected_to_quarantine(
+    client: &Client,
+    ctx: &PullContext,
+    pool: &sqlx::PgPool,
+) -> Result<(), anyhow::Error> {
+    use crate::registry_auth::RegistryClient;
+
+    let token = RegistryClient::from_registry(&ctx.registry)
+        .get_token(client, &ctx.repository)
+        .await?;
+
+    for digest in &ctx.digests_expected {
+        let digest_str = format!("sha256:{}", digest.value);
+
+        // --- Manifests : déjà téléchargés dans tmp/<uuid>/<value>.json par predict_digests ---
+        let tmp_manifest = format!("tmp/{}/{}.json", ctx.uuid, digest.value);
+        let q_manifest = format!(
+            "quarantaine/{}/{}/manifests/sha256/{}.json",
+            ctx.registry, ctx.repository, digest.value
+        );
+
+        if Path::new(&tmp_manifest).exists() && !Path::new(&q_manifest).exists() {
+            match fs::read(&tmp_manifest) {
+                Ok(bytes) => {
+                    let fake_path = format!("/v2/{}/manifests/{}", ctx.repository, digest_str);
+                    save_to_quarantine(&fake_path, &bytes, ctx, pool);
+                    println!("[PREFETCH] Manifest copié en quarantaine: {}", digest.value);
+                }
+                Err(e) => eprintln!("[PREFETCH] Lecture tmp manifest {}: {}", digest.value, e),
+            }
+            continue;
+        }
+
+        if Path::new(&q_manifest).exists() {
+            println!("[PREFETCH] Manifest déjà en quarantaine: {}", digest.value);
+            continue;
+        }
+
+        // --- Blobs : téléchargement upstream ---
+        let q_blob = format!(
+            "quarantaine/{}/{}/blobs/sha256/{}",
+            ctx.registry, ctx.repository, digest.value
+        );
+
+        if Path::new(&q_blob).exists() {
+            println!("[PREFETCH] Blob déjà en quarantaine: {}", digest.value);
+            continue;
+        }
+
+        let blob_url = format!(
+            "https://{}/v2/{}/blobs/{}",
+            ctx.registry, ctx.repository, digest_str
+        );
+
+        println!("[PREFETCH] Téléchargement blob: {}", digest.value);
+
+        match client
+            .get(&blob_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => {
+                match r.bytes().await {
+                    Ok(bytes) => {
+                        // Vérification cryptographique avant stockage
+                        let computed = sha256_hex(&bytes);
+                        if computed != digest.value {
+                            eprintln!(
+                                "[PREFETCH] Digest mismatch blob {} | calculé={}",
+                                digest.value, computed
+                            );
+                            continue; // on skip ce blob corrompu
+                        }
+                        let fake_path = format!("/v2/{}/blobs/{}", ctx.repository, digest_str);
+                        save_to_quarantine(&fake_path, &bytes, ctx, pool);
+                        println!("[PREFETCH] Blob stocké en quarantaine: {}", digest.value);
+                    }
+                    Err(e) => eprintln!("[PREFETCH] Lecture bytes blob {}: {}", digest.value, e),
+                }
+            }
+            Ok(r) => eprintln!("[PREFETCH] Status {} pour blob {}", r.status(), digest.value),
+            Err(e) => eprintln!("[PREFETCH] Erreur réseau blob {}: {}", digest.value, e),
+        }
+    }
+
+    Ok(())
+}
+
+/// Sert un digest depuis la quarantaine, après scan ALLOW.
+pub fn serve_from_quarantine(path: &str, ctx: &PullContext) -> Option<Response<Body>> {
+    let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+
+    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
+
+    // MANIFEST par digest
+    if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
+        let digest = parts[3].trim_start_matches("sha256:");
+        let file = format!("{}/manifests/sha256/{}.json", base_dir, digest);
+        if let Ok(data) = fs::read(&file) {
+            if data.len() < 20 {
+                return None;
+            }
+            let content_type = serde_json::from_slice::<serde_json::Value>(&data)
+                .ok()
+                .and_then(|v| {
+                    v.get("mediaType")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "application/vnd.oci.image.manifest.v1+json".to_string());
+            let real_digest = sha256_hex(&data);
+            return Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", content_type)
+                    .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
+                    .header("Content-Length", data.len())
+                    .body(Body::from(data))
+                    .unwrap(),
+            );
+        }
+    }
+
+    // BLOB
+    if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
+        let digest = parts[3].trim_start_matches("sha256:");
+        let file = format!("{}/blobs/sha256/{}", base_dir, digest);
+        if let Ok(data) = fs::read(&file) {
+            let real_digest = sha256_hex(&data);
+            return Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/octet-stream")
+                    .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
+                    .header("Content-Length", data.len())
+                    .body(Body::from(data))
+                    .unwrap(),
+            );
+        }
+    }
+
+    // REFERRERS
+    if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
+        let digest = parts[3].trim_start_matches("sha256:");
+        let file = format!("{}/referrers/sha256/{}.json", base_dir, digest);
+        if let Ok(data) = fs::read(&file) {
+            if data.len() < 20 {
+                return None;
+            }
+            return Some(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/vnd.oci.image.index.v1+json")
+                    .header("Content-Length", data.len())
+                    .body(Body::from(data))
+                    .unwrap(),
+            );
+        }
+    }
+
+    None
+}
+
+/// Valide la conformité structurelle d'une manifest-list OCI/Docker.
+/// Vérifie : JSON valide, champ manifests présent, chaque entrée a digest + platform.
+pub fn validate_manifest_list(bytes: &[u8]) -> Result<(), String> {
+    let v: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| format!("JSON invalide: {}", e))?;
+
+    let manifests = v
+        .get("manifests")
+        .and_then(|m| m.as_array())
+        .ok_or("Champ 'manifests' absent ou invalide")?;
+
+    if manifests.is_empty() {
+        return Err("Manifest-list vide".to_string());
+    }
+
+    for (i, m) in manifests.iter().enumerate() {
+        // digest obligatoire et format sha256:hex64
+        let digest = m
+            .get("digest")
+            .and_then(|d| d.as_str())
+            .ok_or_else(|| format!("Entrée {}: digest manquant", i))?;
+
+        if !digest.starts_with("sha256:") || digest.len() != 71 {
+            return Err(format!("Entrée {}: digest mal formé: {}", i, digest));
+        }
+
+        let hex_part = &digest[7..];
+        if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("Entrée {}: digest non-hexadécimal", i));
+        }
+
+        // platform obligatoire
+        let platform = m
+            .get("platform")
+            .ok_or_else(|| format!("Entrée {}: platform manquant", i))?;
+
+        platform
+            .get("os")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("Entrée {}: platform.os manquant", i))?;
+
+        platform
+            .get("architecture")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("Entrée {}: platform.architecture manquant", i))?;
+    }
+
+    Ok(())
+}
+
