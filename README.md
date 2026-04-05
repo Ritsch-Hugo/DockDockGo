@@ -149,7 +149,9 @@ DockDockGo/
 │   ├── db.rs                    # Gestion de BDD
 │   ├── predict_digests_utils.rs # Prediction des digests demandés par Docker/Podman
 │   ├── registry_auth.rs         # Authentification pour registres (DockerHub + Generic)
-│   └── validation.rs            # Validation des inputs
+│   ├── validation.rs            # Validation des inputs
+│   ├── scan_utils.rs            # Communication avec Orchestrateur
+│   └── models.rs		 # Structures et impl
 ├── certs-mitm/                  # Certificats
 ├── cache/                       # Images approuvées (préalablement scannées) 
 ├── quarantaine/                 # Images en cours d'analyse
