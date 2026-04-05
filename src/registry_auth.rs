@@ -1,5 +1,6 @@
 use anyhow::Result;
 use reqwest::Client;
+use url::Url;
 
 pub enum RegistryClient {
     DockerHub,
@@ -53,6 +54,10 @@ impl RegistryClient {
                 // Extraire realm et service, ignorer le scope du header
                 let realm = extract_www_auth_field(&www_auth, "realm")
                     .ok_or_else(|| anyhow::anyhow!("realm manquant"))?;
+
+                //Validation anti SSRF
+                validate_realm(&realm, registry)?;
+
                 let service = extract_www_auth_field(&www_auth, "service").unwrap_or_default();
 
                 // Construire l'URL avec le bon scope
@@ -86,4 +91,40 @@ fn extract_www_auth_field(www_auth: &str, field: &str) -> Option<String> {
     let start = www_auth.find(&pattern)? + pattern.len();
     let end = www_auth[start..].find('"')? + start;
     Some(www_auth[start..end].to_string())
+}
+
+//Patterns de validation pour les headers et les champs d'authentification (anti SSRF))
+fn validate_realm(realm: &str, expected_registry: &str) -> Result<(), anyhow::Error> {
+    let parsed = Url::parse(realm)
+        .map_err(|_| anyhow::anyhow!("Realm URL invalide: {}", realm))?;
+
+    // Schéma obligatoirement HTTPS
+    if parsed.scheme() != "https" {
+        return Err(anyhow::anyhow!(
+            "Realm non-HTTPS rejeté: {}", realm
+        ));
+    }
+
+    let realm_host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("Realm sans host: {}", realm))?;
+
+    // Le host du realm doit correspondre au registre attendu
+    // On autorise aussi les sous-domaines directs (ex: auth.ghcr.io pour ghcr.io)
+    let registry_host = expected_registry
+        .split(':')  // retire le port éventuel
+        .next()
+        .unwrap_or(expected_registry);
+
+    let ok = realm_host == registry_host
+        || realm_host.ends_with(&format!(".{}", registry_host));
+
+    if !ok {
+        return Err(anyhow::anyhow!(
+            "SSRF bloqué — realm '{}' ne correspond pas au registre '{}'",
+            realm_host, registry_host
+        ));
+    }
+
+    Ok(())
 }

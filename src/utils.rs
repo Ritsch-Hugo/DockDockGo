@@ -1641,3 +1641,91 @@ pub fn is_safe_digest_component(s: &str) -> bool {
         && !s.contains('\\')
 }
 
+/// Extrait et valide registry + repository depuis la requête.
+/// Garantit qu'aucun des deux ne peut sortir de l'arborescence autorisée.
+/// À appeler une seule fois au début de handle() — les valeurs retournées
+/// sont sûres pour toute construction de chemin ultérieure.
+pub fn canonicalize_path_components(
+    host: &str,
+    parts: &[&str],
+) -> Result<(String, String), String> {
+
+    // -- Registry (vient du header Host) --
+    // On retire le port éventuel
+    let registry = host.split(':').next().unwrap_or(host);
+
+    // Seuls les caractères DNS + port sont autorisés, pas de slash ni de point double
+    if registry.is_empty()
+        || registry.len() > 253
+        || registry.contains("..")
+        || registry.contains('/')
+        || registry.contains('\\')
+        || !registry.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(format!("Registry invalide: {}", registry));
+    }
+
+    // -- Repository (vient du path) --
+    // On cherche l'index de "manifests", "blobs" ou "referrers"
+    let idx = parts
+        .iter()
+        .position(|p| *p == "manifests" || *p == "blobs" || *p == "referrers")
+        .ok_or_else(|| "Type de ressource manquant dans le path".to_string())?;
+
+    if idx == 0 {
+        return Err("Repository vide".to_string());
+    }
+
+    let repository = parts[..idx].join("/");
+
+    // Chaque segment du repository est vérifié individuellement
+    for segment in parts[..idx].iter() {
+        if segment.is_empty()
+            || segment.len() > 128
+            || segment.contains("..")
+            || segment.contains('\\')
+            || !segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return Err(format!("Segment de repository invalide: {}", segment));
+        }
+    }
+
+    // Vérification finale : le chemin construit ne doit pas remonter
+    // au-dessus de la racine, même après jointure
+    let probe_quarantine = std::path::Path::new("quarantaine")
+        .join(&registry)
+        .join(&repository);
+
+    let probe_cache = std::path::Path::new("cache")
+        .join(&registry)
+        .join(&repository);
+
+    for probe in [&probe_quarantine, &probe_cache] {
+        let normalized = normalize_path(probe);
+        // Le chemin normalisé doit commencer par le bon répertoire racine
+        if !normalized.starts_with("quarantaine") && !normalized.starts_with("cache") {
+            return Err(format!(
+                "Path traversal détecté après normalisation: {}",
+                normalized.display()
+            ));
+        }
+    }
+
+    Ok((registry.to_string(), repository))
+}
+
+/// Normalise un chemin sans accès disque (pour les chemins pas encore créés).
+fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => { out.pop(); }
+            std::path::Component::CurDir => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+

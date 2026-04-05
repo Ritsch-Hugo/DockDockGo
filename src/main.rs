@@ -80,6 +80,7 @@ use utils::{
     all_expected_in_cache,
     check_blob_authorized,
     is_safe_digest_component,
+    canonicalize_path_components,
 };
 
 
@@ -870,6 +871,17 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .unwrap();
     }
 
+    // ✅ CANONICALISATION DES COMPOSANTS DE CHEMIN
+    let (_registry, _repository) = match canonicalize_path_components(&host, &parts) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("[SECURITY] Composants de chemin invalides: {}", e);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from("Requête invalide"))
+                .unwrap();
+        }
+    };
 
     let client_type = detect_client_type(&req);
     println!("[CLIENT] type détecté: {}", client_type); 
