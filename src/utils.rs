@@ -1605,24 +1605,6 @@ pub fn check_blob_authorized(path: &str, ctx: &PullContext) -> Result<(), String
         ));
     }
 
-    // Règle 3 : le scan doit avoir rendu ALLOW
-    // (whitelist = scan déjà passé sur une session précédente → ok)
-    // On accepte aussi in_whitelist = Some(true) car la whitelist
-    // implique un scan ALLOW antérieur
-    let scan_ok = matches!(
-        ctx.scan_status.as_deref(),
-        Some("ALLOW")
-    );
-    let whitelisted = ctx.in_whitelist == Some(true);
-
-    if !scan_ok && !whitelisted {
-        return Err(format!(
-            "Blob {} refusé — scan non terminé ou non ALLOW (status={:?})",
-            digest_value,
-            ctx.scan_status
-        ));
-    }
-
     Ok(())
 }
 

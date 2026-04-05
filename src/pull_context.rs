@@ -7,11 +7,11 @@ use anyhow::Result;
 use sqlx::PgPool;
 
 use crate::registry_auth::RegistryClient;
-use crate::{
-    PullContext,
+use crate::models::{
     PullContextList,
     PullContextError,
     Digest,
+    PullContext
 };
 
 use crate::{

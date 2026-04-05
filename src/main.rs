@@ -1,5 +1,4 @@
 use std::{convert::Infallible, fs::File, io::BufReader, sync::Arc};
-
 use anyhow::Result;
 use hyper::{
     service::service_fn,
@@ -11,53 +10,48 @@ use rustls::{Certificate, PrivateKey, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
-
-use std::collections::{HashMap};
 use tokio::sync::Mutex as TokioMutex;
-
-
-use uuid::Uuid;
-use tokio::time::{Duration};
-
-use serde::{Serialize, Deserialize};
-
-use std::time::Instant;//pour le timeout des pull context 2
-
-use reqwest::multipart;
-
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::Notify;
-
-use rustls::sign::any_supported_type;
-use rustls::server::ResolvesServerCert;
-use rustls::sign::CertifiedKey;
+use std::sync::atomic::{Ordering};
 use std::path::Path;
 
-
-
+mod predict_digests_utils;
+mod registry_auth;
+mod validation;
 mod pull_context;
 mod db;
+mod scan_utils;
+mod models;
+mod utils;
+
+
+use models::{
+    PullContext,
+    PullContextList,
+    Digest,
+    PullContextError,
+    DigestVerificationState,
+    ScanDecision,
+    RateLimiter,
+    MultiCertResolver
+};
+
 use pull_context::{
     get_pull_context, 
     digest_process_for_head,
 };
 
+use scan_utils::{
+    is_allowed,
+    launch_final_scan,
+};
 
-// Déclare le module
-mod predict_digests_utils;
-mod registry_auth;
-mod validation;
-
-// Puis importe les fonctions dont tu as besoin
 use predict_digests_utils::{
     get_os_arch_for_digest,
-    //fetch_and_process_manifest,
     predict_digests_docker,
     predict_digests_podman,
     verify_downloaded_digests,
 };
 
-mod utils;
 use utils::{
     save_to_cache,
     try_serve_from_cache,
@@ -79,642 +73,8 @@ use utils::{
     validate_manifest_list,
     all_expected_in_cache,
     check_blob_authorized,
-    is_safe_digest_component,
     canonicalize_path_components,
-};
-
-
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-struct Digest {
-    algorithm: String, // ex: "sha256"
-    value: String,     // hex
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PullContext 
-{
-    uuid: Uuid,
-    ip_client: String,
-    registry: String, //ex: "registry-1.docker.io"
-    repository: String, //ex: "library/ubuntu"
-    tag: String,
-
-    manifest_digests: Vec<Digest>,
-    blob_digests: Vec<Digest>,
-    referrers_digests: Vec<Digest>,
-
-    manifest_racine_digest: Option<Digest>,
-    digests_possible: Vec<Digest>,
-    digests_expected: Vec<Digest>,
-
-    os: String,  // ex: "linux"
-    arch: String, // ex: "amd64"
-
-    #[serde(skip_serializing, skip_deserializing, default = "Instant::now")]
-    last_activity: Instant,
-    pull_completed: bool,
-    scan_final_done: bool,
-    in_whitelist: Option<bool>,
-    in_blacklist: Option<bool>,
-    in_cache: Option<bool>,
-    check_if_verify_digest_completed: bool,
-
-    pub scan_status: Option<String>, // "ALLOW", "PENDING", "DENY" ou None si pas encore de scan
-
-    pub active_requests: AtomicUsize,
-
-    pub client_type: String, //podman ou docker
-
-    #[serde(skip_serializing, skip_deserializing)]
-    pub notify_zero: Arc<Notify>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScanDecision {
-    PENDING,
-    ALLOW,
-    DENY,
-}
-
-// Erreurs possibles lors de la récupération du contexte PullContext2
-#[derive(Debug)]
-enum PullContextError {
-    InvalidPath,
-    MissingDigestOrTag,
-    ContextMismatch,
-    DigestNotAllowed,
-    BlockingFromTheScanner,
-    StorageError,
-    Overload,
-    ServerError,
-}
-
-#[derive(Debug, PartialEq)]
-enum DigestVerificationState {
-    InProgress,
-    Completed,
-}
-
-//Structures pour predict_digests
-#[derive(Debug, Deserialize)]
-struct ManifestList {
-    manifests: Vec<ManifestDescriptor>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ManifestDescriptor {
-    digest: String,
-    platform: Platform,
-    #[serde(default)]
-    annotations: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Platform {
-    os: String,
-    architecture: String,
-}
-
-
-
-//Structure pour la gestion multi certificats 
-struct MultiCertResolver {
-    certs: HashMap<String, Arc<CertifiedKey>>,
-}
-
-/// Entrée pour une IP : nombre de requêtes et début de la fenêtre
-struct RateLimitEntry {
-    count: u32,
-    window_start: Instant,
-}
-
-pub struct RateLimiter {
-    entries: Arc<TokioMutex<HashMap<String, RateLimitEntry>>>,
-    max_requests: u32,   // nombre max de requêtes par fenêtre
-    window: Duration,    // durée de la fenêtre
-}
-
-impl RateLimiter {
-    pub fn new(max_requests: u32, window_secs: u64) -> Self {
-        Self {
-            entries: Arc::new(TokioMutex::new(HashMap::new())),
-            max_requests,
-            window: Duration::from_secs(window_secs),
-        }
-    }
-
-    /// Retourne true si la requête est autorisée, false si le rate limit est atteint
-    pub async fn check(&self, ip: &str) -> bool {
-        let mut map = self.entries.lock().await;
-        let now = Instant::now();
-
-        match map.get_mut(ip) {
-            Some(entry) => {
-                // Si la fenêtre est expirée, on remet à zéro
-                if now.duration_since(entry.window_start) > self.window {
-                    entry.count = 1;
-                    entry.window_start = now;
-                    true
-                } else if entry.count >= self.max_requests {
-                    // Fenêtre active et limite atteinte
-                    false
-                } else {
-                    entry.count += 1;
-                    true
-                }
-            }
-            None => {
-                // Première requête de cette IP
-                map.insert(ip.to_string(), RateLimitEntry {
-                    count: 1,
-                    window_start: now,
-                });
-                true
-            }
-        }
-    }
-
-    //Nettoyage périodique des entrées expirées pour éviter la fuite mémoire
-    
-    pub fn start_cleanup(self: Arc<Self>) {
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-                let mut map = self.entries.lock().await;
-                let now = Instant::now();
-                let before = map.len();
-                map.retain(|_, entry| {
-                    now.duration_since(entry.window_start) <= self.window
-                });
-                let removed = before - map.len();
-                if removed > 0 {
-                    println!("[RATE-LIMIT] Nettoyage effectué, {} IPs supprimées ({} restantes)", removed, map.len());
-                }
-            }
-        });
-    }
-}
-
-impl MultiCertResolver {
-    fn new() -> Self {
-        Self {
-            certs: HashMap::new(),
-        }
-    }
-
-    fn add(&mut self, domain: &str) -> Result<()> {
-        let crt_path = format!("certs-mitm/{}.crt", domain);
-        let key_path = format!("certs-mitm/{}.key", domain);
-
-        if !Path::new(&crt_path).exists() || !Path::new(&key_path).exists() {
-            eprintln!("[TLS] Certificat manquant pour {}", domain);
-            return Ok(());
-        }
-
-        let certs = load_certs(&crt_path)?;
-        let key = load_private_key(&key_path)?;
-        let signing_key = any_supported_type(&key)?;
-        let certified = Arc::new(CertifiedKey::new(certs, signing_key));
-        self.certs.insert(domain.to_string(), certified);
-        println!("[TLS] Certificat chargé pour {}", domain);
-        Ok(())
-    }
-}
-
-impl ResolvesServerCert for MultiCertResolver {
-    fn resolve(
-        &self,
-        client_hello: rustls::server::ClientHello,
-    ) -> Option<Arc<CertifiedKey>> {
-        let name = client_hello.server_name()?;
-        self.certs.get(name).cloned()
-    }
-}
-
-type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
-
-
-impl Digest {
-    fn as_str(&self) -> String {
-        format!("{}:{}", self.algorithm, self.value)
-    }
-}
-
-impl PullContext {
-    fn new(uuid: Uuid, ip_client: String, registry: String, repository: String, tag: String) -> Self {
-        Self {
-            uuid,
-            ip_client,
-            registry,
-            repository,
-            tag,
-            manifest_digests: Vec::new(),
-            blob_digests: Vec::new(),
-            referrers_digests: Vec::new(),
-            digests_possible: Vec::new(),
-            digests_expected: Vec::new(),
-            manifest_racine_digest: None,
-            last_activity: Instant::now(),
-            os: "unknown".to_string(),
-            arch: "unknown".to_string(),
-            pull_completed: false,
-            scan_final_done: false,
-            in_blacklist: None,
-            in_whitelist: None,
-            in_cache: None,
-            check_if_verify_digest_completed: false,
-            scan_status: Some("PENDING".to_string()),
-            active_requests: AtomicUsize::new(0),
-            client_type: "unknown".to_string(),
-            notify_zero: Arc::new(Notify::new()),
-
-        }
-
-    }
-}
-impl Clone for PullContext {
-    fn clone(&self) -> Self {
-        Self {
-            uuid: self.uuid,
-            ip_client: self.ip_client.clone(),
-            registry: self.registry.clone(),
-            repository: self.repository.clone(),
-            tag: self.tag.clone(),
-            manifest_digests: self.manifest_digests.clone(),
-            blob_digests: self.blob_digests.clone(),
-            referrers_digests: self.referrers_digests.clone(),
-            manifest_racine_digest: self.manifest_racine_digest.clone(),
-            digests_possible: self.digests_possible.clone(),
-            digests_expected: self.digests_expected.clone(),
-            os: self.os.clone(),
-            arch: self.arch.clone(),
-            last_activity: self.last_activity,
-            pull_completed: self.pull_completed,
-            scan_final_done: self.scan_final_done,
-            in_whitelist: self.in_whitelist,
-            in_blacklist: self.in_blacklist,
-            in_cache: self.in_cache,
-            check_if_verify_digest_completed: self.check_if_verify_digest_completed,
-            scan_status: self.scan_status.clone(),
-            active_requests: AtomicUsize::new(self.active_requests.load(Ordering::SeqCst)),
-            client_type: self.client_type.clone(),
-            notify_zero: self.notify_zero.clone(),
-        }
-    }
-}
-
-/// 🔐 Politique de sécurité (async)
-/// ALLOW ou PENDING => true (on continue)
-/// DENY => false (on bloque direct)
-pub async fn launch_final_scan(
-    pull_contexts: &PullContextList,
-    uuid: Uuid,
-    path: &str,
-) -> Option<ScanDecision>
-{
-
-    // 1️⃣ récupérer le contexte
-    let mut ctx_clone;
-    {
-        let mut list = pull_contexts.lock().await;
-        let ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
-
-        // sécurité : scan déjà lancé ?
-        if ctx.scan_final_done {
-            return None;
-        }
-
-        ctx.scan_final_done = true;
-        ctx_clone = ctx.clone();
-    }
-    // 🔴 on sort du mutex ici
-
-    println!("[SCAN FINAL] lancement pour uuid={}", uuid);
-
-    // 2️⃣ appel scanner
-    let state = match is_allowed(&mut ctx_clone, path, "scan_final").await {
-        Err(e) => {
-            eprintln!("[ORCH ERROR] {}", e);
-            return None; // ← fail closed
-        }
-        Ok(s) => s,
-    };
-
-
-
-    let mut list = pull_contexts.lock().await;
-    let _ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
-
-    if state == "ALLOW"
-    {
-        return Some(ScanDecision::ALLOW);
-    }
-     
-    if state == "PENDING" 
-    {
-        return Some(ScanDecision::PENDING);
-    }
-    
-    if state == "DENY" 
-    {
-        return Some(ScanDecision::DENY);
-    }
-
-    println!("[SCAN FINAL] état inconnu");
-    None
-}
-
-async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result<String, String> {
-    #[derive(serde::Deserialize)]
-    struct OrchestratorResp {
-        pull_id: uuid::Uuid,
-        state: String, // "PENDING" | "ALLOW" | "DENY"
-    }
-    
-    let orch_url = std::env::var("ORCH_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:3000/v1/decision".to_string());
-
-    println!("============================== APPEL ORCHESTRATEUR ==============================");
-    println!("uuid={} repo={}:{}", ctx.uuid, ctx.repository, ctx.tag);
-
-    // 1) context inchangé
-    let mut form = multipart::Form::new()
-        .text("context", serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string()));
-
-async fn add_file_if_exists(
-    form: multipart::Form,
-    field_name: &'static str,
-    filename: String,
-    path: String,
-) -> multipart::Form {
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => {
-            if bytes.is_empty() {
-                println!("[ORCH WARN] fichier vide: {}", path);
-                return form;
-            }
-
-            println!("[ORCH INFO] ajout fichier: {}", path);
-
-            let mime = if path.contains("/manifests/") || path.contains("/referrers/") {
-                "application/json"
-            } else {
-                "application/octet-stream"
-            };
-
-            // Renommer le fichier pour éviter les ':' dans le nom
-            let safe_filename = filename.replace(":", "_");
-
-            let part = multipart::Part::bytes(bytes)
-                .file_name(safe_filename)
-                .mime_str(mime)
-                .unwrap();
-
-            form.part(field_name, part)
-        }
-        Err(e) => {
-            println!("[ORCH WARN] fichier introuvable: {} ({})", path, e);
-            form
-        }
-    }
-}
-
-    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
-
-    // =====================================================================
-    // SCAN FINAL → envoyer TOUS les digests de l'image
-    // =====================================================================
-    println!("flag : {} : ", flag);
-
-    if flag == "scan_final" 
-    {
-        println!("[ORCH] SCAN FINAL -> envoi de tous les digests de l'image");
-
-        // ---------------- manifests ----------------
-        for d in &ctx.manifest_digests {
-            let digest = d.as_str();
-            let parts: Vec<&str> = digest.split(':').collect();
-            if parts.len() == 2 {
-                let algo = parts[0];
-                let value = parts[1];
-
-                if !is_safe_digest_component(algo) || !is_safe_digest_component(value) {
-                    eprintln!("[SECURITY] Digest manifest invalide ignoré: {}", digest);
-                    return Err(format!("Digest invalide détecté: {}", digest));
-                }
-
-                let filename = digest.clone();
-                let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
-
-                form = add_file_if_exists(form, "manifests", filename, file_path).await;
-            }
-        }
-
-        // ---------------- blobs ----------------
-        for d in &ctx.blob_digests {
-            let digest = d.as_str();
-            let parts: Vec<&str> = digest.split(':').collect();
-            if parts.len() == 2 {
-                let algo = parts[0];
-                let value = parts[1];
-
-                if !is_safe_digest_component(algo) || !is_safe_digest_component(value) {
-                    eprintln!("[SECURITY] Digest manifest invalide ignoré: {}", digest);
-                    return Err(format!("Digest invalide détecté: {}", digest));
-                }
-
-                let filename = digest.clone();
-                let file_path = format!("{}/blobs/{}/{}", base_dir, algo, value);
-
-                form = add_file_if_exists(form, "blobs", filename, file_path).await;
-            }
-        }
-
-        // ---------------- referrers ----------------
-        for d in &ctx.referrers_digests {
-            let digest = d.as_str();
-            let parts: Vec<&str> = digest.split(':').collect();
-            if parts.len() == 2 {
-                let algo = parts[0];
-                let value = parts[1];
-
-                if !is_safe_digest_component(algo) || !is_safe_digest_component(value) {
-                    eprintln!("[SECURITY] Digest manifest invalide ignoré: {}", digest);
-                    return Err(format!("Digest invalide détecté: {}", digest));
-                }
-
-                let filename = digest.clone();
-                let file_path = format!("{}/referrers/{}/{}.json", base_dir, algo, value);
-
-                form = add_file_if_exists(form, "referrers", filename, file_path).await;
-            }
-        }
-
-        println!("[ORCH] SCAN FINAL -> tous les fichiers ajoutés au multipart");
-    }
-
-    //Cas scan haut niveau podman (sur le GET /manifest/<tag>)
-    else if path.contains("/manifests/") && !path.contains("sha256:") 
-    {
-        if flag != "scan_haut_niveau" {  // ← ne pas joindre le manifest pour le premier call
-            if let Some(racine) = &ctx.manifest_racine_digest {
-                let digest = racine.as_str();
-                let parts: Vec<&str> = digest.split(':').collect();
-                if parts.len() == 2 {
-                    let algo = parts[0];
-                    let value = parts[1];
-                    let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
-                    println!("[ORCH] manifest racine (par tag) détecté: {}", file_path);
-                    form = add_file_if_exists(form, "manifests", digest.clone(), file_path).await;
-                }
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // On envoie uniquement le digest demandé dans l'URL
-    // ------------------------------------------------------------------
-    else 
-    {
-
-        if let Some(pos) = path.find("sha256:") 
-        {
-            let digest = &path[pos..];
-            println!("[ORCH] digest courant détecté: {}", digest);
-
-            if path.contains("/manifests/") {
-                let parts: Vec<&str> = digest.split(':').collect();
-                if parts.len() == 2 {
-                    let algo = parts[0];
-                    let value = parts[1];
-
-                    let filename = digest.to_string();
-                    let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
-
-                    form = add_file_if_exists(form, "manifests", filename, file_path).await;
-                }
-                
-            } else if path.contains("/blobs/") {
-                let parts: Vec<&str> = digest.split(':').collect();
-                if parts.len() == 2 {
-                    let algo = parts[0];
-                    let value = parts[1];
-
-                    let filename = digest.to_string();
-                    let file_path = format!("{}/blobs/{}/{}", base_dir, algo, value);
-
-                    println!("[ORCH] fichier blob attendu: {}", file_path);
-
-                    form = add_file_if_exists(form, "blobs", filename, file_path).await;
-                }
-            } else if path.contains("/referrers/") {
-                let parts: Vec<&str> = digest.split(':').collect();
-                if parts.len() == 2 {
-                    let algo = parts[0];
-                    let value = parts[1];
-
-                    let filename = digest.to_string();
-                    let file_path = format!("{}/referrers/{}/{}.json", base_dir, algo, value);
-
-                    form = add_file_if_exists(form, "referrers", filename, file_path).await;
-                }
-            }
-        }
-            
-        // ← CAS PODMAN : path par tag, pas de sha256: dans le path
-        else if path.contains("/manifests/") && !path.contains("sha256:") && flag != "scan_haut_niveau" {
-            // Utiliser le manifest_racine_digest du contexte
-            if let Some(racine) = &ctx.manifest_racine_digest {
-                let digest = racine.as_str(); // "sha256:d1e2e92c..."
-                let parts: Vec<&str> = digest.split(':').collect();
-                if parts.len() == 2 {
-                    let algo = parts[0];
-                    let value = parts[1];
-
-                    let filename = digest.clone();
-                    let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
-
-                    println!("[ORCH] manifest racine (par tag) détecté: {}", file_path);
-                    form = add_file_if_exists(form, "manifests", filename, file_path).await;
-                }
-            }
-        }
-    }
-
-    println!("file_path : {}", base_dir);
-
-
-    // 5) POST multipart 
-    let client = reqwest::Client::new();
-
-    let state: Result<String, String> = match tokio::time::timeout(
-        Duration::from_secs(30),
-        client.post(orch_url).multipart(form).send()
-    ).await {
-        Err(_) => {
-            // ← Err du timeout (elapsed)
-            eprintln!("[ORCH TIMEOUT] Orchestrateur ne répond pas");
-            return Err("Timeout orchestrateur".to_string());
-        }
-        Ok(Err(e)) => {
-            // ← Err réseau
-            eprintln!("[ORCH CALL] request error: {:?}", e);
-            return Err(format!("Erreur réseau: {}", e));
-        }
-        Ok(Ok(r)) => {
-            let status = r.status();
-            println!("[ORCH CALL] status={}", status);
-            let text = r.text().await.unwrap_or_default();
-            println!("[ORCH RAW RESP] {}", text);
-
-            if !status.is_success() {
-                println!("[ORCH ERROR] orchestrateur a renvoyé non-200");
-                return Ok("PENDING".to_string());
-            }
-
-            match serde_json::from_str::<OrchestratorResp>(&text) {
-                Ok(body) => {
-                    println!("[ORCH RESP] pull_id={} state={}", body.pull_id, body.state);
-                    Ok(body.state.trim().to_uppercase())
-                }
-                Err(e) => {
-                    println!("[ORCH PARSE ERROR] {:?}", e);
-                    Ok("PENDING".to_string())
-                }
-            }
-        }
-    };
-
-
-    println!("==================================================================================");
-
-    let state_str = match state {
-        Ok(ref s) => s.clone(),
-        Err(ref e) => return Err(e.clone()),
-    };
-
-    match state_str.as_str() {
-        "ALLOW" => {
-            println!("Pull autorisé par l'orchestrateur");
-            ctx.scan_status = Some("ALLOW".to_string());
-        }
-        "PENDING" => {
-            println!("Pull en attente, décision non finale");
-            ctx.scan_status = Some("PENDING".to_string());
-        }
-        "DENY" => {
-            println!("Pull refusé par l'orchestrateur");
-            ctx.scan_status = Some("DENY".to_string());
-        }
-        other => {
-            println!("[WARNING] État inattendu reçu: {}", other);
-        }
-    }
-
-    Ok(state_str)
-}
-
+};  
 
 
 async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextList, pool: sqlx::PgPool, rate_limiter: Arc<RateLimiter>) -> Response<Body> {
@@ -727,18 +87,11 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let path = path.replace("sha256-", "sha256:");
     println!("============================================================");
     println!("[REQ] {} {}", method, path);
-    let user_agent = req
-        .headers()
-        .get("user-agent")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown");
-
-    println!("[UA] {}", user_agent);
 
     // Découper le path pour extraire repo, tag, digest
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
 
-    // ✅ VALIDATION HEADERS — avant tout, y compris /v2/
+    //VALIDATION HEADERS — avant tout, y compris /v2/
     if let Err(e) = validation::validate_headers(&req) {
         let client_ip = req.extensions()
             .get::<std::net::SocketAddr>()
@@ -751,7 +104,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .unwrap();
     }
 
-    // ✅ RATE LIMITING
+    //RATE LIMITING
     let client_ip_for_rate = req.extensions()
         .get::<std::net::SocketAddr>()
         .map(|a| a.ip().to_string())
@@ -823,7 +176,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .unwrap();
     }
 
-    // ✅ VÉRIFICATION IP — l'IP doit être connue dans la table users du dashboard
+    //VÉRIFICATION IP — l'IP doit être connue dans la table users du dashboard
     if !db::is_ip_allowed(&pool, &client_ip).await {
         eprintln!("[SECURITY] Pull refusé — IP non autorisee : {}", client_ip);
         return Response::builder()
@@ -832,7 +185,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .unwrap();
     }
 
-    // ✅ VALIDATION DES INPUTS
+    //VALIDATION DES INPUTS
     if path.contains("..") || path.contains('\\') {
         eprintln!("[SECURITY] Path traversal détecté: {}", path);
         return Response::builder()
@@ -871,7 +224,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             .unwrap();
     }
 
-    // ✅ CANONICALISATION DES COMPOSANTS DE CHEMIN
+    //CANONICALISATION DES COMPOSANTS DE CHEMIN
     let (_registry, _repository) = match canonicalize_path_components(&host, &parts) {
         Ok(pair) => pair,
         Err(e) => {
@@ -907,7 +260,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 .body(Body::from("Accès refusé : image privée ou credentials manquants"))
                 .unwrap();
         }
-        Err(PullContextError::MissingDigestOrTag) => {  // ← ajouter ce cas
+        Err(PullContextError::MissingDigestOrTag) => {
             eprintln!("[Main] L'image n'existe pas dans le registre ou est privée");
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -1078,7 +431,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                         dec_active(&pull_contexts, context_uuid).await;
 
                         if should_cleanup {
-                            // 🔴 CHECK IMMÉDIAT
                             let zero = {
                                 let list = pull_contexts.lock().await;
                                 if let Some(ctx) = list.iter().find(|c| c.uuid == context_uuid) {
@@ -1182,7 +534,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         let status = upstream.status();
         let headers = upstream.headers().clone();
 
-        // ✅ LIMITE TAILLE DES BLOBS
+        //LIMITE TAILLE DES BLOBS
         if let Err(e) = check_blob_size(&path, &headers) {
             eprintln!("[SECURITY] {} | ip={} path={}", e, client_ip, path);
             dec_active(&pull_contexts, context_uuid).await;
@@ -1195,7 +547,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         }
         let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
-        // ✅ VÉRIFICATION CRYPTOGRAPHIQUE
+        //VÉRIFICATION CRYPTOGRAPHIQUE
         let docker_content_digest = headers
             .get("Docker-Content-Digest")
             .and_then(|v| v.to_str().ok());
@@ -1274,7 +626,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     || path.contains("/blobs/")
                     || path.contains("/referrers/")
                 {
-                    println!("Ecriture des fichiers en cache");
+                    //println!("Ecriture des fichiers en cache");
 
                     let ok = save_to_cache(&path, &bytes, ctx, &pool);
                     if !ok {
@@ -1335,7 +687,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     }
 
 
-
     //-------------Cas ou le fichier n'est ni en cache, ni en whitelist, ni en blacklist-------------
 
     //On redirige la requete vers le repo upstream
@@ -1353,7 +704,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let status = upstream.status();
     let headers = upstream.headers().clone();
 
-    // ✅ LIMITE TAILLE DES BLOBS
+    //LIMITE TAILLE DES BLOBS
     if let Err(e) = check_blob_size(&path, &headers) {
         eprintln!("[SECURITY] {} | ip={} path={}", e, client_ip, path);
         dec_active(&pull_contexts, context_uuid).await;
@@ -1367,7 +718,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
     let bytes = upstream.bytes().await.unwrap_or_default(); // consomme `upstream`
 
 
-    // ✅ VÉRIFICATION CRYPTOGRAPHIQUE DU DIGEST
+    //VÉRIFICATION CRYPTOGRAPHIQUE DU DIGEST
     let docker_content_digest = headers
         .get("Docker-Content-Digest")
         .and_then(|v| v.to_str().ok());
@@ -1424,11 +775,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             println!("[MANIFEST VALIDATION] Manifest-list conforme: {}", path);
         }
     }
-
-
-
-
-
 
 
     // ═══════════════════════════════════════════════════════════════
@@ -1636,7 +982,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 .body(Body::from("Image refused by security scan"))
                                 .unwrap();
                         }
-                         
+                        /*  
                         Some(ScanDecision::PENDING) => {
                             println!("[SECURITY CHECK] Image conforme -> autorisation du pull");
 
@@ -1682,9 +1028,9 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                             cleanup_tmp_for_uuid(&ctx_snapshot.uuid);
                             return response;
 
-                        }
+                        }*/
 
-                        /* 
+                         
                         Some(ScanDecision::PENDING) => {
 
                             cleanup_tmp_for_uuid(&ctx_snapshot.uuid);
@@ -1700,7 +1046,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                                 .status(StatusCode::FORBIDDEN)
                                 .body(Body::from("Image en cours de scan"))
                                 .unwrap();
-                        }*/
+                        }
                         
                         
                         None => {

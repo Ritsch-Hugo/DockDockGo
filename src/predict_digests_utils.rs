@@ -11,7 +11,14 @@ use reqwest::Client;
 use uuid::Uuid;
 
 // Pour les types définis dans ton projet
-use crate::{PullContext, Digest, ManifestList, DigestVerificationState, PullContextError};
+use crate::models::{
+    PullContext,
+    Digest,
+    ManifestList,
+    DigestVerificationState,
+    PullContextError
+};
+
 use crate::registry_auth::RegistryClient;
 
 
@@ -621,7 +628,7 @@ pub fn verify_downloaded_digests(ctx: &PullContext) -> Result<DigestVerification
         .map(|d| d.value.clone())
         .collect();
 
-    // 🔥 CAS 1 — digest inattendu → ERREUR
+    //CAS 1 — digest inattendu → ERREUR
     let extra: HashSet<_> = downloaded.difference(&expected).collect();
     if !extra.is_empty() {
         eprintln!("[VERIFY] Digest(s) inattendu(s) détecté(s):");
@@ -631,7 +638,7 @@ pub fn verify_downloaded_digests(ctx: &PullContext) -> Result<DigestVerification
         return Err(PullContextError::DigestNotAllowed);
     }
 
-    // 🔹 CAS 2 — tout est téléchargé → FIN DU PULL
+    //CAS 2 — tout est téléchargé → FIN DU PULL
     if downloaded == expected && ctx.pull_completed == false {
         println!("[VERIFY] Pull terminé : tous les digests attendus ont été téléchargés");
 
@@ -644,10 +651,10 @@ pub fn verify_downloaded_digests(ctx: &PullContext) -> Result<DigestVerification
         return Ok(DigestVerificationState::Completed);
     }
 
-    // 🔹 CAS 3 — pull encore en cours (digests manquants)
+    //CAS 3 — pull encore en cours (digests manquants)
     let missing: HashSet<_> = expected.difference(&downloaded).collect();
     if !missing.is_empty() {
-        println!("[VERIFY] Pull en cours : digests manquants:");
+        //println!("[VERIFY] Pull en cours : digests manquants:");
         for d in missing.iter() {
             println!("  - {}", d);
         }
