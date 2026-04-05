@@ -110,7 +110,7 @@ pub async fn get_pull_context(
         {
             Err(e) => {
                 eprintln!("[ORCH ERROR] {}", e);
-                return Err(PullContextError::BlockingFromTheScanner);
+                return Err(PullContextError::ServerError);
             }
             Ok(state) => match state.as_str() 
             {
@@ -138,7 +138,7 @@ pub async fn get_pull_context(
                     list.retain(|c| c.uuid != uuid);
                     return Err(PullContextError::BlockingFromTheScanner);
                 }
-                _ => return Err(PullContextError::BlockingFromTheScanner),
+                _ => return Err(PullContextError::ServerError),
             }
         }
     }
@@ -186,7 +186,7 @@ pub async fn get_pull_context(
             match is_allowed(ctx, path, "scan_haut_niveau").await {
                 Err(e) => {
                     eprintln!("[ORCH ERROR] {}", e);
-                    return Err(PullContextError::BlockingFromTheScanner);
+                    return Err(PullContextError::ServerError);
                 }
                 Ok(state) => match state.as_str() 
                 {
@@ -210,7 +210,7 @@ pub async fn get_pull_context(
                         list.retain(|c| c.uuid != uuid);
                         return Err(PullContextError::BlockingFromTheScanner);
                     }
-                    _ => return Err(PullContextError::BlockingFromTheScanner),
+                    _ => return Err(PullContextError::ServerError),
             }
             }
 
@@ -351,7 +351,7 @@ pub async fn get_pull_context(
                                 }
                                 _ => {}
                             }
-                            
+
                             return Ok(Some(ctx.uuid));
                         }
                         let manifest_path = format!(
@@ -696,7 +696,22 @@ async fn create_context_from_tag(
 
     // 7️⃣ Insérer dans la liste
     {
+        // On récupère la valeur locale
+        let max_limit: u64 = std::env::var("MAX_CONCURRENT_PULLS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(200);
         let mut list = pull_contexts.lock().await;
+
+        // ── GARDE : limite le nombre de pulls simultanés ──
+        if list.len() >= max_limit as usize {
+            eprintln!(
+                "[SECURITY] MAX_CONCURRENT_PULLS atteint ({}) | ip={} repo={}/{}",
+                max_limit, ip_client, registry, repository
+            );
+            return Err(PullContextError::Overload);
+        }
+
         list.push(ctx.clone());
         // Après list.push(ctx.clone())
 

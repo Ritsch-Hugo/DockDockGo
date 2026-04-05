@@ -5,6 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use sqlx::PgPool;
+use dotenvy::dotenv;
+use std::env;
 
 
 // ===== Tokio =====
@@ -41,7 +43,7 @@ use std::sync::atomic::{Ordering};
 
 // ===== Crate (TES types / constantes) =====
 use crate::{
-    CONTEXT_TIMEOUT, Digest, PullContext, PullContextList,
+    Digest, PullContext, PullContextList,
 };
 
 use crate::digest_process_for_head;
@@ -58,10 +60,11 @@ pub fn save_to_quarantine(
     bytes: &[u8],
     ctx: &PullContext,
     pool: &sqlx::PgPool,
-) {
+) -> bool {
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
+
     if parts.len() < 4 {
-        return;
+        return false;
     }
 
     let base_dir = format!(
@@ -124,10 +127,15 @@ pub fn save_to_quarantine(
         } else {
             eprintln!("[QUARANTINE] manifest par tag mais manifest_racine_digest absent du ctx");
         }
+        return true;
     }
     // ===== MANIFEST =====
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
+        if !is_safe_digest_component(digest_value) {
+            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            return false;
+        }
         let digest = Digest {
             algorithm: "sha256".to_string(),
             value: digest_value.to_string(),
@@ -157,11 +165,17 @@ pub fn save_to_quarantine(
                 ).await;
             });
         }
+
+        return true;
     }
 
     // ===== BLOB =====
     else if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
+        if !is_safe_digest_component(digest_value) {
+            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            return false;
+        }
         let digest = Digest {
             algorithm: "sha256".to_string(),
             value: digest_value.to_string(),
@@ -191,11 +205,17 @@ pub fn save_to_quarantine(
                 ).await;
             });
         }
+        return true;
     }
 
     // ===== REFERRERS =====
     else if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
+
+        if !is_safe_digest_component(digest_value) {
+            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            return false;
+        }
         let digest = Digest {
             algorithm: "sha256".to_string(),
             value: digest_value.to_string(),
@@ -225,19 +245,20 @@ pub fn save_to_quarantine(
                 ).await;
             });
         }
-
+        return true;
     }
-}
 
+    true
+}
 pub fn save_to_cache(
     path: &str,
     bytes: &[u8],
     ctx: &PullContext,
     pool: &sqlx::PgPool,
-) {
+) -> bool {
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
     if parts.len() < 4 {
-        return;
+        return false;
     }
 
     let base_dir = format!(
@@ -304,6 +325,12 @@ pub fn save_to_cache(
     // ===== MANIFEST =====
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
+        
+        if !is_safe_digest_component(digest_value) {
+            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            return false;
+        }
+
         let digest = Digest {
             algorithm: "sha256".to_string(),
             value: digest_value.to_string(),
@@ -338,6 +365,12 @@ pub fn save_to_cache(
     // ===== BLOB =====
     else if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
+
+        if !is_safe_digest_component(digest_value) {
+            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            return false;
+        }
+
         let digest = Digest {
             algorithm: "sha256".to_string(),
             value: digest_value.to_string(),
@@ -372,6 +405,12 @@ pub fn save_to_cache(
     // ===== REFERRERS =====
     else if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
+
+        if !is_safe_digest_component(digest_value) {
+            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            return false;
+        }
+
         let digest = Digest {
             algorithm: "sha256".to_string(),
             value: digest_value.to_string(),
@@ -379,7 +418,7 @@ pub fn save_to_cache(
 
         if serde_json::from_slice::<serde_json::Value>(bytes).is_err() {
             println!("Referrer ignoré car non-JSON");
-            return;
+            return false;
         }
 
         write_digest(
@@ -407,6 +446,7 @@ pub fn save_to_cache(
             });
         }
     }
+    true
 }
 
 
@@ -437,6 +477,12 @@ pub fn try_serve_from_cache(
     // ================= MANIFEST par tag (cas Podman) =================
     if parts[2] == "manifests" && !parts[3].starts_with("sha256:") {
         if let Some(racine) = &ctx.manifest_racine_digest {
+
+            if !is_safe_digest_component(&racine.value) {
+                eprintln!("[SECURITY] manifest_racine_digest invalide: {}", racine.value);
+                return None;
+            }
+
             let file = format!("{}/manifests/sha256/{}.json", base_dir, racine.value);
 
             if let Ok(data) = fs::read(&file) {
@@ -825,6 +871,11 @@ pub async fn add_context_to_blacklist_or_whitelist(
 //Check si aucune requetes envoyé dans le laspe de temps CONTEXT_TIMEOUT
 pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
 
+    // On crée des variables locales simples
+    let context_timeout: u64 = std::env::var("CONTEXT_TIMEOUT")
+        .and_then(|s| s.parse().map_err(|_| std::env::VarError::NotPresent))
+        .unwrap_or(2000000);
+
     let pool_clone = pool.clone();
 
     tokio::spawn(async move {
@@ -837,7 +888,7 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
             let before = list.len();
 
             list.retain(|ctx| {
-                let alive = ctx.last_activity.elapsed() < CONTEXT_TIMEOUT;
+                let alive = ctx.last_activity.elapsed() < Duration::from_secs(context_timeout);
                 if !alive {
                     println!("[Timeout-Reach] Contexte expiré détecté | uuid={}", ctx.uuid);
                     expired_contexts.push(ctx.clone()); // On mémorise pour plus tard
@@ -1196,7 +1247,13 @@ pub fn verify_content_digest(
 /// Vérifie que la taille du blob ne dépasse pas la limite autorisée
 /// Retourne Ok(()) si la taille est acceptable, Err(String) sinon
 pub fn check_blob_size(path: &str, headers: &reqwest::header::HeaderMap) -> Result<(), String> {
-    const MAX_BLOB_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+    //const MAX_BLOB_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+
+    dotenv().expect(".env file not found");
+
+    let max_blob_size: u64 = env::var("MAX_BLOB_SIZE")
+        .map(|val| val.parse::<u64>().unwrap_or(2 * 1024 * 1024 * 1024)) // Fallback si parse échoue
+        .unwrap_or(2 * 1024 * 1024 * 1024); // Fallback si la variable n'existe pas
 
     if !path.contains("/blobs/") {
         return Ok(());
@@ -1207,10 +1264,10 @@ pub fn check_blob_size(path: &str, headers: &reqwest::header::HeaderMap) -> Resu
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
     {
-        if content_length > MAX_BLOB_SIZE {
+        if content_length > max_blob_size {
             return Err(format!(
                 "Blob trop volumineux | size={} max={}",
-                content_length, MAX_BLOB_SIZE
+                content_length, max_blob_size
             ));
         }
     }
@@ -1233,6 +1290,19 @@ pub async fn prefetch_expected_to_quarantine(
         .await?;
 
     for digest in &ctx.digests_expected {
+        
+        if !is_safe_digest_component(&digest.algorithm) || !is_safe_digest_component(&digest.value) {
+            eprintln!(
+                "[SECURITY] Digest expected invalide ignoré: {}:{}",
+                digest.algorithm, digest.value
+            );
+
+            return Err(anyhow::anyhow!(
+                "Digest invalide dans digests_expected: {}:{}",
+                digest.algorithm, digest.value
+            ));
+        }
+
         let digest_str = format!("sha256:{}", digest.value);
 
         // --- Manifests : déjà téléchargés dans tmp/<uuid>/<value>.json par predict_digests ---
@@ -1246,7 +1316,10 @@ pub async fn prefetch_expected_to_quarantine(
             match fs::read(&tmp_manifest) {
                 Ok(bytes) => {
                     let fake_path = format!("/v2/{}/manifests/{}", ctx.repository, digest_str);
-                    save_to_quarantine(&fake_path, &bytes, ctx, pool);
+                    let ok = save_to_quarantine(&fake_path, &bytes, ctx, pool);
+                    if !ok {
+                        return Err(anyhow::anyhow!("save_to_quarantine échoué pour digest: {}", digest.value));
+                    }
                     println!("[PREFETCH] Manifest copié en quarantaine: {}", digest.value);
                 }
                 Err(e) => eprintln!("[PREFETCH] Lecture tmp manifest {}: {}", digest.value, e),
@@ -1296,7 +1369,12 @@ pub async fn prefetch_expected_to_quarantine(
                             continue; // on skip ce blob corrompu
                         }
                         let fake_path = format!("/v2/{}/blobs/{}", ctx.repository, digest_str);
-                        save_to_quarantine(&fake_path, &bytes, ctx, pool);
+
+                        let ok = save_to_quarantine(&fake_path, &bytes, ctx, pool);
+                        if !ok {
+                            return Err(anyhow::anyhow!("save_to_quarantine échoué pour digest: {}", digest.value));
+                        }
+
                         println!("[PREFETCH] Blob stocké en quarantaine: {}", digest.value);
                     }
                     Err(e) => eprintln!("[PREFETCH] Lecture bytes blob {}: {}", digest.value, e),
@@ -1546,5 +1624,20 @@ pub fn check_blob_authorized(path: &str, ctx: &PullContext) -> Result<(), String
     }
 
     Ok(())
+}
+
+/// Vérifie qu'un composant de digest (algo ou value) est sûr
+/// pour construction de chemin fichier. Cohérent avec validate_tag_or_digest.
+pub fn is_safe_digest_component(s: &str) -> bool {
+    if s.is_empty() || s.len() > 128 {
+        return false;
+    }
+    // algo : "sha256", "sha512" — alphanumérique uniquement
+    // value : hex 64 chars — alphanumérique uniquement
+    // Les deux cas sont couverts par cette règle unique
+    s.chars().all(|c| c.is_ascii_alphanumeric())
+        && !s.contains("..")
+        && !s.contains('/')
+        && !s.contains('\\')
 }
 

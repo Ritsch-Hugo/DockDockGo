@@ -59,7 +59,6 @@ use predict_digests_utils::{
 
 mod utils;
 use utils::{
-    save_to_quarantine,
     save_to_cache,
     try_serve_from_cache,
     manifest_list_has_linux_amd64,
@@ -80,6 +79,7 @@ use utils::{
     validate_manifest_list,
     all_expected_in_cache,
     check_blob_authorized,
+    is_safe_digest_component,
 };
 
 
@@ -145,6 +145,8 @@ enum PullContextError {
     DigestNotAllowed,
     BlockingFromTheScanner,
     StorageError,
+    Overload,
+    ServerError,
 }
 
 #[derive(Debug, PartialEq)]
@@ -291,11 +293,6 @@ impl ResolvesServerCert for MultiCertResolver {
 
 type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
 
-// Définir le timeout désiré (ex : 30 secondes)
-const CONTEXT_TIMEOUT: Duration = Duration::from_secs(200000);
-
-//static UPSTREAM: &str = "https://registry-1.docker.io";
-
 
 impl Digest {
     fn as_str(&self) -> String {
@@ -373,7 +370,6 @@ pub async fn launch_final_scan(
     pull_contexts: &PullContextList,
     uuid: Uuid,
     path: &str,
-    pool: &sqlx::PgPool,
 ) -> Option<ScanDecision>
 {
 
@@ -407,7 +403,7 @@ pub async fn launch_final_scan(
 
 
     let mut list = pull_contexts.lock().await;
-    let ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
+    let _ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
 
     if state == "ALLOW"
     {
@@ -434,9 +430,9 @@ async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result<Str
         pull_id: uuid::Uuid,
         state: String, // "PENDING" | "ALLOW" | "DENY"
     }
-
-    println!("flag : {}", flag);
-    const ORCH_URL: &str = "http://127.0.0.1:3000/v1/decision";
+    
+    let orch_url = std::env::var("ORCH_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3000/v1/decision".to_string());
 
     println!("============================== APPEL ORCHESTRATEUR ==============================");
     println!("uuid={} repo={}:{}", ctx.uuid, ctx.repository, ctx.tag);
@@ -502,6 +498,11 @@ async fn add_file_if_exists(
                 let algo = parts[0];
                 let value = parts[1];
 
+                if !is_safe_digest_component(algo) || !is_safe_digest_component(value) {
+                    eprintln!("[SECURITY] Digest manifest invalide ignoré: {}", digest);
+                    return Err(format!("Digest invalide détecté: {}", digest));
+                }
+
                 let filename = digest.clone();
                 let file_path = format!("{}/manifests/{}/{}.json", base_dir, algo, value);
 
@@ -517,6 +518,11 @@ async fn add_file_if_exists(
                 let algo = parts[0];
                 let value = parts[1];
 
+                if !is_safe_digest_component(algo) || !is_safe_digest_component(value) {
+                    eprintln!("[SECURITY] Digest manifest invalide ignoré: {}", digest);
+                    return Err(format!("Digest invalide détecté: {}", digest));
+                }
+
                 let filename = digest.clone();
                 let file_path = format!("{}/blobs/{}/{}", base_dir, algo, value);
 
@@ -531,6 +537,11 @@ async fn add_file_if_exists(
             if parts.len() == 2 {
                 let algo = parts[0];
                 let value = parts[1];
+
+                if !is_safe_digest_component(algo) || !is_safe_digest_component(value) {
+                    eprintln!("[SECURITY] Digest manifest invalide ignoré: {}", digest);
+                    return Err(format!("Digest invalide détecté: {}", digest));
+                }
 
                 let filename = digest.clone();
                 let file_path = format!("{}/referrers/{}/{}.json", base_dir, algo, value);
@@ -638,7 +649,7 @@ async fn add_file_if_exists(
 
     let state: Result<String, String> = match tokio::time::timeout(
         Duration::from_secs(30),
-        client.post(ORCH_URL).multipart(form).send()
+        client.post(orch_url).multipart(form).send()
     ).await {
         Err(_) => {
             // ← Err du timeout (elapsed)
@@ -891,11 +902,32 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                 .body(Body::from("Image inexistante ou privée"))
                 .unwrap();
         }
+        Err(PullContextError::ServerError) => {
+            eprintln!("[Main] Erreur server");
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::from("Erreur Server"))
+                .unwrap();
+        }
         Err(PullContextError::BlockingFromTheScanner) => {
             eprintln!("[Main] Pull bloqué et image blacklisté car scan de haut niveau n'est pas passé");
             return Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Body::from("Image refusée par le scan de sécurité"))
+                .unwrap();
+        }
+        Err(PullContextError::StorageError) => {
+            eprintln!("[Main] Erreur de stockage");
+            return Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .body(Body::from("Erreur de stockage, réessayez plus tard"))
+                .unwrap();
+        }
+        Err(PullContextError::Overload) => {
+            eprintln!("[Main] Surcharge du système");
+            return Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .body(Body::from("Système surchargé, réessayez plus tard"))
                 .unwrap();
         }
         Err(e) => {
@@ -908,7 +940,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
     };
 
-    //Ajoute la requete courrante au context dans active_request 
+    //Ajoute la requete courrante au context dans active_request- Mechanisme anti race conditions 
     {
         let mut list = pull_contexts.lock().await;
         if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
@@ -924,7 +956,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
     }
 
-    // ── GARDE BLOB : un blob ne peut pas être demandé sans manifest arch préalable ──
+    //Un blob ne peut pas être demandé sans manifest arch préalable
     if path.contains("/blobs/") && req.method() == Method::GET {
         let check_result = {
             let list = pull_contexts.lock().await;
@@ -1231,7 +1263,14 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     || path.contains("/referrers/")
                 {
                     println!("Ecriture des fichiers en cache");
-                    save_to_cache(&path, &bytes, ctx, &pool);
+
+                    let ok = save_to_cache(&path, &bytes, ctx, &pool);
+                    if !ok {
+                        return Response::builder()
+                        .status(StatusCode::FORBIDDEN)
+                        .body(Body::from("Digest Invalid"))
+                        .unwrap();
+                    }
                 }
             }
         } 
@@ -1508,7 +1547,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
 
                     // 5. Scan final
                     let scan_result =
-                        launch_final_scan(&pull_contexts, context_uuid, &path, &pool).await;
+                        launch_final_scan(&pull_contexts, context_uuid, &path).await;
 
                     match scan_result {
                         Some(ScanDecision::ALLOW) => {
@@ -1714,9 +1753,10 @@ async fn main() -> Result<()> {
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(resolver));
 
+    dotenvy::dotenv().ok();
 
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://docdockgo_admin:docdockgo@localhost:5432/docdockgo".to_string());
+        .expect("[FATAL] DATABASE_URL non définie — le proxy ne peut pas démarrer sans base de données");
 
     let pool = db::init_pool(&database_url).await?;
 

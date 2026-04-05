@@ -45,6 +45,7 @@ docker build -t docdockgo .
 ```bash
 docker run -d \
   --name docdockgo-proxy \
+  --env-file .env \
   --network host \
   -u 10001:10001 \
   -v $(pwd)/registry_whitelist.json:/app/registry_whitelist.json:ro \
@@ -53,7 +54,7 @@ docker run -d \
   -p 443:8443 \
   ghcr.io/ritsch-hugo/docdockgo:latest
 ```
-
+> `--env-file` inclusion du fichier .env contenant les credentials pour bdd, timeout, orchestrateur url... 
 > `-u 10001:10001` force l'exécution du proxy avec un utilisateur non-privilégié pour garantir la sécurité du système hôte
 > `-p 443:8443` redirige le trafic HTTPS standard (443) vers le port interne du proxy (8443), permettant ainsi l'interception sans droits root
 > `172.17.0.1` correspond à l'IP de l'hôte pour la base de donnée
