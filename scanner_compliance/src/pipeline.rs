@@ -45,7 +45,7 @@ fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
         .map(|s| s.to_string());
 
     // config media type
-    let config_media_type = v
+    let _config_media_type = v
         .get("config")
         .and_then(|x| x.get("mediaType"))
         .and_then(|x| x.as_str())
@@ -68,7 +68,7 @@ fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
                 .map(|s| s.to_string());
 
             // ⚠️ IMPORTANT : seulement si ton struct a size
-            let size = layer.get("size").and_then(|x| x.as_u64());
+            let _size = layer.get("size").and_then(|x| x.as_u64());
 
             layers.push(ManifestLayer { digest, media_type });
         }
