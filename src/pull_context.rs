@@ -1,31 +1,19 @@
-
+use anyhow::Result;
 use hyper::{Body, Method, Request};
 use reqwest::Client;
-use uuid::Uuid;
-use std::time::Instant;
-use anyhow::Result;
 use sqlx::PgPool;
 use sqlx::Row;
+use std::time::Instant;
+use uuid::Uuid;
 
+use crate::models::{Digest, PullContext, PullContextError, PullContextList};
 use crate::registry_auth::RegistryClient;
-use crate::models::{
-    PullContextList,
-    PullContextError,
-    Digest,
-    PullContext
-};
 
 use crate::{
+    add_context_to_blacklist_or_whitelist, check_manifest_in_list, cleanup_tmp_for_uuid,
+    get_os_arch_for_digest, is_allowed, predict_digests_docker, predict_digests_podman,
     store_digest,
-    get_os_arch_for_digest,
-    predict_digests_docker,
-    is_allowed,
-    add_context_to_blacklist_or_whitelist,
-    cleanup_tmp_for_uuid,
-    check_manifest_in_list,
-    predict_digests_podman,
 };
-
 
 /// 🔄 Récupération ou création du contexte PullContext
 pub async fn get_pull_context(
@@ -33,15 +21,13 @@ pub async fn get_pull_context(
     parts: &[&str],
     client_ip: &str,
     pull_contexts: &PullContextList,
-    client: &Client, 
+    client: &Client,
     path: &str,
     client_type: &str,
-    pool: &sqlx::PgPool
-
-)-> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
+    pool: &sqlx::PgPool,
+) -> Result<Option<Uuid>, PullContextError> //Retourne soit l'uuid du contexte trouvé (cas success) soit une erreur PullContextError
 {
-
-    // 🔹 Extraire le registre de la requete 
+    // 🔹 Extraire le registre de la requete
     //let registry = "registry-1.docker.io".to_string(); // Par défaut pour Docker Hub
     let registry = req
         .headers()
@@ -76,15 +62,24 @@ pub async fn get_pull_context(
 
     // 🔹 HEAD → création d’un nouveau contexte pour un tag
     if req.method() == Method::HEAD {
-
         let uuid = create_context_from_tag(
-            client, &registry, &repository, tag_ou_digest,
-            &ip_client, pull_contexts, path, client_type, pool
-        ).await?;
+            client,
+            &registry,
+            &repository,
+            tag_ou_digest,
+            &ip_client,
+            pull_contexts,
+            path,
+            client_type,
+            pool,
+        )
+        .await?;
 
         // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
-        let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist", &pool).await;
-        let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist", &pool).await;
+        let in_whitelist =
+            check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist", &pool).await;
+        let in_blacklist =
+            check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist", &pool).await;
 
         {
             let mut list = pull_contexts.lock().await;
@@ -118,28 +113,27 @@ pub async fn get_pull_context(
 
         // Scan haut niveau (inchangé)
         let mut list = pull_contexts.lock().await;
-        let ctx = list.iter_mut().find(|c| c.uuid == uuid)
+        let ctx = list
+            .iter_mut()
+            .find(|c| c.uuid == uuid)
             .ok_or(PullContextError::ContextMismatch)?;
 
-        match is_allowed(ctx, path, "scan_haut_niveau").await 
-        {
+        match is_allowed(ctx, path, "scan_haut_niveau").await {
             Err(e) => {
                 eprintln!("[ORCH ERROR] {}", e);
                 return Err(PullContextError::ServerError);
             }
-            Ok(state) => match state.as_str() 
-            {
-
-            "ALLOW" => {
-                sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+            Ok(state) => match state.as_str() {
+                "ALLOW" => {
+                    sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
                     .bind(uuid.to_string())
                     .execute(pool)
                     .await
                     .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision ALLOW: {}", e); Default::default() });
 
-                ctx.scan_status = Some("ALLOW".to_string());
-                if let Some(racine) = &ctx.manifest_racine_digest {
-                    sqlx::query(
+                    ctx.scan_status = Some("ALLOW".to_string());
+                    if let Some(racine) = &ctx.manifest_racine_digest {
+                        sqlx::query(
                         "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
                         VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
                         ON CONFLICT DO NOTHING"
@@ -151,22 +145,24 @@ pub async fn get_pull_context(
                     .execute(pool)
                     .await
                     .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine ALLOW: {}", e); Default::default() });
+                    }
+                    if let Err(e) =
+                        add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await
+                    {
+                        eprintln!("[WHITELIST ERROR] {}", e);
+                    }
+                    return Ok(Some(uuid));
                 }
-                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
-                    eprintln!("[WHITELIST ERROR] {}", e);
-                }
-                return Ok(Some(uuid));
-            }
-            "PENDING" => {
-                sqlx::query("UPDATE pulls SET decision_final = 'PENDING', last_activity = NOW() WHERE uuid = $1::uuid")
+                "PENDING" => {
+                    sqlx::query("UPDATE pulls SET decision_final = 'PENDING', last_activity = NOW() WHERE uuid = $1::uuid")
                     .bind(uuid.to_string())
                     .execute(pool)
                     .await
                     .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision PENDING: {}", e); Default::default() });
-                
-                ctx.scan_status = Some("PENDING".to_string());
-                if let Some(racine) = &ctx.manifest_racine_digest {
-                    sqlx::query(
+
+                    ctx.scan_status = Some("PENDING".to_string());
+                    if let Some(racine) = &ctx.manifest_racine_digest {
+                        sqlx::query(
                         "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
                         VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
                         ON CONFLICT DO NOTHING"
@@ -178,11 +174,13 @@ pub async fn get_pull_context(
                     .execute(pool)
                     .await
                     .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine PENDING: {}", e); Default::default() });
+                    }
+                    return Ok(Some(uuid));
                 }
-                return Ok(Some(uuid));
-            }
                 "DENY" => {
-                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
+                    if let Err(e) =
+                        add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await
+                    {
                         eprintln!("[BLACKLIST ERROR] {}", e);
                     }
                     sqlx::query("UPDATE pulls SET decision_final = 'DENY', scan_completed = true, last_activity = NOW() WHERE uuid = $1::uuid")
@@ -190,20 +188,17 @@ pub async fn get_pull_context(
                     .execute(pool)
                     .await
                     .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision DENY: {}", e); Default::default() });
-                
+
                     cleanup_tmp_for_uuid(&ctx.uuid);
                     list.retain(|c| c.uuid != uuid);
                     return Err(PullContextError::BlockingFromTheScanner);
                 }
                 _ => return Err(PullContextError::ServerError),
-            }
+            },
         }
     }
-
-
     // 🔹 GET → vérifier un digest existant
-    else if req.method() == Method::GET 
-    {
+    else if req.method() == Method::GET {
         let digest_str = parts[idx + 1];
 
         // 🔑 Podman peut envoyer un GET par tag sans HEAD préalable
@@ -212,13 +207,23 @@ pub async fn get_pull_context(
 
             // Même fonction que HEAD → UUID déterministe, pas de doublon
             let uuid = create_context_from_tag(
-                client, &registry, &repository, digest_str,
-                &ip_client, pull_contexts, path, client_type, pool
-            ).await?;
+                client,
+                &registry,
+                &repository,
+                digest_str,
+                &ip_client,
+                pull_contexts,
+                path,
+                client_type,
+                pool,
+            )
+            .await?;
 
             // ✅ Vérif whitelist/blacklist + scan haut niveau (inchangé)
-            let in_whitelist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist", &pool).await;
-            let in_blacklist = check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist", &pool).await;
+            let in_whitelist =
+                check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "whitelist", &pool).await;
+            let in_blacklist =
+                check_manifest_in_list(uuid, pull_contexts, Method::HEAD, "blacklist", &pool).await;
 
             {
                 let mut list = pull_contexts.lock().await;
@@ -251,7 +256,9 @@ pub async fn get_pull_context(
 
             // Scan haut niveau (inchangé)
             let mut list = pull_contexts.lock().await;
-            let ctx = list.iter_mut().find(|c| c.uuid == uuid)
+            let ctx = list
+                .iter_mut()
+                .find(|c| c.uuid == uuid)
                 .ok_or(PullContextError::ContextMismatch)?;
 
             match is_allowed(ctx, path, "scan_haut_niveau").await {
@@ -259,8 +266,7 @@ pub async fn get_pull_context(
                     eprintln!("[ORCH ERROR] {}", e);
                     return Err(PullContextError::ServerError);
                 }
-                Ok(state) => match state.as_str() 
-                {
+                Ok(state) => match state.as_str() {
                     "ALLOW" => {
                         sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
                             .bind(uuid.to_string())
@@ -268,12 +274,12 @@ pub async fn get_pull_context(
                             .await
                             .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision ALLOW: {}", e); Default::default() });
 
-                            ctx.scan_status = Some("ALLOW".to_string());
-                            if let Some(racine) = &ctx.manifest_racine_digest {
-                                sqlx::query(
-                                    "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
-                                    VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
-                                    ON CONFLICT DO NOTHING"
+                        ctx.scan_status = Some("ALLOW".to_string());
+                        if let Some(racine) = &ctx.manifest_racine_digest {
+                            sqlx::query(
+                                "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                                ON CONFLICT DO NOTHING"
                                 )
                                 .bind(Uuid::new_v4().to_string())
                                 .bind(uuid.to_string())
@@ -282,23 +288,25 @@ pub async fn get_pull_context(
                                 .execute(pool)
                                 .await
                                 .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine ALLOW: {}", e); Default::default() });
-                            }
-                            if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
-                                eprintln!("[WHITELIST ERROR] {}", e);
-                            }
-                            return Ok(Some(uuid));
+                        }
+                        if let Err(e) =
+                            add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool)
+                                .await
+                        {
+                            eprintln!("[WHITELIST ERROR] {}", e);
+                        }
+                        return Ok(Some(uuid));
                     }
-                    "PENDING" => 
-                    {
+                    "PENDING" => {
                         sqlx::query("UPDATE pulls SET decision_final = 'PENDING', last_activity = NOW() WHERE uuid = $1::uuid")
                             .bind(uuid.to_string())
                             .execute(pool)
                             .await
                             .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision PENDING: {}", e); Default::default() });
-                        
-                            ctx.scan_status = Some("PENDING".to_string());
-                            if let Some(racine) = &ctx.manifest_racine_digest {
-                                sqlx::query(
+
+                        ctx.scan_status = Some("PENDING".to_string());
+                        if let Some(racine) = &ctx.manifest_racine_digest {
+                            sqlx::query(
                                     "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
                                     VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
                                     ON CONFLICT DO NOTHING"
@@ -310,11 +318,14 @@ pub async fn get_pull_context(
                                 .execute(pool)
                                 .await
                                 .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine PENDING: {}", e); Default::default() });
-                            }
-                            return Ok(Some(uuid));
+                        }
+                        return Ok(Some(uuid));
                     }
                     "DENY" => {
-                        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
+                        if let Err(e) =
+                            add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool)
+                                .await
+                        {
                             eprintln!("[BLACKLIST ERROR] {}", e);
                         }
 
@@ -329,19 +340,17 @@ pub async fn get_pull_context(
                         return Err(PullContextError::BlockingFromTheScanner);
                     }
                     _ => return Err(PullContextError::ServerError),
+                },
             }
-            }
-
         }
 
         // ✅ Cas normal : GET par digest sha256 (Docker et Podman après le HEAD)
         let digest_value = digest_str.trim_start_matches("sha256:").to_string();
-        
+
         // 🔹 Rechercher le contexte correspondant et vérifier le digest
         let mut list = pull_contexts.lock().await;
         //parcours de la liste de context
-        for ctx in list.iter_mut() 
-        {
+        for ctx in list.iter_mut() {
             //Verifier si le contexte correspond au client ip, registry, repository et digest possible
             if ctx.ip_client == ip_client
                 && ctx.registry == registry
@@ -356,12 +365,13 @@ pub async fn get_pull_context(
                         && ctx.digests_expected.iter().any(|d| d.value == digest_value))
                 )
             {
-
-                println!("[PullContext] Correspondance trouvée pour le digest GET | uuid={}", ctx.uuid);
+                println!(
+                    "[PullContext] Correspondance trouvée pour le digest GET | uuid={}",
+                    ctx.uuid
+                );
 
                 //Mise a jour de l'activité pour le timeout
                 ctx.last_activity = Instant::now();
-
 
                 // Déterminer dans quel vecteur stocker le digest selon le type de ressource
                 let digest_struct = Digest {
@@ -390,7 +400,10 @@ pub async fn get_pull_context(
                             .await
                             .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pull_digests: {}", e); Default::default() });
 
-                            println!("[PullContext] Digest ajouté à manifest_digests: {}", digest_struct.as_str());
+                            println!(
+                                "[PullContext] Digest ajouté à manifest_digests: {}",
+                                digest_struct.as_str()
+                            );
                         }
                     }
                     "blobs" => {
@@ -412,7 +425,10 @@ pub async fn get_pull_context(
                             .await
                             .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pull_digests: {}", e); Default::default() });
 
-                            println!("[PullContext] Digest ajouté à blob_digests: {}", digest_struct.as_str());
+                            println!(
+                                "[PullContext] Digest ajouté à blob_digests: {}",
+                                digest_struct.as_str()
+                            );
                         }
                     }
                     "referrers" => {
@@ -433,22 +449,23 @@ pub async fn get_pull_context(
                             .execute(pool)
                             .await
                             .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pull_digests: {}", e); Default::default() });
-                            println!("[PullContext] Digest ajouté à referrers_digests: {}", digest_struct.as_str());
+                            println!(
+                                "[PullContext] Digest ajouté à referrers_digests: {}",
+                                digest_struct.as_str()
+                            );
                         }
                     }
                     _ => {
-                        println!("[PullContext] Type de ressource inconnu pour stockage des digests");
+                        println!(
+                            "[PullContext] Type de ressource inconnu pour stockage des digests"
+                        );
                     }
                 }
 
-
-
                 //si le digest racine est defini
-                if let Some(racine) = &ctx.manifest_racine_digest
-                {
+                if let Some(racine) = &ctx.manifest_racine_digest {
                     //si le digest de la requete n'est pas le digest racine -> ajouter les digests contenus dans le manifest demandé
                     if racine.value != digest_value {
-
                         // Si digests_expected est déjà rempli (scan déjà fait), pas besoin
                         // de relire tmp/ — on skip toute la logique de prédiction
                         if ctx.digests_expected.len() > 1 {
@@ -472,13 +489,8 @@ pub async fn get_pull_context(
 
                             return Ok(Some(ctx.uuid));
                         }
-                        let manifest_path = format!(
-                            "tmp/{}/{}.json",
-                            ctx.uuid,
-                            racine.value
-                        );
+                        let manifest_path = format!("tmp/{}/{}.json", ctx.uuid, racine.value);
 
-                        
                         let manifest_bytes = std::fs::read(&manifest_path)
                             .map_err(|_| PullContextError::StorageError)?;
 
@@ -487,30 +499,41 @@ pub async fn get_pull_context(
                                 .map_err(|_| PullContextError::StorageError)?;
 
                         // Récupérer OS/ARCH si non défini ou inconnu
-                        if ctx.os.is_empty() || ctx.arch.is_empty() || ctx.os == "unknown" || ctx.arch == "unknown" {
+                        if ctx.os.is_empty()
+                            || ctx.arch.is_empty()
+                            || ctx.os == "unknown"
+                            || ctx.arch == "unknown"
+                        {
                             // Récupérer OS/ARCH pour le digest GET
-                            let (os, arch) = get_os_arch_for_digest(&manifest_racine_json, &digest_value);
+                            let (os, arch) =
+                                get_os_arch_for_digest(&manifest_racine_json, &digest_value);
 
                             // Stocker dans PullContext
                             ctx.os = os;
                             ctx.arch = arch;
 
                             //mise a jour bdd
-                            sqlx::query("UPDATE pulls SET os = $1, arch = $2 WHERE uuid = $3::uuid")
-                                .bind(&ctx.os)
-                                .bind(&ctx.arch)
-                                .bind(ctx.uuid.to_string())
-                                .execute(pool)
-                                .await
-                                .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls os/arch: {}", e); Default::default() });
+                            sqlx::query(
+                                "UPDATE pulls SET os = $1, arch = $2 WHERE uuid = $3::uuid",
+                            )
+                            .bind(&ctx.os)
+                            .bind(&ctx.arch)
+                            .bind(ctx.uuid.to_string())
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| {
+                                eprintln!("[DB] Erreur UPDATE pulls os/arch: {}", e);
+                                Default::default()
+                            });
 
                             println!(
                                 "[GET] Digest {} → OS={}, ARCH={}",
                                 digest_value, ctx.os, ctx.arch
                             );
 
-                            // Utilisation de predict_digests avec OS/ARCH specifique 
-                            let manifest_racine_digest = ctx.manifest_racine_digest.as_ref().unwrap();
+                            // Utilisation de predict_digests avec OS/ARCH specifique
+                            let manifest_racine_digest =
+                                ctx.manifest_racine_digest.as_ref().unwrap();
 
                             //On appelle la bonne fonction de prediction (podman ou docker)
                             let predicted_digests = match ctx.client_type.as_str() {
@@ -524,10 +547,15 @@ pub async fn get_pull_context(
                                         &ctx.os,
                                         &ctx.arch,
                                         manifest_racine_digest,
-                                    ).await {
+                                    )
+                                    .await
+                                    {
                                         Ok(d) => d,
                                         Err(e) => {
-                                            eprintln!("[PullContext] predict_digests failed: {:?}", e);
+                                            eprintln!(
+                                                "[PullContext] predict_digests failed: {:?}",
+                                                e
+                                            );
                                             return Err(PullContextError::StorageError);
                                         }
                                     }
@@ -541,16 +569,24 @@ pub async fn get_pull_context(
                                         &ctx.os,
                                         &ctx.arch,
                                         manifest_racine_digest,
-                                    ).await {
+                                    )
+                                    .await
+                                    {
                                         Ok(d) => d,
                                         Err(e) => {
-                                            eprintln!("[PullContext] predict_digests_podman failed: {:?}", e);
+                                            eprintln!(
+                                                "[PullContext] predict_digests_podman failed: {:?}",
+                                                e
+                                            );
                                             return Err(PullContextError::StorageError);
                                         }
                                     }
                                 }
                                 _ => {
-                                    eprintln!("[PullContext] client_type inconnu: {}", ctx.client_type);
+                                    eprintln!(
+                                        "[PullContext] client_type inconnu: {}",
+                                        ctx.client_type
+                                    );
                                     return Err(PullContextError::StorageError);
                                 }
                             };
@@ -560,11 +596,7 @@ pub async fn get_pull_context(
 
                             //println!("[PullContext] Digests expected : {:?}", ctx.digests_expected);
                         }
-
-
-
-                    }
-                    else {
+                    } else {
                         //cas ou le digest GET est le digest racine (normal, ne rien faire)
                         let digest_struct = Digest {
                             algorithm: "sha256".to_string(),
@@ -574,11 +606,10 @@ pub async fn get_pull_context(
                             ctx.manifest_digests.push(digest_struct);
                         }
                         return Ok(Some(ctx.uuid));
-                    }   
-                } 
-                //si le digest racine n'est pas defini  
-                else 
-                {
+                    }
+                }
+                //si le digest racine n'est pas defini
+                else {
                     println!("[PullContext] Aucun digest racine défini pour ce contexte → bloqué");
                     return Err(PullContextError::DigestNotAllowed);
                 }
@@ -597,7 +628,6 @@ pub async fn get_pull_context(
         //Le contexte n'est pas trouvé on peut donc se trouver dans le cas d'une première requete podman
         //Verifier si la requete est caracteristique d'une requete podman
 
-
         //Sinon retourner context Mismatch
         return Err(PullContextError::ContextMismatch);
     }
@@ -614,12 +644,14 @@ pub async fn digest_process_for_head(
     repository: &str,
     tag: &str,
 ) -> Result<Digest, anyhow::Error> {
-
-    println!("[HEAD] Récupération du digest racine pour {}/{}", repository, tag);
-    //On recupère pas le token de la meme façon en fonction des registres 
+    println!(
+        "[HEAD] Récupération du digest racine pour {}/{}",
+        repository, tag
+    );
+    //On recupère pas le token de la meme façon en fonction des registres
     let token = RegistryClient::from_registry(registry)
-    .get_token(client, repository)
-    .await?;
+        .get_token(client, repository)
+        .await?;
 
     println!("[HEAD] Token Docker récupéré");
 
@@ -651,7 +683,10 @@ pub async fn digest_process_for_head(
 
     // Rate limit (depuis le clone déjà fait)
     if let Some(limit) = headers.get("ratelimit-limit") {
-        println!("[RATE-LIMIT] limit = {}", limit.to_str().unwrap_or("invalid"));
+        println!(
+            "[RATE-LIMIT] limit = {}",
+            limit.to_str().unwrap_or("invalid")
+        );
     }
     if let Some(remaining) = headers.get("ratelimit-remaining") {
         let remaining_str = remaining.to_str().unwrap_or("invalid");
@@ -661,7 +696,10 @@ pub async fn digest_process_for_head(
         }
     }
     if let Some(src) = headers.get("docker-ratelimit-source") {
-        println!("[RATE-LIMIT] source = {}", src.to_str().unwrap_or("invalid"));
+        println!(
+            "[RATE-LIMIT] source = {}",
+            src.to_str().unwrap_or("invalid")
+        );
     }
 
     // Digest racine
@@ -697,23 +735,23 @@ async fn create_context_from_tag(
     client_type: &str,
     pool: &PgPool,
 ) -> Result<Uuid, PullContextError> {
-
     // 1️⃣ Récupérer le digest racine upstream
-    let manifest_racine_digest = digest_process_for_head(
-        client, registry, repository, tag,
-    )
-    .await
-    .map_err(|e| {
-        eprintln!("[PullContext] Erreur HEAD: {}", e);
-        let msg = e.to_string();
-        if msg.contains("introuvable") || msg.contains("DENIED") || msg.contains("Token manquant") {
-            PullContextError::MissingDigestOrTag
-        } else if msg.contains("refusé") {
-            PullContextError::DigestNotAllowed
-        } else {
-            PullContextError::StorageError
-        }
-    })?;
+    let manifest_racine_digest = digest_process_for_head(client, registry, repository, tag)
+        .await
+        .map_err(|e| {
+            eprintln!("[PullContext] Erreur HEAD: {}", e);
+            let msg = e.to_string();
+            if msg.contains("introuvable")
+                || msg.contains("DENIED")
+                || msg.contains("Token manquant")
+            {
+                PullContextError::MissingDigestOrTag
+            } else if msg.contains("refusé") {
+                PullContextError::DigestNotAllowed
+            } else {
+                PullContextError::StorageError
+            }
+        })?;
 
     // 2️⃣ UUID déterministe de base
     let uuid_input = format!(
@@ -730,7 +768,10 @@ async fn create_context_from_tag(
             if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid_base) {
                 if !ctx.pull_completed {
                     // Pull en cours en mémoire → réutiliser directement
-                    println!("[PullContext] UUID existant réutilisé (pull non terminé) uuid={}", uuid_base);
+                    println!(
+                        "[PullContext] UUID existant réutilisé (pull non terminé) uuid={}",
+                        uuid_base
+                    );
                     ctx.last_activity = Instant::now();
                     return Ok(uuid_base);
                 } else {
@@ -745,20 +786,21 @@ async fn create_context_from_tag(
 
         if !in_memory {
             // Pas en mémoire → on interroge la BDD
-            let row = sqlx::query(
-                "SELECT scan_completed FROM pulls WHERE uuid = $1::uuid"
-            )
-            .bind(uuid_base.to_string())
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+            let row = sqlx::query("SELECT scan_completed FROM pulls WHERE uuid = $1::uuid")
+                .bind(uuid_base.to_string())
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
 
             match row {
                 None => uuid_base,
                 Some(r) => {
                     let scan_completed: bool = r.try_get("scan_completed").unwrap_or(false);
                     if !scan_completed {
-                        println!("[PullContext] UUID trouvé en BDD non terminé → réutilisation uuid={}", uuid_base);
+                        println!(
+                            "[PullContext] UUID trouvé en BDD non terminé → réutilisation uuid={}",
+                            uuid_base
+                        );
                         uuid_base
                     } else {
                         println!("[PullContext] Pull précédent terminé en BDD → nouveau contexte uuid={}", uuid_base);
@@ -778,13 +820,19 @@ async fn create_context_from_tag(
         if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
             if !ctx.pull_completed {
                 // Pull toujours en cours → on réutilise le contexte existant
-                println!("[PullContext] UUID existant réutilisé (pull non terminé) uuid={}", uuid);
+                println!(
+                    "[PullContext] UUID existant réutilisé (pull non terminé) uuid={}",
+                    uuid
+                );
                 ctx.last_activity = Instant::now();
                 return Ok(uuid);
             } else {
                 // Pull précédent terminé → on supprime l'ancien contexte mémoire
                 // pour forcer la création d'un nouveau avec un UUID différent
-                println!("[PullContext] Pull précédent terminé → recréation du contexte uuid={}", uuid);
+                println!(
+                    "[PullContext] Pull précédent terminé → recréation du contexte uuid={}",
+                    uuid
+                );
                 list.retain(|c| c.uuid != uuid);
                 // on laisse tomber le lock et on continue la création
             }
@@ -793,7 +841,10 @@ async fn create_context_from_tag(
     }
 
     // 4️⃣ Construire le contexte
-    let digest_clean = manifest_racine_digest.value.trim_start_matches("sha256:").to_string();
+    let digest_clean = manifest_racine_digest
+        .value
+        .trim_start_matches("sha256:")
+        .to_string();
 
     let mut ctx = PullContext::new(
         uuid,
@@ -807,8 +858,7 @@ async fn create_context_from_tag(
 
     ctx.manifest_racine_digest = Some(manifest_racine_digest.clone());
 
-    if !ctx.manifest_digests.contains(&manifest_racine_digest) 
-    {
+    if !ctx.manifest_digests.contains(&manifest_racine_digest) {
         ctx.manifest_digests.push(manifest_racine_digest.clone());
     }
 
@@ -892,7 +942,7 @@ async fn create_context_from_tag(
         // Après list.push(ctx.clone())
 
         //Mis a jour de bdd
-        sqlx::query(    
+        sqlx::query(
             "INSERT INTO pulls (uuid, ip_client, registry, repository, tag, client_type, started_at, last_activity, scan_completed, decision_final)
             VALUES ($1::uuid, $2, $3, $4, $5, $6, NOW(), NOW(), false, 'PENDING')
             ON CONFLICT (uuid) DO UPDATE SET
@@ -910,7 +960,6 @@ async fn create_context_from_tag(
         .execute(pool)
         .await
         .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pulls: {}", e); Default::default() });
-
     }
 
     println!(

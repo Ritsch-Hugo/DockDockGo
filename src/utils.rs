@@ -1,27 +1,20 @@
 // ===== Std =====
+use dotenvy::dotenv;
+use sqlx::PgPool;
+use std::env;
 use std::fs;
 use std::fs::create_dir_all;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use sqlx::PgPool;
-use dotenvy::dotenv;
-use std::env;
-
 
 // ===== Tokio =====
-use tokio::sync::Mutex as TokioMutex;
 use crate::registry_auth::RegistryClient;
+use tokio::sync::Mutex as TokioMutex;
 
 // ===== Hyper =====
-use hyper::{
-    Body,
-    Method,
-    Request,
-    Response,
-    StatusCode,
-};
 use hyper::body::to_bytes;
+use hyper::{Body, Method, Request, Response, StatusCode};
 
 // ===== Reqwest =====
 use reqwest::Client;
@@ -38,13 +31,10 @@ use uuid::Uuid;
 // ===== Errors =====
 use anyhow::Result;
 
-use std::sync::atomic::{Ordering};
-
+use std::sync::atomic::Ordering;
 
 // ===== Crate (TES types / constantes) =====
-use crate::{
-    Digest, PullContext, PullContextList,
-};
+use crate::{Digest, PullContext, PullContextList};
 
 use crate::digest_process_for_head;
 /// 🔑 SHA256 réel (Docker compliant)
@@ -74,7 +64,8 @@ pub fn save_to_quarantine(
         digest: &Digest,
         bytes: &[u8],
         ext: Option<&str>,
-    ) -> Option<String> {  // ← retourne le chemin écrit
+    ) -> Option<String> {
+        // ← retourne le chemin écrit
         let dir = format!("{}/{}/{}/", base_dir, category, digest.algorithm);
         create_dir_all(&dir).ok()?;
 
@@ -100,9 +91,16 @@ pub fn save_to_quarantine(
                 let digest2 = format!("sha256:{}", racine.value);
                 tokio::spawn(async move {
                     let _ = crate::db::upsert_quarantine_file(
-                        &pool2, &registry2, &repository2,
-                        &digest2, "manifest", "sha256", &fp, size,
-                    ).await;
+                        &pool2,
+                        &registry2,
+                        &repository2,
+                        &digest2,
+                        "manifest",
+                        "sha256",
+                        &fp,
+                        size,
+                    )
+                    .await;
                 });
             }
         }
@@ -115,7 +113,10 @@ pub fn save_to_quarantine(
         if !is_safe_digest_component(digest_value) {
             return false;
         }
-        let digest = Digest { algorithm: "sha256".to_string(), value: digest_value.to_string() };
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
 
         if let Some(fp) = write_digest(&base_dir, "manifests", &digest, bytes, Some("json")) {
             let size = bytes.len() as i64;
@@ -125,9 +126,16 @@ pub fn save_to_quarantine(
             let digest2 = format!("sha256:{}", digest_value);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_quarantine_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "manifest", "sha256", &fp, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "manifest",
+                    "sha256",
+                    &fp,
+                    size,
+                )
+                .await;
             });
         }
         return true;
@@ -139,7 +147,10 @@ pub fn save_to_quarantine(
         if !is_safe_digest_component(digest_value) {
             return false;
         }
-        let digest = Digest { algorithm: "sha256".to_string(), value: digest_value.to_string() };
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
 
         if let Some(fp) = write_digest(&base_dir, "blobs", &digest, bytes, None) {
             let size = bytes.len() as i64;
@@ -149,9 +160,16 @@ pub fn save_to_quarantine(
             let digest2 = format!("sha256:{}", digest_value);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_quarantine_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "blob", "sha256", &fp, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "blob",
+                    "sha256",
+                    &fp,
+                    size,
+                )
+                .await;
             });
         }
         return true;
@@ -163,7 +181,10 @@ pub fn save_to_quarantine(
         if !is_safe_digest_component(digest_value) {
             return false;
         }
-        let digest = Digest { algorithm: "sha256".to_string(), value: digest_value.to_string() };
+        let digest = Digest {
+            algorithm: "sha256".to_string(),
+            value: digest_value.to_string(),
+        };
 
         if let Some(fp) = write_digest(&base_dir, "referrers", &digest, bytes, Some("json")) {
             let size = bytes.len() as i64;
@@ -173,9 +194,16 @@ pub fn save_to_quarantine(
             let digest2 = format!("sha256:{}", digest_value);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_quarantine_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "referrer", "sha256", &fp, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "referrer",
+                    "sha256",
+                    &fp,
+                    size,
+                )
+                .await;
             });
         }
         return true;
@@ -183,22 +211,13 @@ pub fn save_to_quarantine(
 
     true
 }
-pub fn save_to_cache(
-    path: &str,
-    bytes: &[u8],
-    ctx: &PullContext,
-    pool: &sqlx::PgPool,
-) -> bool {
+pub fn save_to_cache(path: &str, bytes: &[u8], ctx: &PullContext, pool: &sqlx::PgPool) -> bool {
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
     if parts.len() < 4 {
         return false;
     }
 
-    let base_dir = format!(
-        "cache/{}/{}",
-        ctx.registry,
-        ctx.repository
-    );
+    let base_dir = format!("cache/{}/{}", ctx.registry, ctx.repository);
 
     // Helper pour écrire un digest
     fn write_digest(
@@ -223,20 +242,13 @@ pub fn save_to_cache(
     }
 
     // ===== MANIFEST par tag (cas Podman : /manifests/latest) =====
-    if parts[2] == "manifests" && !parts[3].starts_with("sha256:") 
-    {
+    if parts[2] == "manifests" && !parts[3].starts_with("sha256:") {
         // Le path contient un tag (ex: "latest") et non un digest
         // On utilise le manifest_racine_digest du contexte pour nommer le fichier
         if let Some(racine) = &ctx.manifest_racine_digest {
-            write_digest(
-                &base_dir,
-                "manifests",
-                racine,
-                bytes,
-                Some("json"),
-            );
+            write_digest(&base_dir, "manifests", racine, bytes, Some("json"));
             println!("Manifest racine (par tag) Ajouté a la quarantaine");
-          
+
             if let Some(racine) = &ctx.manifest_racine_digest {
                 let fp = format!("{}/manifests/sha256/{}.json", base_dir, racine.value);
                 let size = bytes.len() as i64;
@@ -246,9 +258,16 @@ pub fn save_to_cache(
                 let digest2 = format!("sha256:{}", racine.value);
                 tokio::spawn(async move {
                     let _ = crate::db::upsert_cache_file(
-                        &pool2, &registry2, &repository2,
-                        &digest2, "manifest", "sha256", &fp, size,
-                    ).await;
+                        &pool2,
+                        &registry2,
+                        &repository2,
+                        &digest2,
+                        "manifest",
+                        "sha256",
+                        &fp,
+                        size,
+                    )
+                    .await;
                 });
             }
         } else {
@@ -258,9 +277,12 @@ pub fn save_to_cache(
     // ===== MANIFEST =====
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
-        
+
         if !is_safe_digest_component(digest_value) {
-            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            eprintln!(
+                "[SECURITY] digest_value manifest invalide: {}",
+                digest_value
+            );
             return false;
         }
 
@@ -269,13 +291,7 @@ pub fn save_to_cache(
             value: digest_value.to_string(),
         };
 
-        write_digest(
-            &base_dir,
-            "manifests",
-            &digest,
-            bytes,
-            Some("json"),
-        );
+        write_digest(&base_dir, "manifests", &digest, bytes, Some("json"));
         println!("Manifest Ajouté au cache");
 
         {
@@ -288,19 +304,28 @@ pub fn save_to_cache(
             let digest2 = format!("sha256:{}", digest_value);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_cache_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "manifest", "sha256", &fp, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "manifest",
+                    "sha256",
+                    &fp,
+                    size,
+                )
+                .await;
             });
         }
     }
-
     // ===== BLOB =====
     else if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
 
         if !is_safe_digest_component(digest_value) {
-            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            eprintln!(
+                "[SECURITY] digest_value manifest invalide: {}",
+                digest_value
+            );
             return false;
         }
 
@@ -309,13 +334,7 @@ pub fn save_to_cache(
             value: digest_value.to_string(),
         };
 
-        write_digest(
-            &base_dir,
-            "blobs",
-            &digest,
-            bytes,
-            None,
-        );
+        write_digest(&base_dir, "blobs", &digest, bytes, None);
         println!("Blob Ajouté au cache");
 
         {
@@ -328,19 +347,28 @@ pub fn save_to_cache(
             let digest2 = format!("sha256:{}", digest_value);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_cache_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "blob", "sha256", &fp, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "blob",
+                    "sha256",
+                    &fp,
+                    size,
+                )
+                .await;
             });
         }
     }
-
     // ===== REFERRERS =====
     else if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
 
         if !is_safe_digest_component(digest_value) {
-            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
+            eprintln!(
+                "[SECURITY] digest_value manifest invalide: {}",
+                digest_value
+            );
             return false;
         }
 
@@ -349,21 +377,15 @@ pub fn save_to_cache(
             value: digest_value.to_string(),
         };
 
-        /* 
+        /*
         if serde_json::from_slice::<serde_json::Value>(bytes).is_err() {
             println!("Referrer ignoré car non-JSON");
             return false;
         }*/
 
-        write_digest(
-            &base_dir,
-            "referrers",
-            &digest,
-            bytes,
-            Some("json"),
-        );
+        write_digest(&base_dir, "referrers", &digest, bytes, Some("json"));
         println!("Refferer Ajouté au cache");
-        
+
         {
             let digest_value = parts[3].trim_start_matches("sha256:");
             let fp = format!("{}/referrers/sha256/{}.json", base_dir, digest_value);
@@ -374,21 +396,24 @@ pub fn save_to_cache(
             let digest2 = format!("sha256:{}", digest_value);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_cache_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "referrer", "sha256", &fp, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "referrer",
+                    "sha256",
+                    &fp,
+                    size,
+                )
+                .await;
             });
         }
     }
     true
 }
 
-
 /// 📦 Sert depuis le cache qui contient les images préalablement scannées
-pub fn try_serve_from_cache(
-    req: &Request<Body>,
-    ctx: &PullContext,
-) -> Option<Response<Body>> {
+pub fn try_serve_from_cache(req: &Request<Body>, ctx: &PullContext) -> Option<Response<Body>> {
     let path = req.uri().path();
     let is_head = req.method() == Method::HEAD;
 
@@ -398,11 +423,7 @@ pub fn try_serve_from_cache(
     }
 
     // Base dir conforme à l'arborescence
-    let base_dir = format!(
-        "cache/{}/{}",
-        ctx.registry,
-        ctx.repository
-    );
+    let base_dir = format!("cache/{}/{}", ctx.registry, ctx.repository);
 
     if req.method() != Method::GET {
         return None;
@@ -411,9 +432,11 @@ pub fn try_serve_from_cache(
     // ================= MANIFEST par tag (cas Podman) =================
     if parts[2] == "manifests" && !parts[3].starts_with("sha256:") {
         if let Some(racine) = &ctx.manifest_racine_digest {
-
             if !is_safe_digest_component(&racine.value) {
-                eprintln!("[SECURITY] manifest_racine_digest invalide: {}", racine.value);
+                eprintln!(
+                    "[SECURITY] manifest_racine_digest invalide: {}",
+                    racine.value
+                );
                 return None;
             }
 
@@ -427,7 +450,11 @@ pub fn try_serve_from_cache(
                 // ← Lire le vrai mediaType
                 let content_type = serde_json::from_slice::<serde_json::Value>(&data)
                     .ok()
-                    .and_then(|v| v.get("mediaType").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                    .and_then(|v| {
+                        v.get("mediaType")
+                            .and_then(|m| m.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .unwrap_or_else(|| {
                         // Manifest list OCI sans mediaType explicite
                         "application/vnd.oci.image.index.v1+json".to_string()
@@ -461,7 +488,11 @@ pub fn try_serve_from_cache(
             // ← Lire le vrai mediaType depuis le JSON
             let content_type = serde_json::from_slice::<serde_json::Value>(&data)
                 .ok()
-                .and_then(|v| v.get("mediaType").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                .and_then(|v| {
+                    v.get("mediaType")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
                 .unwrap_or_else(|| {
                     // Pas de mediaType explicite → OCI manifest
                     "application/vnd.oci.image.manifest.v1+json".to_string()
@@ -476,7 +507,11 @@ pub fn try_serve_from_cache(
                     .header("Content-Type", content_type)
                     .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
                     .header("Content-Length", data.len())
-                    .body(if is_head { Body::empty() } else { Body::from(data) })
+                    .body(if is_head {
+                        Body::empty()
+                    } else {
+                        Body::from(data)
+                    })
                     .unwrap(),
             );
         }
@@ -485,10 +520,7 @@ pub fn try_serve_from_cache(
     // ================= BLOB =================
     if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
         let digest = parts[3].trim_start_matches("sha256:");
-        let file = format!(
-            "{}/blobs/sha256/{}",
-            base_dir, digest
-        );
+        let file = format!("{}/blobs/sha256/{}", base_dir, digest);
 
         if let Ok(data) = fs::read(&file) {
             let real_digest = sha256_hex(&data);
@@ -499,7 +531,11 @@ pub fn try_serve_from_cache(
                     .header("Content-Type", "application/octet-stream")
                     .header("Docker-Content-Digest", format!("sha256:{real_digest}"))
                     .header("Content-Length", data.len())
-                    .body(if is_head { Body::empty() } else { Body::from(data) })
+                    .body(if is_head {
+                        Body::empty()
+                    } else {
+                        Body::from(data)
+                    })
                     .unwrap(),
             );
         }
@@ -508,10 +544,7 @@ pub fn try_serve_from_cache(
     // ================= REFERRERS =================
     if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
         let digest = parts[3].trim_start_matches("sha256:");
-        let file = format!(
-            "{}/referrers/sha256/{}.json",
-            base_dir, digest
-        );
+        let file = format!("{}/referrers/sha256/{}.json", base_dir, digest);
 
         if let Ok(data) = fs::read(&file) {
             if data.len() < 20 {
@@ -540,7 +573,11 @@ pub fn try_serve_from_cache(
                     .header("Docker-Distribution-API-Version", "registry/2.0")
                     .header("Content-Type", "application/vnd.oci.image.index.v1+json")
                     .header("Content-Length", data.len())
-                    .body(if is_head { Body::empty() } else { Body::from(data) })
+                    .body(if is_head {
+                        Body::empty()
+                    } else {
+                        Body::from(data)
+                    })
                     .unwrap(),
             );
         }
@@ -548,7 +585,6 @@ pub fn try_serve_from_cache(
 
     None
 }
-
 
 pub fn manifest_list_has_linux_amd64(bytes: &[u8]) -> bool {
     let v: serde_json::Value = match serde_json::from_slice(bytes) {
@@ -592,13 +628,16 @@ pub async fn store_digest(
     tag: &str,
     uuid: &Uuid,
 ) -> Result<Digest, anyhow::Error> {
-    println!("[STORE] Téléchargement et stockage du manifest pour {}/{}", repository, tag);
+    println!(
+        "[STORE] Téléchargement et stockage du manifest pour {}/{}",
+        repository, tag
+    );
 
     // Récupérer le digest racine
     let digest = digest_process_for_head(client, registry, repository, tag).await?;
 
     // Télécharger le manifest complet
-    /* 
+    /*
     let token_url = format!(
         "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
         repository
@@ -687,7 +726,10 @@ pub async fn get_response_from_upstream(
                 rb = rb.header("Authorization", format!("Bearer {}", token));
             }
             Err(e) => {
-                eprintln!("[AUTH] Impossible d'obtenir un token pour {}: {:?}", repository, e);
+                eprintln!(
+                    "[AUTH] Impossible d'obtenir un token pour {}: {:?}",
+                    repository, e
+                );
                 // on continue sans token — Docker Hub répondra 401 mais c'est son problème
             }
         }
@@ -699,12 +741,10 @@ pub async fn get_response_from_upstream(
 
     match rb.send().await {
         Ok(resp) => Ok(resp),
-        Err(_) => Err(
-            Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from("Registry unreachable"))
-                .unwrap()
-        ),
+        Err(_) => Err(Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .body(Body::from("Registry unreachable"))
+            .unwrap()),
     }
 }
 
@@ -712,20 +752,18 @@ pub async fn get_response_from_upstream(
 fn extract_repository_from_path(path: &str) -> Option<String> {
     let stripped = path.trim_start_matches("/v2/");
     let parts: Vec<&str> = stripped.split('/').collect();
-    let end = parts.iter().position(|p| {
-        *p == "manifests" || *p == "blobs" || *p == "referrers"
-    })?;
+    let end = parts
+        .iter()
+        .position(|p| *p == "manifests" || *p == "blobs" || *p == "referrers")?;
     if end == 0 {
         return None;
     }
     Some(parts[..end].join("/"))
 }
 
-
-
 /// Vérifie si le manifest racine est dans la blacklist ou whitelist
 /// `mode` = "blacklist" ou "whitelist"
-/// Actuellement la verif est fait via le manifest racine, pas de differnetiation entre les differnts tags (A modifier) 
+/// Actuellement la verif est fait via le manifest racine, pas de differnetiation entre les differnts tags (A modifier)
 pub async fn check_manifest_in_list(
     context_uuid: Uuid,
     pull_contexts: &Arc<TokioMutex<Vec<PullContext>>>,
@@ -733,7 +771,6 @@ pub async fn check_manifest_in_list(
     mode: &str,
     pool: &sqlx::PgPool,
 ) -> Option<Response<Body>> {
-
     let ctx_opt = {
         let list = pull_contexts.lock().await;
         list.iter().find(|c| c.uuid == context_uuid).cloned()
@@ -744,15 +781,9 @@ pub async fn check_manifest_in_list(
         None => return None,
     };
 
-    let found = crate::db::is_image_in_list(
-        pool,
-        &ctx.registry,
-        &ctx.repository,
-        &ctx.tag,
-        mode,
-    )
-    .await
-    .unwrap_or(false);
+    let found = crate::db::is_image_in_list(pool, &ctx.registry, &ctx.repository, &ctx.tag, mode)
+        .await
+        .unwrap_or(false);
 
     if !found {
         return None;
@@ -760,7 +791,10 @@ pub async fn check_manifest_in_list(
 
     match mode {
         "blacklist" => {
-            println!("[BLACKLIST CHECK] {}/{} :{} -> pull refusé", ctx.registry, ctx.repository, ctx.tag);
+            println!(
+                "[BLACKLIST CHECK] {}/{} :{} -> pull refusé",
+                ctx.registry, ctx.repository, ctx.tag
+            );
             Some(
                 Response::builder()
                     .status(StatusCode::FORBIDDEN)
@@ -769,7 +803,10 @@ pub async fn check_manifest_in_list(
             )
         }
         "whitelist" => {
-            println!("[WHITELIST CHECK] {}/{} :{} -> pull autorisé", ctx.registry, ctx.repository, ctx.tag);
+            println!(
+                "[WHITELIST CHECK] {}/{} :{} -> pull autorisé",
+                ctx.registry, ctx.repository, ctx.tag
+            );
             Some(
                 Response::builder()
                     .status(StatusCode::OK)
@@ -788,19 +825,17 @@ pub async fn add_context_to_blacklist_or_whitelist(
     list_type: &str,
     pool: &sqlx::PgPool,
 ) -> Result<()> {
-    crate::db::add_image_to_list(
-        pool,
-        &ctx.registry,
-        &ctx.repository,
-        &ctx.tag,
-        list_type,
-    )
-    .await?;
+    crate::db::add_image_to_list(pool, &ctx.registry, &ctx.repository, &ctx.tag, list_type).await?;
 
-    println!("[{}] {}/{} :{} ajouté", list_type.to_uppercase(), ctx.registry, ctx.repository, ctx.tag);
+    println!(
+        "[{}] {}/{} :{} ajouté",
+        list_type.to_uppercase(),
+        ctx.registry,
+        ctx.repository,
+        ctx.tag
+    );
     Ok(())
 }
-
 
 //Check si aucune requetes envoyé dans le laspe de temps CONTEXT_TIMEOUT
 pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
@@ -822,7 +857,10 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
             list.retain(|ctx| {
                 let alive = ctx.last_activity.elapsed() < Duration::from_secs(context_timeout);
                 if !alive {
-                    println!("[Timeout-Reach] Contexte expiré détecté | uuid={}", ctx.uuid);
+                    println!(
+                        "[Timeout-Reach] Contexte expiré détecté | uuid={}",
+                        ctx.uuid
+                    );
                     expired_contexts.push(ctx.clone());
                 }
                 alive
@@ -834,7 +872,7 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
                 // Suppression en cascade dans la BDD
                 // pulls → pull_digests, scan_events, ia_decisions supprimés par CASCADE
                 let _ = sqlx::query(
-                    "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false"
+                    "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false",
                 )
                 .bind(ctx.uuid.to_string())
                 .execute(&pool_clone)
@@ -891,26 +929,13 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext, pool: &sqlx::PgPool
     all.extend(ctx.referrers_digests.iter());
 
     for digest in all {
-        let base = format!(
-            "quarantaine/{}/{}/",
-            registry, repo
-        );
+        let base = format!("quarantaine/{}/{}/", registry, repo);
 
-        let manifest = format!(
-            "{}manifests/sha256/{}.json",
-            base, digest.value
-        );
+        let manifest = format!("{}manifests/sha256/{}.json", base, digest.value);
 
-        let blob = format!(
-            "{}blobs/sha256/{}",
-            base, digest.value
-        );
+        let blob = format!("{}blobs/sha256/{}", base, digest.value);
 
-        let referrers = format!(
-            "{}referrers/sha256/{}.json",
-            base, digest.value
-        );
-
+        let referrers = format!("{}referrers/sha256/{}.json", base, digest.value);
 
         if Path::new(&manifest).exists() {
             if let Err(e) = fs::remove_file(&manifest) {
@@ -927,8 +952,13 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext, pool: &sqlx::PgPool
             let digest2 = format!("sha256:{}", digest.value);
             tokio::spawn(async move {
                 let _ = crate::db::delete_quarantine_file(
-                    &pool2, &registry2, &repository2, &digest2, "manifest",
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "manifest",
+                )
+                .await;
             });
         }
 
@@ -947,11 +977,16 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext, pool: &sqlx::PgPool
             let digest2 = format!("sha256:{}", digest.value);
             tokio::spawn(async move {
                 let _ = crate::db::delete_quarantine_file(
-                    &pool2, &registry2, &repository2, &digest2, "blob",
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "blob",
+                )
+                .await;
             });
         }
-        
+
         if Path::new(&referrers).exists() {
             if let Err(e) = fs::remove_file(&referrers) {
                 eprintln!("[QUARANTINE CLEAN] erreur {}", e);
@@ -967,16 +1002,18 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext, pool: &sqlx::PgPool
             let digest2 = format!("sha256:{}", digest.value);
             tokio::spawn(async move {
                 let _ = crate::db::delete_quarantine_file(
-                    &pool2, &registry2, &repository2, &digest2, "referrer",
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "referrer",
+                )
+                .await;
             });
         }
     }
 }
-pub async fn dec_active(
-    pull_contexts: &PullContextList,
-    uuid: Uuid,
-) {
+pub async fn dec_active(pull_contexts: &PullContextList, uuid: Uuid) {
     let notify;
     {
         let mut list = pull_contexts.lock().await;
@@ -1002,7 +1039,7 @@ pub async fn dec_active(
         }
     }
 
-    // 🔔 notifier pour le scan final 
+    // 🔔 notifier pour le scan final
     notify.notify_waiters();
 }
 
@@ -1026,9 +1063,16 @@ pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext, pool: &sqlx::PgPool)
             let size = std::fs::metadata(&c2).map(|m| m.len() as i64).unwrap_or(0);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_cache_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "manifest", "sha256", &c2, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "manifest",
+                    "sha256",
+                    &c2,
+                    size,
+                )
+                .await;
             });
         }
     }
@@ -1046,9 +1090,16 @@ pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext, pool: &sqlx::PgPool)
             let size = std::fs::metadata(&c2).map(|m| m.len() as i64).unwrap_or(0);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_cache_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "blob", "sha256", &c2, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "blob",
+                    "sha256",
+                    &c2,
+                    size,
+                )
+                .await;
             });
         }
     }
@@ -1066,9 +1117,16 @@ pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext, pool: &sqlx::PgPool)
             let size = std::fs::metadata(&c2).map(|m| m.len() as i64).unwrap_or(0);
             tokio::spawn(async move {
                 let _ = crate::db::upsert_cache_file(
-                    &pool2, &registry2, &repository2,
-                    &digest2, "referrer", "sha256", &c2, size,
-                ).await;
+                    &pool2,
+                    &registry2,
+                    &repository2,
+                    &digest2,
+                    "referrer",
+                    "sha256",
+                    &c2,
+                    size,
+                )
+                .await;
             });
         }
     }
@@ -1135,7 +1193,6 @@ pub fn verify_content_digest(
     bytes: &[u8],
     docker_content_digest: Option<&str>,
 ) -> Result<(), String> {
-    
     // ← Les referrers utilisent le digest du manifest cible dans l'URL,
     // pas le hash du contenu de la réponse — exclure de la vérification
     if path.contains("/referrers/") {
@@ -1228,8 +1285,8 @@ pub async fn prefetch_expected_to_quarantine(
         .await?;
 
     for digest in &ctx.digests_expected {
-        
-        if !is_safe_digest_component(&digest.algorithm) || !is_safe_digest_component(&digest.value) {
+        if !is_safe_digest_component(&digest.algorithm) || !is_safe_digest_component(&digest.value)
+        {
             eprintln!(
                 "[SECURITY] Digest expected invalide ignoré: {}:{}",
                 digest.algorithm, digest.value
@@ -1237,7 +1294,8 @@ pub async fn prefetch_expected_to_quarantine(
 
             return Err(anyhow::anyhow!(
                 "Digest invalide dans digests_expected: {}:{}",
-                digest.algorithm, digest.value
+                digest.algorithm,
+                digest.value
             ));
         }
 
@@ -1256,7 +1314,10 @@ pub async fn prefetch_expected_to_quarantine(
                     let fake_path = format!("/v2/{}/manifests/{}", ctx.repository, digest_str);
                     let ok = save_to_quarantine(&fake_path, &bytes, ctx, pool);
                     if !ok {
-                        return Err(anyhow::anyhow!("save_to_quarantine échoué pour digest: {}", digest.value));
+                        return Err(anyhow::anyhow!(
+                            "save_to_quarantine échoué pour digest: {}",
+                            digest.value
+                        ));
                     }
                     println!("[PREFETCH] Manifest copié en quarantaine: {}", digest.value);
                 }
@@ -1310,7 +1371,10 @@ pub async fn prefetch_expected_to_quarantine(
 
                         let ok = save_to_quarantine(&fake_path, &bytes, ctx, pool);
                         if !ok {
-                            return Err(anyhow::anyhow!("save_to_quarantine échoué pour digest: {}", digest.value));
+                            return Err(anyhow::anyhow!(
+                                "save_to_quarantine échoué pour digest: {}",
+                                digest.value
+                            ));
                         }
 
                         println!("[PREFETCH] Blob stocké en quarantaine: {}", digest.value);
@@ -1318,7 +1382,11 @@ pub async fn prefetch_expected_to_quarantine(
                     Err(e) => eprintln!("[PREFETCH] Lecture bytes blob {}: {}", digest.value, e),
                 }
             }
-            Ok(r) => eprintln!("[PREFETCH] Status {} pour blob {}", r.status(), digest.value),
+            Ok(r) => eprintln!(
+                "[PREFETCH] Status {} pour blob {}",
+                r.status(),
+                digest.value
+            ),
             Err(e) => eprintln!("[PREFETCH] Erreur réseau blob {}: {}", digest.value, e),
         }
     }
@@ -1407,8 +1475,8 @@ pub fn serve_from_quarantine(path: &str, ctx: &PullContext) -> Option<Response<B
 /// Valide la conformité structurelle d'une manifest-list OCI/Docker.
 /// Vérifie : JSON valide, champ manifests présent, chaque entrée a digest + platform.
 pub fn validate_manifest_list(bytes: &[u8]) -> Result<(), String> {
-    let v: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|e| format!("JSON invalide: {}", e))?;
+    let v: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("JSON invalide: {}", e))?;
 
     let manifests = v
         .get("manifests")
@@ -1466,17 +1534,10 @@ pub fn all_expected_in_cache(ctx: &PullContext) -> bool {
     let base = format!("cache/{}/{}", ctx.registry, ctx.repository);
 
     for digest in &ctx.digests_expected {
-        let manifest_path = format!(
-            "{}/manifests/sha256/{}.json",
-            base, digest.value
-        );
-        let blob_path = format!(
-            "{}/blobs/sha256/{}",
-            base, digest.value
-        );
+        let manifest_path = format!("{}/manifests/sha256/{}.json", base, digest.value);
+        let blob_path = format!("{}/blobs/sha256/{}", base, digest.value);
 
-        let in_cache = Path::new(&manifest_path).exists()
-            || Path::new(&blob_path).exists();
+        let in_cache = Path::new(&manifest_path).exists() || Path::new(&blob_path).exists();
 
         if !in_cache {
             println!(
@@ -1531,10 +1592,7 @@ pub fn check_blob_authorized(path: &str, ctx: &PullContext) -> Result<(), String
     }
 
     // Règle 2 : le digest doit être dans la liste attendue
-    let expected = ctx
-        .digests_expected
-        .iter()
-        .any(|d| d.value == digest_value);
+    let expected = ctx.digests_expected.iter().any(|d| d.value == digest_value);
 
     if !expected {
         return Err(format!(
@@ -1569,7 +1627,6 @@ pub fn canonicalize_path_components(
     host: &str,
     parts: &[&str],
 ) -> Result<(String, String), String> {
-
     // -- Registry (vient du header Host) --
     // On retire le port éventuel
     let registry = host.split(':').next().unwrap_or(host);
@@ -1580,7 +1637,9 @@ pub fn canonicalize_path_components(
         || registry.contains("..")
         || registry.contains('/')
         || registry.contains('\\')
-        || !registry.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        || !registry
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
     {
         return Err(format!("Registry invalide: {}", registry));
     }
@@ -1641,11 +1700,12 @@ fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
     let mut out = std::path::PathBuf::new();
     for component in path.components() {
         match component {
-            std::path::Component::ParentDir => { out.pop(); }
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
             std::path::Component::CurDir => {}
             c => out.push(c),
         }
     }
     out
 }
-

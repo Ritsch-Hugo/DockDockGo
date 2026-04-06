@@ -1,18 +1,18 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Instant, Duration};
-use std::path::Path;
 use anyhow::Result;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{Mutex as TokioMutex, Notify};
 
-use uuid::Uuid;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use uuid::Uuid;
 
-use rustls::sign::{CertifiedKey, any_supported_type};
 use rustls::server::ResolvesServerCert;
+use rustls::sign::{any_supported_type, CertifiedKey};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{load_certs, load_private_key};
 
@@ -23,11 +23,10 @@ pub struct Digest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PullContext 
-{
+pub struct PullContext {
     pub uuid: Uuid,
     pub ip_client: String,
-    pub registry: String, //ex: "registry-1.docker.io"
+    pub registry: String,   //ex: "registry-1.docker.io"
     pub repository: String, //ex: "library/ubuntu"
     pub tag: String,
 
@@ -39,7 +38,7 @@ pub struct PullContext
     pub digests_possible: Vec<Digest>,
     pub digests_expected: Vec<Digest>,
 
-    pub os: String,  // ex: "linux"
+    pub os: String,   // ex: "linux"
     pub arch: String, // ex: "amd64"
 
     #[serde(skip_serializing, skip_deserializing, default = "Instant::now")]
@@ -107,9 +106,7 @@ pub struct Platform {
     pub architecture: String,
 }
 
-
-
-//Structure pour la gestion multi certificats 
+//Structure pour la gestion multi certificats
 pub struct MultiCertResolver {
     certs: HashMap<String, Arc<CertifiedKey>>,
 }
@@ -122,8 +119,8 @@ pub struct RateLimitEntry {
 
 pub struct RateLimiter {
     entries: Arc<TokioMutex<HashMap<String, RateLimitEntry>>>,
-    max_requests: u32,   // nombre max de requêtes par fenêtre
-    window: Duration,    // durée de la fenêtre
+    max_requests: u32, // nombre max de requêtes par fenêtre
+    window: Duration,  // durée de la fenêtre
 }
 
 impl RateLimiter {
@@ -157,17 +154,20 @@ impl RateLimiter {
             }
             None => {
                 // Première requête de cette IP
-                map.insert(ip.to_string(), RateLimitEntry {
-                    count: 1,
-                    window_start: now,
-                });
+                map.insert(
+                    ip.to_string(),
+                    RateLimitEntry {
+                        count: 1,
+                        window_start: now,
+                    },
+                );
                 true
             }
         }
     }
 
     //Nettoyage périodique des entrées expirées pour éviter la fuite mémoire
-    
+
     pub fn start_cleanup(self: Arc<Self>) {
         tokio::spawn(async move {
             loop {
@@ -175,9 +175,7 @@ impl RateLimiter {
                 let mut map = self.entries.lock().await;
                 let now = Instant::now();
                 let before = map.len();
-                map.retain(|_, entry| {
-                    now.duration_since(entry.window_start) <= self.window
-                });
+                map.retain(|_, entry| now.duration_since(entry.window_start) <= self.window);
                 let removed = before - map.len();
                 if removed > 0 {
                     //println!("[RATE-LIMIT] Nettoyage effectué, {} IPs supprimées ({} restantes)", removed, map.len());
@@ -194,7 +192,7 @@ impl MultiCertResolver {
         }
     }
 
-    pub fn add(&mut self, domain: &str) -> Result<()>{
+    pub fn add(&mut self, domain: &str) -> Result<()> {
         let crt_path = format!("certs-mitm/{}.crt", domain);
         let key_path = format!("certs-mitm/{}.key", domain);
 
@@ -214,17 +212,13 @@ impl MultiCertResolver {
 }
 
 impl ResolvesServerCert for MultiCertResolver {
-    fn resolve(
-        &self,
-        client_hello: rustls::server::ClientHello,
-    ) -> Option<Arc<CertifiedKey>> {
+    fn resolve(&self, client_hello: rustls::server::ClientHello) -> Option<Arc<CertifiedKey>> {
         let name = client_hello.server_name()?;
         self.certs.get(name).cloned()
     }
 }
 
 pub type PullContextList = Arc<TokioMutex<Vec<PullContext>>>;
-
 
 impl Digest {
     pub fn as_str(&self) -> String {
@@ -233,7 +227,13 @@ impl Digest {
 }
 
 impl PullContext {
-    pub fn new(uuid: Uuid, ip_client: String, registry: String, repository: String, tag: String) -> Self {
+    pub fn new(
+        uuid: Uuid,
+        ip_client: String,
+        registry: String,
+        repository: String,
+        tag: String,
+    ) -> Self {
         Self {
             uuid,
             ip_client,
@@ -259,9 +259,7 @@ impl PullContext {
             active_requests: AtomicUsize::new(0),
             client_type: "unknown".to_string(),
             notify_zero: Arc::new(Notify::new()),
-
         }
-
     }
 }
 impl Clone for PullContext {

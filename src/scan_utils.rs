@@ -1,14 +1,8 @@
+use crate::models::{PullContext, PullContextList, ScanDecision};
+use crate::utils::is_safe_digest_component;
+use reqwest::multipart;
 use std::time::Duration;
 use uuid::Uuid;
-use reqwest::multipart;
-use crate::models::{
-    PullContext,
-    PullContextList,
-    ScanDecision
-};
-use crate::utils::is_safe_digest_component;
-
-
 
 /// 🔐 Politique de sécurité (async)
 /// ALLOW ou PENDING => true (on continue)
@@ -17,9 +11,7 @@ pub async fn launch_final_scan(
     pull_contexts: &PullContextList,
     uuid: Uuid,
     path: &str,
-) -> Option<ScanDecision>
-{
-
+) -> Option<ScanDecision> {
     // 1️⃣ récupérer le contexte
     let mut ctx_clone;
     {
@@ -47,23 +39,18 @@ pub async fn launch_final_scan(
         Ok(s) => s,
     };
 
-
-
     let mut list = pull_contexts.lock().await;
     let _ctx = list.iter_mut().find(|c| c.uuid == uuid)?;
 
-    if state == "ALLOW"
-    {
+    if state == "ALLOW" {
         return Some(ScanDecision::ALLOW);
     }
-     
-    if state == "PENDING" 
-    {
+
+    if state == "PENDING" {
         return Some(ScanDecision::PENDING);
     }
-    
-    if state == "DENY" 
-    {
+
+    if state == "DENY" {
         return Some(ScanDecision::DENY);
     }
 
@@ -77,7 +64,7 @@ pub async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result
         pull_id: uuid::Uuid,
         state: String, // "PENDING" | "ALLOW" | "DENY"
     }
-    
+
     let orch_url = std::env::var("ORCH_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:3000/v1/decision".to_string());
 
@@ -85,46 +72,48 @@ pub async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result
     println!("uuid={} repo={}:{}", ctx.uuid, ctx.repository, ctx.tag);
 
     // 1) context inchangé
-    let mut form = multipart::Form::new()
-        .text("context", serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string()));
+    let mut form = multipart::Form::new().text(
+        "context",
+        serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string()),
+    );
 
-async fn add_file_if_exists(
-    form: multipart::Form,
-    field_name: &'static str,
-    filename: String,
-    path: String,
-) -> multipart::Form {
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => {
-            if bytes.is_empty() {
-                println!("[ORCH WARN] fichier vide: {}", path);
-                return form;
+    async fn add_file_if_exists(
+        form: multipart::Form,
+        field_name: &'static str,
+        filename: String,
+        path: String,
+    ) -> multipart::Form {
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => {
+                if bytes.is_empty() {
+                    println!("[ORCH WARN] fichier vide: {}", path);
+                    return form;
+                }
+
+                println!("[ORCH INFO] ajout fichier: {}", path);
+
+                let mime = if path.contains("/manifests/") || path.contains("/referrers/") {
+                    "application/json"
+                } else {
+                    "application/octet-stream"
+                };
+
+                // Renommer le fichier pour éviter les ':' dans le nom
+                let safe_filename = filename.replace(":", "_");
+
+                let part = multipart::Part::bytes(bytes)
+                    .file_name(safe_filename)
+                    .mime_str(mime)
+                    .unwrap();
+
+                form.part(field_name, part)
             }
-
-            println!("[ORCH INFO] ajout fichier: {}", path);
-
-            let mime = if path.contains("/manifests/") || path.contains("/referrers/") {
-                "application/json"
-            } else {
-                "application/octet-stream"
-            };
-
-            // Renommer le fichier pour éviter les ':' dans le nom
-            let safe_filename = filename.replace(":", "_");
-
-            let part = multipart::Part::bytes(bytes)
-                .file_name(safe_filename)
-                .mime_str(mime)
-                .unwrap();
-
-            form.part(field_name, part)
-        }
-        Err(e) => {
-            println!("[ORCH WARN] fichier introuvable: {} ({})", path, e);
-            form
+            Err(e) => {
+                println!("[ORCH WARN] fichier introuvable: {} ({})", path, e);
+                form
+            }
         }
     }
-}
 
     let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
 
@@ -133,8 +122,7 @@ async fn add_file_if_exists(
     // =====================================================================
     println!("flag : {} : ", flag);
 
-    if flag == "scan_final" 
-    {
+    if flag == "scan_final" {
         println!("[ORCH] SCAN FINAL -> envoi de tous les digests de l'image");
 
         // ---------------- manifests ----------------
@@ -199,11 +187,10 @@ async fn add_file_if_exists(
 
         println!("[ORCH] SCAN FINAL -> tous les fichiers ajoutés au multipart");
     }
-
     //Cas scan haut niveau podman (sur le GET /manifest/<tag>)
-    else if path.contains("/manifests/") && !path.contains("sha256:") 
-    {
-        if flag != "scan_haut_niveau" {  // ← ne pas joindre le manifest pour le premier call
+    else if path.contains("/manifests/") && !path.contains("sha256:") {
+        if flag != "scan_haut_niveau" {
+            // ← ne pas joindre le manifest pour le premier call
             if let Some(racine) = &ctx.manifest_racine_digest {
                 let digest = racine.as_str();
                 let parts: Vec<&str> = digest.split(':').collect();
@@ -217,15 +204,11 @@ async fn add_file_if_exists(
             }
         }
     }
-
     // ------------------------------------------------------------------
     // On envoie uniquement le digest demandé dans l'URL
     // ------------------------------------------------------------------
-    else 
-    {
-
-        if let Some(pos) = path.find("sha256:") 
-        {
+    else {
+        if let Some(pos) = path.find("sha256:") {
             let digest = &path[pos..];
             println!("[ORCH] digest courant détecté: {}", digest);
 
@@ -240,7 +223,6 @@ async fn add_file_if_exists(
 
                     form = add_file_if_exists(form, "manifests", filename, file_path).await;
                 }
-                
             } else if path.contains("/blobs/") {
                 let parts: Vec<&str> = digest.split(':').collect();
                 if parts.len() == 2 {
@@ -267,9 +249,11 @@ async fn add_file_if_exists(
                 }
             }
         }
-            
         // ← CAS PODMAN : path par tag, pas de sha256: dans le path
-        else if path.contains("/manifests/") && !path.contains("sha256:") && flag != "scan_haut_niveau" {
+        else if path.contains("/manifests/")
+            && !path.contains("sha256:")
+            && flag != "scan_haut_niveau"
+        {
             // Utiliser le manifest_racine_digest du contexte
             if let Some(racine) = &ctx.manifest_racine_digest {
                 let digest = racine.as_str(); // "sha256:d1e2e92c..."
@@ -290,14 +274,15 @@ async fn add_file_if_exists(
 
     println!("file_path : {}", base_dir);
 
-
-    // 5) POST multipart 
+    // 5) POST multipart
     let client = reqwest::Client::new();
 
     let state: Result<String, String> = match tokio::time::timeout(
         Duration::from_secs(30),
-        client.post(orch_url).multipart(form).send()
-    ).await {
+        client.post(orch_url).multipart(form).send(),
+    )
+    .await
+    {
         Err(_) => {
             // ← Err du timeout (elapsed)
             eprintln!("[ORCH TIMEOUT] Orchestrateur ne répond pas");
@@ -332,7 +317,6 @@ async fn add_file_if_exists(
         }
     };
 
-
     println!("==================================================================================");
 
     let state_str = match state {
@@ -360,5 +344,3 @@ async fn add_file_if_exists(
 
     Ok(state_str)
 }
-
-

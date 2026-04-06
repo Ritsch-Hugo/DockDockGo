@@ -39,10 +39,7 @@ impl RegistryClient {
             RegistryClient::Generic(registry) => {
                 let ping_url = format!("https://{}/v2/", registry);
 
-                let resp_unauth = client
-                    .get(&ping_url)
-                    .send()
-                    .await?;
+                let resp_unauth = client.get(&ping_url).send().await?;
 
                 let www_auth = resp_unauth
                     .headers()
@@ -95,14 +92,11 @@ fn extract_www_auth_field(www_auth: &str, field: &str) -> Option<String> {
 
 //Patterns de validation pour les headers et les champs d'authentification (anti SSRF))
 fn validate_realm(realm: &str, expected_registry: &str) -> Result<(), anyhow::Error> {
-    let parsed = Url::parse(realm)
-        .map_err(|_| anyhow::anyhow!("Realm URL invalide: {}", realm))?;
+    let parsed = Url::parse(realm).map_err(|_| anyhow::anyhow!("Realm URL invalide: {}", realm))?;
 
     // Schéma obligatoirement HTTPS
     if parsed.scheme() != "https" {
-        return Err(anyhow::anyhow!(
-            "Realm non-HTTPS rejeté: {}", realm
-        ));
+        return Err(anyhow::anyhow!("Realm non-HTTPS rejeté: {}", realm));
     }
 
     let realm_host = parsed
@@ -112,17 +106,17 @@ fn validate_realm(realm: &str, expected_registry: &str) -> Result<(), anyhow::Er
     // Le host du realm doit correspondre au registre attendu
     // On autorise aussi les sous-domaines directs (ex: auth.ghcr.io pour ghcr.io)
     let registry_host = expected_registry
-        .split(':')  // retire le port éventuel
+        .split(':') // retire le port éventuel
         .next()
         .unwrap_or(expected_registry);
 
-    let ok = realm_host == registry_host
-        || realm_host.ends_with(&format!(".{}", registry_host));
+    let ok = realm_host == registry_host || realm_host.ends_with(&format!(".{}", registry_host));
 
     if !ok {
         return Err(anyhow::anyhow!(
             "SSRF bloqué — realm '{}' ne correspond pas au registre '{}'",
-            realm_host, registry_host
+            realm_host,
+            registry_host
         ));
     }
 

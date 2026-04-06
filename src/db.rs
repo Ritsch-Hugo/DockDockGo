@@ -68,7 +68,10 @@ pub async fn add_image_to_list(
         .execute(pool)
         .await?;
 
-    println!("[DB] Ajouté dans {} : {}/{} :{}", list, registry, repository, tag);
+    println!(
+        "[DB] Ajouté dans {} : {}/{} :{}",
+        list, registry, repository, tag
+    );
     Ok(())
 }
 
@@ -77,9 +80,9 @@ pub async fn upsert_quarantine_file(
     pool: &PgPool,
     registry: &str,
     repository: &str,
-    digest: &str,        // "sha256:abc123..."
-    file_type: &str,     // "manifest", "blob", "referrer"
-    digest_algo: &str,   // "sha256"
+    digest: &str,      // "sha256:abc123..."
+    file_type: &str,   // "manifest", "blob", "referrer"
+    digest_algo: &str, // "sha256"
     file_path: &str,
     size_bytes: i64,
 ) -> Result<()> {
@@ -114,7 +117,7 @@ pub async fn delete_quarantine_file(
 ) -> Result<()> {
     sqlx::query(
         "DELETE FROM quarantine
-         WHERE registry = $1 AND repository = $2 AND digest = $3 AND type = $4"
+         WHERE registry = $1 AND repository = $2 AND digest = $3 AND type = $4",
     )
     .bind(registry)
     .bind(repository)
@@ -160,7 +163,7 @@ pub async fn upsert_cache_file(
 pub async fn is_ip_allowed(pool: &sqlx::PgPool, ip: &str) -> bool {
     // On utilise query_scalar sans "!" pour éviter les erreurs de compilation DATABASE_URL
     let result = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE $1 = ANY(allowed_ips))"
+        "SELECT EXISTS(SELECT 1 FROM users WHERE $1 = ANY(allowed_ips))",
     )
     .bind(ip)
     .fetch_one(pool)

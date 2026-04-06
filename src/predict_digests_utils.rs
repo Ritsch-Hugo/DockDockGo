@@ -1,26 +1,19 @@
 // ================================
 // Imports nécessaires
 // ================================
-use std::fs;
-use std::path::Path;
-use std::fs::create_dir_all;
+use anyhow::Result;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use anyhow::Result;
 use reqwest::Client;
+use std::fs;
+use std::fs::create_dir_all;
+use std::path::Path;
 use uuid::Uuid;
 
 // Pour les types définis dans ton projet
-use crate::models::{
-    PullContext,
-    Digest,
-    ManifestList,
-    DigestVerificationState,
-    PullContextError
-};
+use crate::models::{Digest, DigestVerificationState, ManifestList, PullContext, PullContextError};
 
 use crate::registry_auth::RegistryClient;
-
 
 /// Retourne l'OS et l'architecture d'un manifest Docker à partir de son digest.
 /// Si l'information n'existe pas, renvoie ("unknown", "unknown").
@@ -110,8 +103,12 @@ pub fn fetch_and_process_manifest<'a>(
         let path = format!("tmp/{}/{}.json", uuid, digest_clean);
 
         if !Path::new(&path).exists() {
-            let url = format!("https://{}/v2/{}/manifests/{}", registry, repository, digest);
-            let resp = client.get(&url)
+            let url = format!(
+                "https://{}/v2/{}/manifests/{}",
+                registry, repository, digest
+            );
+            let resp = client
+                .get(&url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header(
                     "Accept",
@@ -132,44 +129,63 @@ pub fn fetch_and_process_manifest<'a>(
         let json: serde_json::Value = serde_json::from_slice(&content)?;
 
         //Log
-        println!("[FETCH DEBUG] manifest {}: config={:?}, layers={:?}", 
+        println!(
+            "[FETCH DEBUG] manifest {}: config={:?}, layers={:?}",
             digest_clean,
             json.get("config"),
             json.get("layers")
         );
-        
+
         // Ajouter digest du manifest lui-même
         if !digests.iter().any(|d| d.value == digest_clean) {
-            digests.push(Digest { algorithm: "sha256".into(), value: digest_clean.into() });
+            digests.push(Digest {
+                algorithm: "sha256".into(),
+                value: digest_clean.into(),
+            });
         }
 
         // Si manifest list → récursion (via BoxFuture)
         if json.get("manifests").is_some() {
             let manifest_list: ManifestList = serde_json::from_value(json)?;
             for m in manifest_list.manifests {
-                fetch_and_process_manifest(client, uuid, registry, repository, &m.digest, token, digests).await?;
+                fetch_and_process_manifest(
+                    client, uuid, registry, repository, &m.digest, token, digests,
+                )
+                .await?;
             }
         } else {
             // Sinon, config + layers
-            if let Some(config) = json.get("config").and_then(|c| c.get("digest")).and_then(|d| d.as_str()) {
+            if let Some(config) = json
+                .get("config")
+                .and_then(|c| c.get("digest"))
+                .and_then(|d| d.as_str())
+            {
                 let c = config.strip_prefix("sha256:").unwrap_or(config);
-                digests.push(Digest { algorithm: "sha256".into(), value: c.into() });
+                digests.push(Digest {
+                    algorithm: "sha256".into(),
+                    value: c.into(),
+                });
             }
             if let Some(layers) = json.get("layers").and_then(|l| l.as_array()) {
                 for layer in layers {
                     if let Some(d) = layer.get("digest").and_then(|v| v.as_str()) {
                         let l = d.strip_prefix("sha256:").unwrap_or(d);
-                        digests.push(Digest { algorithm: "sha256".into(), value: l.into() });
+                        digests.push(Digest {
+                            algorithm: "sha256".into(),
+                            value: l.into(),
+                        });
                     }
                 }
             }
         }
 
         Ok(())
-    }.boxed()
+    }
+    .boxed()
 }
 
-pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get_pull_context
+pub async fn predict_digests_docker(
+    //Doit etre appellée lors du HEAD dans get_pull_context
     client: &Client,
     uuid: &Uuid,
     registry: &str,
@@ -179,9 +195,10 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
     arch: &str,
     manifest_racine_digest: &Digest,
 ) -> Result<Vec<Digest>> {
-
-
-    println!("LOG - MANIFEST RACINE DIGEST : {}", manifest_racine_digest.value);
+    println!(
+        "LOG - MANIFEST RACINE DIGEST : {}",
+        manifest_racine_digest.value
+    );
     println!(
         "[PREDICT] Using provided manifest digest for {}:{}, target={}/{}",
         repository, tag, os, arch
@@ -191,7 +208,7 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
     // 1️⃣ Récupération du token
     // ============================
 
-    /* 
+    /*
     let token_url = format!(
         "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
         repository
@@ -206,13 +223,15 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
     */
 
     let token = RegistryClient::from_registry(registry)
-    .get_token(client, repository)
-    .await?;
+        .get_token(client, repository)
+        .await?;
 
     // ============================
     // 2️⃣ Préparer le stockage temporaire
     // ============================
-    let digest_clean = manifest_racine_digest.value.strip_prefix("sha256:")
+    let digest_clean = manifest_racine_digest
+        .value
+        .strip_prefix("sha256:")
         .unwrap_or(&manifest_racine_digest.value);
 
     let tmp_dir = format!("tmp/{}", uuid);
@@ -264,7 +283,6 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
         value: digest_clean.to_string(),
     });
 
-
     // ============================
     // Parsing MANIFEST LIST
     // ============================
@@ -285,7 +303,8 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
                     m.digest, os, arch
                 );*/
 
-                let digest_clean = m.digest
+                let digest_clean = m
+                    .digest
                     .strip_prefix("sha256:")
                     .ok_or_else(|| anyhow::anyhow!("Digest inattendu"))?
                     .to_string();
@@ -300,9 +319,7 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
                 if !Path::new(&manifest_path).exists() {
                     let manifest_url = format!(
                         "https://{}/v2/{}/manifests/{}",
-                        registry,
-                        repository,
-                        m.digest
+                        registry, repository, m.digest
                     );
 
                     let resp = client
@@ -342,7 +359,8 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
                                 m.digest
                             );*/
 
-                            let digest_clean = m.digest
+                            let digest_clean = m
+                                .digest
                                 .strip_prefix("sha256:")
                                 .ok_or_else(|| anyhow::anyhow!("Digest inattendu"))?
                                 .to_string();
@@ -357,9 +375,7 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
                             if !Path::new(&manifest_path).exists() {
                                 let manifest_url = format!(
                                     "https://{}/v2/{}/manifests/{}",
-                                    registry,
-                                    repository,
-                                    m.digest
+                                    registry, repository, m.digest
                                 );
 
                                 let resp = client
@@ -390,21 +406,31 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
         }
     }
 
-    let manifest_list_digest_clean = manifest_racine_digest.value
+    let manifest_list_digest_clean = manifest_racine_digest
+        .value
         .strip_prefix("sha256:")
         .unwrap_or(&manifest_racine_digest.value)
         .to_string();
 
-
     // Collecter les digests des manifests téléchargés (arch-specific + unknown)
-    let manifests_to_process: Vec<String> = digests.iter()
+    let manifests_to_process: Vec<String> = digests
+        .iter()
         .filter(|d| d.value != manifest_list_digest_clean) // exclure le manifest list racine
         .map(|d| format!("sha256:{}", d.value))
         .collect();
 
     // Parcourir chaque manifest pour extraire config + layers
     for digest in manifests_to_process {
-        fetch_and_process_manifest(&client, uuid, registry, repository, &digest, &token, &mut digests).await?;
+        fetch_and_process_manifest(
+            &client,
+            uuid,
+            registry,
+            repository,
+            &digest,
+            &token,
+            &mut digests,
+        )
+        .await?;
     }
 
     //affiche les digests prédites par predict_digests
@@ -413,11 +439,8 @@ pub async fn predict_digests_docker( //Doit etre appellée lors du HEAD dans get
         println!(" - {}:{}", d.algorithm, d.value);
     }
 
-
     Ok(digests)
-
 }
-
 
 pub async fn predict_digests_podman(
     client: &Client,
@@ -428,7 +451,6 @@ pub async fn predict_digests_podman(
     arch: &str,
     manifest_racine_digest: &Digest,
 ) -> Result<Vec<Digest>> {
-
     println!(
         "[PREDICT PODMAN] Démarrage pour {}/{} target={}/{}",
         repository, manifest_racine_digest.value, os, arch
@@ -438,22 +460,23 @@ pub async fn predict_digests_podman(
     // 1️⃣ Lire le manifest list racine depuis tmp/<uuid>/
     // Déjà téléchargé par create_context_from_tag
     // ============================
-    let digest_clean = manifest_racine_digest.value
+    let digest_clean = manifest_racine_digest
+        .value
         .trim_start_matches("sha256:")
         .to_string();
 
     let manifest_list_path = format!("tmp/{}/{}.json", uuid, digest_clean);
 
-    let bytes = std::fs::read(&manifest_list_path)
-        .map_err(|e| anyhow::anyhow!(
+    let bytes = std::fs::read(&manifest_list_path).map_err(|e| {
+        anyhow::anyhow!(
             "[PREDICT PODMAN] Manifest list introuvable: {} ({})",
-            manifest_list_path, e
-        ))?;
+            manifest_list_path,
+            e
+        )
+    })?;
 
     let manifest_list_json: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| anyhow::anyhow!(
-            "[PREDICT PODMAN] Manifest list JSON invalide: {}", e
-        ))?;
+        .map_err(|e| anyhow::anyhow!("[PREDICT PODMAN] Manifest list JSON invalide: {}", e))?;
 
     // ============================
     // 2️⃣ Trouver le manifest linux/amd64
@@ -472,10 +495,7 @@ pub async fn predict_digests_podman(
             None => continue,
         };
 
-        let m_os = platform
-            .get("os")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let m_os = platform.get("os").and_then(|v| v.as_str()).unwrap_or("");
 
         let m_arch = platform
             .get("architecture")
@@ -499,10 +519,13 @@ pub async fn predict_digests_podman(
         }
     }
 
-    let digest_amd64 = digest_amd64
-        .ok_or_else(|| anyhow::anyhow!(
-            "[PREDICT PODMAN] Aucun manifest trouvé pour {}/{}", os, arch
-        ))?;
+    let digest_amd64 = digest_amd64.ok_or_else(|| {
+        anyhow::anyhow!(
+            "[PREDICT PODMAN] Aucun manifest trouvé pour {}/{}",
+            os,
+            arch
+        )
+    })?;
 
     // ============================
     // 3️⃣ Télécharger le manifest linux/amd64 si absent
@@ -532,9 +555,15 @@ pub async fn predict_digests_podman(
 
         let content = resp.bytes().await?;
         fs::write(&manifest_amd64_path, &content)?;
-        println!("[PREDICT PODMAN] Manifest {}/{} stocké: {}", os, arch, manifest_amd64_path);
+        println!(
+            "[PREDICT PODMAN] Manifest {}/{} stocké: {}",
+            os, arch, manifest_amd64_path
+        );
     } else {
-        println!("[PREDICT PODMAN] Manifest {}/{} déjà présent: {}", os, arch, manifest_amd64_path);
+        println!(
+            "[PREDICT PODMAN] Manifest {}/{} déjà présent: {}",
+            os, arch, manifest_amd64_path
+        );
     }
 
     // ============================
@@ -555,7 +584,7 @@ pub async fn predict_digests_podman(
         algorithm: "sha256".to_string(),
         value: digest_clean.clone(), // digest_clean = manifest_racine_digest nettoyé
     });
-    
+
     // manifest linux/amd64
     digests.push(Digest {
         algorithm: "sha256".to_string(),
@@ -605,10 +634,11 @@ pub async fn predict_digests_podman(
     Ok(digests)
 }
 
-pub fn verify_downloaded_digests(ctx: &PullContext) -> Result<DigestVerificationState, PullContextError> {
+pub fn verify_downloaded_digests(
+    ctx: &PullContext,
+) -> Result<DigestVerificationState, PullContextError> {
     use std::collections::HashSet;
 
-    
     // 🔹 Digests réellement téléchargés (sans doublons)
     let mut downloaded: HashSet<String> = HashSet::new();
     for d in &ctx.manifest_digests {
