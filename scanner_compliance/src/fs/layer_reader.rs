@@ -9,6 +9,12 @@ use tar::EntryType;
 /// Maximum decompressed bytes allowed per layer (4 GB).
 const MAX_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Maximum number of entries allowed per tar layer.
+const MAX_TAR_ENTRIES: usize = 1_000_000;
+
+/// Maximum allowed length for a tar entry path (in bytes).
+const MAX_PATH_LEN: usize = 4096;
+
 /// Wraps a `Read` and returns an error if more than `limit` bytes are read.
 struct LimitedReader<R: Read> {
     inner: R,
@@ -87,6 +93,7 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
 
     let mut ar = Archive::new(reader);
     let mut out: Vec<FsEntry> = Vec::new();
+    let mut entry_count = 0usize;
 
     let entries = match ar.entries() {
         Ok(e) => e,
@@ -98,6 +105,12 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
     };
 
     for e in entries {
+        entry_count += 1;
+        if entry_count > MAX_TAR_ENTRIES {
+            eprintln!("layer exceeds max entry count ({MAX_TAR_ENTRIES}), skipping rest");
+            break;
+        }
+
         let entry = match e {
             Ok(en) => en,
             Err(e) => {
@@ -106,7 +119,6 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
             }
         };
 
-        // ✅ récupérer le path de l'entrée tar
         let entry_path = match entry.path() {
             Ok(p) => p,
             Err(e) => {
@@ -119,6 +131,11 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
             Some(s) => s,
             _ => continue,
         };
+
+        if path_str.len() > MAX_PATH_LEN {
+            eprintln!("tar: path too long ({} bytes), skipping entry", path_str.len());
+            continue;
+        }
 
         let norm = match normalize_path(path_str) {
             Some(s) => s,

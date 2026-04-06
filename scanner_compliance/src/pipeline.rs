@@ -83,9 +83,27 @@ fn parse_manifest_data(manifest_raw: &str) -> Result<ManifestData, String> {
     })
 }
 
+/// Maximum number of layers accepted in a single manifest.
+const MAX_LAYERS: usize = 256;
+
 /// Convertit un ScanRequest en ImageData (pipeline identique à ton CLI actuel)
 pub fn image_from_scan_request(req: ScanRequest) -> Result<ImageData, String> {
+    if req.manifest_raw.len() > 1024 * 1024 {
+        return Err(format!(
+            "manifest_raw too large: {} bytes (max 1 MB)",
+            req.manifest_raw.len()
+        ));
+    }
+
     let manifest = parse_manifest_data(&req.manifest_raw)?;
+
+    if manifest.layers.len() > MAX_LAYERS {
+        return Err(format!(
+            "manifest declares too many layers: {} (max {})",
+            manifest.layers.len(),
+            MAX_LAYERS
+        ));
+    }
 
     // Étape 2 : compute availability depuis manifest + blobs reçus
     let avail = crate::availability::compute_availability(&manifest, &req.blobs);

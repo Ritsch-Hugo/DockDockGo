@@ -1,17 +1,28 @@
 use axum::{
-    extract::Multipart, http::StatusCode, response::IntoResponse, routing::post, Json, Router,
+    extract::{DefaultBodyLimit, Multipart},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::post,
+    Json, Router,
 };
 use scanner_compliance::models::{RawBlob, ScanRequest, Stage};
 use scanner_compliance::pipeline;
-
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::Path;
-
 use tokio::net::TcpListener;
 use uuid::Uuid;
+
+/// Maximum total HTTP body size (10 GB).
+const MAX_BODY_BYTES: usize = 10 * 1024 * 1024 * 1024;
+
+/// Maximum size of a single blob received via multipart (2 GB).
+const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Maximum size of manifest_raw (1 MB).
+const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
 /// Computes the hex-encoded SHA256 of the given bytes.
 fn sha256_hex(data: &[u8]) -> String {
@@ -48,7 +59,8 @@ fn sanitize_file_name(raw: &str) -> Option<String> {
 async fn main() {
     let app = Router::new()
         .route("/v1/scan", post(scan_handler))
-        .route("/v1/scan-upload", post(upload_handler));
+        .route("/v1/scan-upload", post(upload_handler))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
 
@@ -64,6 +76,14 @@ async fn main() {
 /* ---------------- JSON ENDPOINT ---------------- */
 
 async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
+    if req.manifest_raw.len() > MAX_MANIFEST_BYTES {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("manifest_raw too large: {} bytes (max 1 MB)", req.manifest_raw.len()),
+        )
+            .into_response();
+    }
+
     let image = match pipeline::image_from_scan_request(req) {
         Ok(img) => img,
         Err(e) => {
@@ -124,6 +144,15 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
                 return (StatusCode::BAD_REQUEST, format!("Read error: {}", e)).into_response();
             }
         };
+
+        if data.len() > MAX_BLOB_BYTES {
+            let _ = fs::remove_dir_all(&workspace_path);
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Blob '{}' too large: {} bytes (max {} bytes)", safe_name, data.len(), MAX_BLOB_BYTES),
+            )
+                .into_response();
+        }
 
         // safe_name is a guaranteed pure basename (no separators, no `..`)
         let file_path = format!("{}/{}", workspace_path, safe_name);
