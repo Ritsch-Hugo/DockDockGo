@@ -6,6 +6,37 @@ use std::path::Path;
 use tar::Archive;
 use tar::EntryType;
 
+/// Maximum decompressed bytes allowed per layer (4 GB).
+const MAX_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Wraps a `Read` and returns an error if more than `limit` bytes are read.
+struct LimitedReader<R: Read> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: Read> LimitedReader<R> {
+    fn new(inner: R, limit: u64) -> Self {
+        Self { inner, remaining: limit }
+    }
+}
+
+impl<R: Read> Read for LimitedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "decompressed layer exceeds size limit",
+            ));
+        }
+
+        let max = buf.len().min(self.remaining as usize);
+        let n = self.inner.read(&mut buf[..max])?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
 fn normalize_path(p: &str) -> Option<String> {
     // tar entries can be like "./etc/passwd"
     let mut s = p.trim().to_string();
@@ -47,11 +78,11 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
     let file = File::open(p).map_err(|e| format!("failed to open layer blob {layer_path}: {e}"))?;
     let buf = BufReader::new(file);
 
-    // stream reader (no full read in memory)
+    // stream reader with decompression bomb protection
     let reader: Box<dyn Read> = if gz {
-        Box::new(GzDecoder::new(buf))
+        Box::new(LimitedReader::new(GzDecoder::new(buf), MAX_DECOMPRESSED_BYTES))
     } else {
-        Box::new(buf)
+        Box::new(LimitedReader::new(buf, MAX_DECOMPRESSED_BYTES))
     };
 
     let mut ar = Archive::new(reader);
