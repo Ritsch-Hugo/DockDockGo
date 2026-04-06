@@ -4,6 +4,7 @@ use axum::{
 use scanner_compliance::models::{RawBlob, ScanRequest, Stage};
 use scanner_compliance::pipeline;
 
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -11,6 +12,13 @@ use std::path::Path;
 
 use tokio::net::TcpListener;
 use uuid::Uuid;
+
+/// Computes the hex-encoded SHA256 of the given bytes.
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
 
 /// Sanitizes a multipart file_name to a safe basename.
 ///
@@ -146,10 +154,23 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         }
 
         if field_name == "blob" {
-            let digest = format!("sha256:{}", safe_name);
+            let declared = safe_name.as_str();
+            let computed = sha256_hex(&data);
+
+            if computed != declared {
+                let _ = fs::remove_dir_all(&workspace_path);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Digest mismatch for blob '{}': declared sha256:{}, computed sha256:{}",
+                        safe_name, declared, computed
+                    ),
+                )
+                    .into_response();
+            }
 
             blobs.push(RawBlob {
-                digest,
+                digest: format!("sha256:{}", safe_name),
                 media_type: None,
                 size: None,
                 path: Some(file_path.clone()),

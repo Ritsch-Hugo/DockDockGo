@@ -11,3 +11,5 @@ flate2 = "1"
 axum = { version = "0.7", features = ["multipart"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
