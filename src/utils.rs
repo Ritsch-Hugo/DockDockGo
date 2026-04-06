@@ -62,56 +62,37 @@ pub fn save_to_quarantine(
     pool: &sqlx::PgPool,
 ) -> bool {
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
-
     if parts.len() < 4 {
         return false;
     }
 
-    let base_dir = format!(
-        "quarantaine/{}/{}",
-        ctx.registry,
-        ctx.repository
-    );
+    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
 
-    // Helper pour écrire un digest
     fn write_digest(
         base_dir: &str,
         category: &str,
         digest: &Digest,
         bytes: &[u8],
         ext: Option<&str>,
-    ) {
-        let dir = format!("{}/{}/{}/{}", base_dir, category, digest.algorithm, "");
-        create_dir_all(&dir).ok();
+    ) -> Option<String> {  // ← retourne le chemin écrit
+        let dir = format!("{}/{}/{}/", base_dir, category, digest.algorithm);
+        create_dir_all(&dir).ok()?;
 
         let filename = match ext {
             Some(e) => format!("{}/{}.{}", dir, digest.value, e),
             None => format!("{}/{}", dir, digest.value),
         };
 
-        // Écriture idempotente
         if !std::path::Path::new(&filename).exists() {
-            fs::write(&filename, bytes).ok();
+            fs::write(&filename, bytes).ok()?;
         }
+        Some(filename)
     }
 
-    // ===== MANIFEST par tag (cas Podman : /manifests/latest) =====
-    if parts[2] == "manifests" && !parts[3].starts_with("sha256:") 
-    {
-        // Le path contient un tag (ex: "latest") et non un digest
-        // On utilise le manifest_racine_digest du contexte pour nommer le fichier
+    // ===== MANIFEST par tag =====
+    if parts[2] == "manifests" && !parts[3].starts_with("sha256:") {
         if let Some(racine) = &ctx.manifest_racine_digest {
-            write_digest(
-                &base_dir,
-                "manifests",
-                racine,
-                bytes,
-                Some("json"),
-            );
-            println!("Manifest racine (par tag) Ajouté a la quarantaine");
-
-            if let Some(racine) = &ctx.manifest_racine_digest {
-                let fp = format!("{}/manifests/sha256/{}.json", base_dir, racine.value);
+            if let Some(fp) = write_digest(&base_dir, "manifests", racine, bytes, Some("json")) {
                 let size = bytes.len() as i64;
                 let pool2 = pool.clone();
                 let registry2 = ctx.registry.clone();
@@ -124,35 +105,19 @@ pub fn save_to_quarantine(
                     ).await;
                 });
             }
-        } else {
-            eprintln!("[QUARANTINE] manifest par tag mais manifest_racine_digest absent du ctx");
         }
         return true;
     }
-    // ===== MANIFEST =====
+
+    // ===== MANIFEST par digest =====
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
         if !is_safe_digest_component(digest_value) {
-            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
             return false;
         }
-        let digest = Digest {
-            algorithm: "sha256".to_string(),
-            value: digest_value.to_string(),
-        };
+        let digest = Digest { algorithm: "sha256".to_string(), value: digest_value.to_string() };
 
-        write_digest(
-            &base_dir,
-            "manifests",
-            &digest,
-            bytes,
-            Some("json"),
-        );
-        println!("Manifest Ajouté a la quarantaine");
-
-        {
-            let digest_value = parts[3].trim_start_matches("sha256:");
-            let fp = format!("{}/manifests/sha256/{}.json", base_dir, digest_value);
+        if let Some(fp) = write_digest(&base_dir, "manifests", &digest, bytes, Some("json")) {
             let size = bytes.len() as i64;
             let pool2 = pool.clone();
             let registry2 = ctx.registry.clone();
@@ -165,34 +130,18 @@ pub fn save_to_quarantine(
                 ).await;
             });
         }
-
         return true;
     }
 
     // ===== BLOB =====
-    else if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
+    if parts[2] == "blobs" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
         if !is_safe_digest_component(digest_value) {
-            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
             return false;
         }
-        let digest = Digest {
-            algorithm: "sha256".to_string(),
-            value: digest_value.to_string(),
-        };
+        let digest = Digest { algorithm: "sha256".to_string(), value: digest_value.to_string() };
 
-        write_digest(
-            &base_dir,
-            "blobs",
-            &digest,
-            bytes,
-            None,
-        );
-        println!("Blob Ajouté a la quarantaine");
-
-        {
-            let digest_value = parts[3].trim_start_matches("sha256:");
-            let fp = format!("{}/blobs/sha256/{}", base_dir, digest_value);
+        if let Some(fp) = write_digest(&base_dir, "blobs", &digest, bytes, None) {
             let size = bytes.len() as i64;
             let pool2 = pool.clone();
             let registry2 = ctx.registry.clone();
@@ -209,30 +158,14 @@ pub fn save_to_quarantine(
     }
 
     // ===== REFERRERS =====
-    else if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
+    if parts[2] == "referrers" && parts[3].starts_with("sha256:") {
         let digest_value = parts[3].trim_start_matches("sha256:");
-
         if !is_safe_digest_component(digest_value) {
-            eprintln!("[SECURITY] digest_value manifest invalide: {}", digest_value);
             return false;
         }
-        let digest = Digest {
-            algorithm: "sha256".to_string(),
-            value: digest_value.to_string(),
-        };
+        let digest = Digest { algorithm: "sha256".to_string(), value: digest_value.to_string() };
 
-        write_digest(
-            &base_dir,
-            "referrers",
-            &digest,
-            bytes,
-            Some("json"),
-        );
-        println!("Refferer Ajouté a la quarantaine");
-        
-        {
-            let digest_value = parts[3].trim_start_matches("sha256:");
-            let fp = format!("{}/referrers/sha256/{}.json", base_dir, digest_value);
+        if let Some(fp) = write_digest(&base_dir, "referrers", &digest, bytes, Some("json")) {
             let size = bytes.len() as i64;
             let pool2 = pool.clone();
             let registry2 = ctx.registry.clone();
@@ -416,10 +349,11 @@ pub fn save_to_cache(
             value: digest_value.to_string(),
         };
 
+        /* 
         if serde_json::from_slice::<serde_json::Value>(bytes).is_err() {
             println!("Referrer ignoré car non-JSON");
             return false;
-        }
+        }*/
 
         write_digest(
             &base_dir,
@@ -870,11 +804,9 @@ pub async fn add_context_to_blacklist_or_whitelist(
 
 //Check si aucune requetes envoyé dans le laspe de temps CONTEXT_TIMEOUT
 pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
-
-    // On crée des variables locales simples
     let context_timeout: u64 = std::env::var("CONTEXT_TIMEOUT")
         .and_then(|s| s.parse().map_err(|_| std::env::VarError::NotPresent))
-        .unwrap_or(2000000);
+        .unwrap_or(300);
 
     let pool_clone = pool.clone();
 
@@ -882,7 +814,7 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
 
-            let mut expired_contexts = Vec::new(); // On stocke les objets expirés ici
+            let mut expired_contexts = Vec::new();
 
             let mut list = pull_contexts.lock().await;
             let before = list.len();
@@ -891,26 +823,32 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
                 let alive = ctx.last_activity.elapsed() < Duration::from_secs(context_timeout);
                 if !alive {
                     println!("[Timeout-Reach] Contexte expiré détecté | uuid={}", ctx.uuid);
-                    expired_contexts.push(ctx.clone()); // On mémorise pour plus tard
+                    expired_contexts.push(ctx.clone());
                 }
                 alive
             });
 
-            drop(list); // 🔓 On libère le lock AVANT les appels async
-
+            drop(list);
 
             for ctx in &expired_contexts {
-                // L'UPDATE en base de données avec .await
-                let _ = sqlx::query("UPDATE pulls SET decision_final = 'TIMEOUT', last_activity = NOW() WHERE uuid = $1::uuid")
-                    .bind(ctx.uuid.to_string())
-                    .execute(&pool_clone)
-                    .await
-                    .unwrap_or_else(|e| {
-                        eprintln!("[DB] Erreur UPDATE pulls timeout: {}", e); 
-                        Default::default()
-                    });
+                // Suppression en cascade dans la BDD
+                // pulls → pull_digests, scan_events, ia_decisions supprimés par CASCADE
+                let _ = sqlx::query(
+                    "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false"
+                )
+                .bind(ctx.uuid.to_string())
+                .execute(&pool_clone)
+                .await
+                .unwrap_or_else(|e| {
+                    eprintln!("[DB] Erreur DELETE pulls timeout: {}", e);
+                    Default::default()
+                });
 
-                remove_ctx_digests_from_quarantine(ctx, &pool_clone);
+                // Nettoyage fichiers seulement si le pull n'était pas terminé
+                // (si pull_completed = true, les fichiers sont déjà en cache)
+                if !ctx.pull_completed {
+                    remove_ctx_digests_from_quarantine(ctx, &pool_clone);
+                }
                 cleanup_tmp_for_uuid(&ctx.uuid);
             }
 

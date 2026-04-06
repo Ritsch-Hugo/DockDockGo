@@ -5,6 +5,7 @@ use uuid::Uuid;
 use std::time::Instant;
 use anyhow::Result;
 use sqlx::PgPool;
+use sqlx::Row;
 
 use crate::registry_auth::RegistryClient;
 use crate::models::{
@@ -95,6 +96,20 @@ pub async fn get_pull_context(
                         ctx.scan_status = Some("DENY".to_string());
                     } else {
                         ctx.scan_status = Some("ALLOW".to_string());
+                        if let Some(racine) = &ctx.manifest_racine_digest {
+                            sqlx::query(
+                                "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                                ON CONFLICT DO NOTHING"
+                            )
+                            .bind(Uuid::new_v4().to_string())
+                            .bind(uuid.to_string())
+                            .bind(&racine.value)
+                            .bind(&racine.algorithm)
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine whitelist: {}", e); Default::default() });
+                        }
                     }
                 }
                 return Ok(Some(uuid));
@@ -115,19 +130,61 @@ pub async fn get_pull_context(
             Ok(state) => match state.as_str() 
             {
 
-                "ALLOW" => {
-                    ctx.scan_status = Some("ALLOW".to_string());
-                    if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
-                        eprintln!("[WHITELIST ERROR] {}", e);
-                    }
-                    return Ok(Some(uuid));
+            "ALLOW" => {
+                sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                    .bind(uuid.to_string())
+                    .execute(pool)
+                    .await
+                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision ALLOW: {}", e); Default::default() });
+
+                ctx.scan_status = Some("ALLOW".to_string());
+                if let Some(racine) = &ctx.manifest_racine_digest {
+                    sqlx::query(
+                        "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                        VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                        ON CONFLICT DO NOTHING"
+                    )
+                    .bind(Uuid::new_v4().to_string())
+                    .bind(uuid.to_string())
+                    .bind(&racine.value)
+                    .bind(&racine.algorithm)
+                    .execute(pool)
+                    .await
+                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine ALLOW: {}", e); Default::default() });
                 }
-                "PENDING" => return Ok(Some(uuid)),
+                if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
+                    eprintln!("[WHITELIST ERROR] {}", e);
+                }
+                return Ok(Some(uuid));
+            }
+            "PENDING" => {
+                sqlx::query("UPDATE pulls SET decision_final = 'PENDING', last_activity = NOW() WHERE uuid = $1::uuid")
+                    .bind(uuid.to_string())
+                    .execute(pool)
+                    .await
+                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision PENDING: {}", e); Default::default() });
+                
+                ctx.scan_status = Some("PENDING".to_string());
+                if let Some(racine) = &ctx.manifest_racine_digest {
+                    sqlx::query(
+                        "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                        VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                        ON CONFLICT DO NOTHING"
+                    )
+                    .bind(Uuid::new_v4().to_string())
+                    .bind(uuid.to_string())
+                    .bind(&racine.value)
+                    .bind(&racine.algorithm)
+                    .execute(pool)
+                    .await
+                    .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine PENDING: {}", e); Default::default() });
+                }
+                return Ok(Some(uuid));
+            }
                 "DENY" => {
                     if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
                         eprintln!("[BLACKLIST ERROR] {}", e);
                     }
-
                     sqlx::query("UPDATE pulls SET decision_final = 'DENY', scan_completed = true, last_activity = NOW() WHERE uuid = $1::uuid")
                     .bind(uuid.to_string())
                     .execute(pool)
@@ -172,6 +229,20 @@ pub async fn get_pull_context(
                             ctx.scan_status = Some("DENY".to_string());
                         } else {
                             ctx.scan_status = Some("ALLOW".to_string());
+                            if let Some(racine) = &ctx.manifest_racine_digest {
+                                sqlx::query(
+                                    "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                    VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                                    ON CONFLICT DO NOTHING"
+                                )
+                                .bind(Uuid::new_v4().to_string())
+                                .bind(uuid.to_string())
+                                .bind(&racine.value)
+                                .bind(&racine.algorithm)
+                                .execute(pool)
+                                .await
+                                .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine whitelist: {}", e); Default::default() });
+                            }
                         }
                     }
                     return Ok(Some(uuid));
@@ -191,21 +262,68 @@ pub async fn get_pull_context(
                 Ok(state) => match state.as_str() 
                 {
                     "ALLOW" => {
-                        ctx.scan_status = Some("ALLOW".to_string());
-                        if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
-                            eprintln!("[BLACKLIST ERROR] {}", e);
-                        }
-                        return Ok(Some(uuid));
+                        sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                            .bind(uuid.to_string())
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision ALLOW: {}", e); Default::default() });
+
+                            ctx.scan_status = Some("ALLOW".to_string());
+                            if let Some(racine) = &ctx.manifest_racine_digest {
+                                sqlx::query(
+                                    "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                    VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                                    ON CONFLICT DO NOTHING"
+                                )
+                                .bind(Uuid::new_v4().to_string())
+                                .bind(uuid.to_string())
+                                .bind(&racine.value)
+                                .bind(&racine.algorithm)
+                                .execute(pool)
+                                .await
+                                .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine ALLOW: {}", e); Default::default() });
+                            }
+                            if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "whitelist", &pool).await {
+                                eprintln!("[WHITELIST ERROR] {}", e);
+                            }
+                            return Ok(Some(uuid));
                     }
                     "PENDING" => 
                     {
-                        ctx.scan_status = Some("PENDING".to_string());
-                        return Ok(Some(uuid));
+                        sqlx::query("UPDATE pulls SET decision_final = 'PENDING', last_activity = NOW() WHERE uuid = $1::uuid")
+                            .bind(uuid.to_string())
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision PENDING: {}", e); Default::default() });
+                        
+                            ctx.scan_status = Some("PENDING".to_string());
+                            if let Some(racine) = &ctx.manifest_racine_digest {
+                                sqlx::query(
+                                    "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
+                                    VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
+                                    ON CONFLICT DO NOTHING"
+                                )
+                                .bind(Uuid::new_v4().to_string())
+                                .bind(uuid.to_string())
+                                .bind(&racine.value)
+                                .bind(&racine.algorithm)
+                                .execute(pool)
+                                .await
+                                .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine PENDING: {}", e); Default::default() });
+                            }
+                            return Ok(Some(uuid));
                     }
                     "DENY" => {
                         if let Err(e) = add_context_to_blacklist_or_whitelist(ctx.clone(), "blacklist", &pool).await {
                             eprintln!("[BLACKLIST ERROR] {}", e);
                         }
+
+                        sqlx::query("UPDATE pulls SET decision_final = 'DENY', scan_completed = true, last_activity = NOW() WHERE uuid = $1::uuid")
+                            .bind(uuid.to_string())
+                            .execute(pool)
+                            .await
+                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls decision DENY: {}", e); Default::default() });
+
                         cleanup_tmp_for_uuid(&ctx.uuid);
                         list.retain(|c| c.uuid != uuid);
                         return Err(PullContextError::BlockingFromTheScanner);
@@ -597,23 +715,81 @@ async fn create_context_from_tag(
         }
     })?;
 
-    // 2️⃣ UUID déterministe — même formule que l'ancien bloc HEAD
+    // 2️⃣ UUID déterministe de base
     let uuid_input = format!(
         "{}|{}|{}|{}|{}",
         registry, repository, &manifest_racine_digest.value, ip_client, client_type
     );
-    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, uuid_input.as_bytes());
+    let uuid_base = Uuid::new_v5(&Uuid::NAMESPACE_URL, uuid_input.as_bytes());
 
-    // 3️⃣ Contexte déjà existant → on le retourne directement
+    // Vérifier si ce contexte de base existe et est terminé
+    // 3️⃣ Vérifier en BDD si ce pull UUID existe déjà et son état
+    let uuid = {
+        let in_memory = {
+            let mut list = pull_contexts.lock().await;
+            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid_base) {
+                if !ctx.pull_completed {
+                    // Pull en cours en mémoire → réutiliser directement
+                    println!("[PullContext] UUID existant réutilisé (pull non terminé) uuid={}", uuid_base);
+                    ctx.last_activity = Instant::now();
+                    return Ok(uuid_base);
+                } else {
+                    // Terminé en mémoire → nettoyer et recréer
+                    list.retain(|c| c.uuid != uuid_base);
+                }
+                true
+            } else {
+                false
+            }
+        };
+
+        if !in_memory {
+            // Pas en mémoire → on interroge la BDD
+            let row = sqlx::query(
+                "SELECT scan_completed FROM pulls WHERE uuid = $1::uuid"
+            )
+            .bind(uuid_base.to_string())
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match row {
+                None => uuid_base,
+                Some(r) => {
+                    let scan_completed: bool = r.try_get("scan_completed").unwrap_or(false);
+                    if !scan_completed {
+                        println!("[PullContext] UUID trouvé en BDD non terminé → réutilisation uuid={}", uuid_base);
+                        uuid_base
+                    } else {
+                        println!("[PullContext] Pull précédent terminé en BDD → nouveau contexte uuid={}", uuid_base);
+                        Uuid::new_v4()
+                    }
+                }
+            }
+        } else {
+            // Était en mémoire et terminé → nouveau UUID
+            Uuid::new_v4()
+        }
+    };
+
+    // 3️⃣ Contexte déjà existant → vérifier pull_completed avant de réutiliser
     {
         let mut list = pull_contexts.lock().await;
-        if list.iter().any(|c| c.uuid == uuid) {
-            println!("[PullContext] UUID déjà présent (appel depuis GET tag) uuid={}", uuid);
-            if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
+        if let Some(ctx) = list.iter_mut().find(|c| c.uuid == uuid) {
+            if !ctx.pull_completed {
+                // Pull toujours en cours → on réutilise le contexte existant
+                println!("[PullContext] UUID existant réutilisé (pull non terminé) uuid={}", uuid);
                 ctx.last_activity = Instant::now();
+                return Ok(uuid);
+            } else {
+                // Pull précédent terminé → on supprime l'ancien contexte mémoire
+                // pour forcer la création d'un nouveau avec un UUID différent
+                println!("[PullContext] Pull précédent terminé → recréation du contexte uuid={}", uuid);
+                list.retain(|c| c.uuid != uuid);
+                // on laisse tomber le lock et on continue la création
             }
-            return Ok(uuid);
         }
+        // Si non trouvé : premier pull, on continue normalement
     }
 
     // 4️⃣ Construire le contexte
@@ -716,9 +892,14 @@ async fn create_context_from_tag(
         // Après list.push(ctx.clone())
 
         //Mis a jour de bdd
-        sqlx::query(
+        sqlx::query(    
             "INSERT INTO pulls (uuid, ip_client, registry, repository, tag, client_type, started_at, last_activity, scan_completed, decision_final)
-            VALUES ($1::uuid, $2, $3, $4, $5, $6, NOW(), NOW(), false, 'PENDING')"
+            VALUES ($1::uuid, $2, $3, $4, $5, $6, NOW(), NOW(), false, 'PENDING')
+            ON CONFLICT (uuid) DO UPDATE SET
+                last_activity = NOW(),
+                scan_completed = false,
+                decision_final = 'PENDING',
+                started_at = NOW()"
         )
         .bind(uuid.to_string())
         .bind(ip_client)
@@ -730,22 +911,6 @@ async fn create_context_from_tag(
         .await
         .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pulls: {}", e); Default::default() });
 
-        if let Some(racine) = &ctx.manifest_racine_digest {
-            sqlx::query(
-                "INSERT INTO pull_digests (id, pull_id, digest_value, digest_algo, digest_type, received_at)
-                VALUES ($1::uuid, $2::uuid, $3, $4, 'manifests', NOW())
-                ON CONFLICT DO NOTHING"
-            )
-            .bind(Uuid::new_v4().to_string())
-            .bind(uuid.to_string())
-            .bind(&racine.value)
-            .bind(&racine.algorithm)
-            .execute(pool)
-            .await
-            .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT digest racine: {}", e); Default::default() });
-            
-            //println!("[DB] Digest racine enregistré à la création : {}", racine.value);
-        }
     }
 
     println!(

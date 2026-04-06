@@ -470,10 +470,6 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             ctx.in_cache = Some(false);
         }
     }
-
-
-
-
      
     //On check blacklist 
     if req.method() == Method::HEAD || req.method() == Method::GET
@@ -488,6 +484,12 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
                     ctx.in_blacklist = Some(true);
                 }
             }
+            //Mise a jour bdd 
+            sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'DENY', last_activity = NOW() WHERE uuid = $1::uuid")
+                .bind(context_uuid.to_string())
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls blacklist: {}", e); Default::default() });
             //Les digests deja stockés en quarantaine ne sont pas supprimés 
             dec_active(&pull_contexts, context_uuid).await;
 
@@ -654,6 +656,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
         drop(list);
         dec_active(&pull_contexts, context_uuid).await;
 
+         
         if should_cleanup {
             // 🔴 CHECK IMMÉDIAT
             let zero = {
@@ -672,6 +675,7 @@ async fn handle(req: Request<Body>, client: Client, pull_contexts: PullContextLi
             let mut list = pull_contexts.lock().await;
             list.retain(|c| c.uuid != context_uuid);
         }
+        
         return resp.body(Body::from(bytes)).unwrap();
     }
     else 
@@ -1119,7 +1123,7 @@ async fn main() -> Result<()> {
     let pool = db::init_pool(&database_url).await?;
 
         
-    let listener = TcpListener::bind(("0.0.0.0", 443)).await?;
+    let listener = TcpListener::bind(("0.0.0.0", 8443)).await?;
 
     //[HANDSHAKE]
     // 1 - Le client initie la connexion TLS 
