@@ -178,10 +178,7 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
                         continue;
                     }
                     if ts.split('/').any(|c| c == "..") {
-                        eprintln!(
-                            "tar: rejecting symlink target containing '..': {:?}",
-                            ts
-                        );
+                        eprintln!("tar: rejecting symlink target containing '..': {:?}", ts);
                         continue;
                     }
                     Some(ts)
