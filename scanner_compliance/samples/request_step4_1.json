@@ -2,11 +2,11 @@
   "blobs": [
     {
       "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "path": "/home/hugor/Bureau/Cyber/DocDockGo/compliance/DockDockGo/quarantaine/library/testcases/fs-mini/latest/blobs/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "path": "/home/hugor/Bureau/Cyber/DocDockGo/compliance/DocDockGo/quarantaine/library/testcases/fs-mini/latest/blobs/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
       "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "path": "/home/hugor/Bureau/Cyber/DocDockGo/compliance/DockDockGo/quarantaine/library/testcases/fs-mini/latest/blobs/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "path": "/home/hugor/Bureau/Cyber/DocDockGo/compliance/DocDockGo/quarantaine/library/testcases/fs-mini/latest/blobs/sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
   ],
   "image_ref": "../quarantaine/library/testcases/fs-mini/latest",

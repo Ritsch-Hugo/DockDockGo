@@ -23,7 +23,10 @@ struct LimitedReader<R: Read> {
 
 impl<R: Read> LimitedReader<R> {
     fn new(inner: R, limit: u64) -> Self {
-        Self { inner, remaining: limit }
+        Self {
+            inner,
+            remaining: limit,
+        }
     }
 }
 
@@ -86,7 +89,10 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
 
     // stream reader with decompression bomb protection
     let reader: Box<dyn Read> = if gz {
-        Box::new(LimitedReader::new(GzDecoder::new(buf), MAX_DECOMPRESSED_BYTES))
+        Box::new(LimitedReader::new(
+            GzDecoder::new(buf),
+            MAX_DECOMPRESSED_BYTES,
+        ))
     } else {
         Box::new(LimitedReader::new(buf, MAX_DECOMPRESSED_BYTES))
     };
@@ -133,7 +139,10 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
         };
 
         if path_str.len() > MAX_PATH_LEN {
-            eprintln!("tar: path too long ({} bytes), skipping entry", path_str.len());
+            eprintln!(
+                "tar: path too long ({} bytes), skipping entry",
+                path_str.len()
+            );
             continue;
         }
 

@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
@@ -55,6 +55,53 @@ fn sanitize_file_name(raw: &str) -> Option<String> {
     Some(base.to_string())
 }
 
+/// RAII guard for a temporary workspace directory.
+///
+/// Creates the directory on construction and removes it automatically on drop,
+/// regardless of whether the owning function returns normally or via an early
+/// return / panic.  The resolved path is verified to stay under `/tmp/scans/`
+/// as a defence-in-depth measure.
+struct WorkspaceGuard {
+    path: PathBuf,
+}
+
+impl WorkspaceGuard {
+    /// Creates `/tmp/scans/{id}`, verifies the canonical path prefix, and
+    /// returns a guard that will clean up the directory on drop.
+    fn create(id: &str) -> Result<Self, String> {
+        let path = PathBuf::from(format!("/tmp/scans/{}", id));
+
+        fs::create_dir_all(&path).map_err(|e| format!("Failed to create workspace: {}", e))?;
+
+        // Resolve symlinks / `.` / `..` and assert we are still under /tmp/scans/
+        let canonical = fs::canonicalize(&path)
+            .map_err(|e| format!("Failed to canonicalize workspace path: {}", e))?;
+
+        if !canonical.starts_with("/tmp/scans/") {
+            // Remove the directory we just created before returning the error.
+            let _ = fs::remove_dir_all(&path);
+            return Err(format!(
+                "Workspace path escapes /tmp/scans/: {:?}",
+                canonical
+            ));
+        }
+
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for WorkspaceGuard {
+    fn drop(&mut self) {
+        if let Err(e) = fs::remove_dir_all(&self.path) {
+            eprintln!("Workspace cleanup error for {:?}: {}", self.path, e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
@@ -79,7 +126,10 @@ async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
     if req.manifest_raw.len() > MAX_MANIFEST_BYTES {
         return (
             StatusCode::BAD_REQUEST,
-            format!("manifest_raw too large: {} bytes (max 1 MB)", req.manifest_raw.len()),
+            format!(
+                "manifest_raw too large: {} bytes (max 1 MB)",
+                req.manifest_raw.len()
+            ),
         )
             .into_response();
     }
@@ -99,21 +149,20 @@ async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
 /* ---------------- MULTIPART ENDPOINT ---------------- */
 
 async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
-    // Workspace
+    // Create workspace under /tmp/scans/<uuid> (absolute path).
+    // The guard removes the directory automatically when it goes out of scope,
+    // covering both normal returns and every early-return error path.
     let request_id = Uuid::new_v4().to_string();
-    let workspace_path = format!("./tmp/scans/{}", request_id);
+    let workspace = match WorkspaceGuard::create(&request_id) {
+        Ok(w) => w,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+        }
+    };
 
-    if let Err(e) = fs::create_dir_all(&workspace_path) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create workspace: {}", e),
-        )
-            .into_response();
-    }
+    println!("📂 Workspace created: {:?}", workspace.path());
 
-    println!("📂 Workspace created: {}", workspace_path);
-
-    let mut manifest_path: Option<String> = None;
+    let mut manifest_path: Option<PathBuf> = None;
     let mut blobs: Vec<RawBlob> = Vec::new();
 
     // Lecture multipart (SAFE)
@@ -129,7 +178,6 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         let safe_name = match sanitize_file_name(&raw_file_name) {
             Some(n) => n,
             None => {
-                let _ = fs::remove_dir_all(&workspace_path);
                 return (
                     StatusCode::BAD_REQUEST,
                     format!("Rejected unsafe file_name: {:?}", raw_file_name),
@@ -146,16 +194,20 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         };
 
         if data.len() > MAX_BLOB_BYTES {
-            let _ = fs::remove_dir_all(&workspace_path);
             return (
                 StatusCode::BAD_REQUEST,
-                format!("Blob '{}' too large: {} bytes (max {} bytes)", safe_name, data.len(), MAX_BLOB_BYTES),
+                format!(
+                    "Blob '{}' too large: {} bytes (max {} bytes)",
+                    safe_name,
+                    data.len(),
+                    MAX_BLOB_BYTES
+                ),
             )
                 .into_response();
         }
 
         // safe_name is a guaranteed pure basename (no separators, no `..`)
-        let file_path = format!("{}/{}", workspace_path, safe_name);
+        let file_path = workspace.path().join(&safe_name);
 
         let mut file = match fs::File::create(&file_path) {
             Ok(f) => f,
@@ -176,7 +228,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
                 .into_response();
         }
 
-        println!("📥 Received '{}' -> {}", field_name, file_path);
+        println!("📥 Received '{}' -> {:?}", field_name, file_path);
 
         if field_name == "manifest" {
             manifest_path = Some(file_path.clone());
@@ -187,7 +239,6 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
             let computed = sha256_hex(&data);
 
             if computed != declared {
-                let _ = fs::remove_dir_all(&workspace_path);
                 return (
                     StatusCode::BAD_REQUEST,
                     format!(
@@ -202,7 +253,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
                 digest: format!("sha256:{}", safe_name),
                 media_type: None,
                 size: None,
-                path: Some(file_path.clone()),
+                path: Some(file_path.to_string_lossy().into_owned()),
                 bytes_b64: None,
             });
         }
@@ -212,7 +263,6 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     let manifest_path = match manifest_path {
         Some(p) => p,
         None => {
-            let _ = fs::remove_dir_all(&workspace_path);
             return (StatusCode::BAD_REQUEST, "No manifest provided").into_response();
         }
     };
@@ -221,7 +271,6 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     let manifest_raw = match fs::read_to_string(&manifest_path) {
         Ok(m) => m,
         Err(e) => {
-            let _ = fs::remove_dir_all(&workspace_path);
             return (
                 StatusCode::BAD_REQUEST,
                 format!("Failed to read manifest: {}", e),
@@ -242,17 +291,12 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     let image = match pipeline::image_from_scan_request(req) {
         Ok(img) => img,
         Err(e) => {
-            let _ = fs::remove_dir_all(&workspace_path);
             return (StatusCode::BAD_REQUEST, format!("ScanRequest error: {}", e)).into_response();
         }
     };
 
     let report = pipeline::scan_image(&image);
 
-    // Cleanup
-    if let Err(e) = fs::remove_dir_all(&workspace_path) {
-        eprintln!("Cleanup error: {}", e);
-    }
-
+    // workspace drops here → Drop::drop() removes /tmp/scans/<uuid> automatically
     (StatusCode::OK, Json(report)).into_response()
 }
