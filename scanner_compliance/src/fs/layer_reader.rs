@@ -152,8 +152,46 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
         };
 
         let mode = entry.header().mode().ok().map(|m| m as u32);
+        let entry_type = entry.header().entry_type();
 
-        let kind = match entry.header().entry_type() {
+        // For symlinks: read, validate and store the target.
+        // Entries with an absolute target or a target containing `..` are
+        // silently skipped to prevent future path-escape if content reading
+        // is ever added.
+        let link_target: Option<String> = if entry_type == EntryType::Symlink {
+            match entry.link_name() {
+                Err(e) => {
+                    eprintln!("tar: failed to read symlink target, skipping entry: {e}");
+                    continue;
+                }
+                Ok(None) => None,
+                Ok(Some(target)) => {
+                    let ts = match target.to_str() {
+                        Some(s) => s.to_string(),
+                        None => {
+                            eprintln!("tar: symlink target is not valid UTF-8, skipping entry");
+                            continue;
+                        }
+                    };
+                    if ts.starts_with('/') {
+                        eprintln!("tar: rejecting absolute symlink target {:?}", ts);
+                        continue;
+                    }
+                    if ts.split('/').any(|c| c == "..") {
+                        eprintln!(
+                            "tar: rejecting symlink target containing '..': {:?}",
+                            ts
+                        );
+                        continue;
+                    }
+                    Some(ts)
+                }
+            }
+        } else {
+            None
+        };
+
+        let kind = match entry_type {
             EntryType::Directory => "dir",
             EntryType::Regular => "file",
             EntryType::Symlink => "symlink",
@@ -165,6 +203,7 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
             path: norm,
             mode,
             kind: Some(kind),
+            link_target,
         });
     }
 

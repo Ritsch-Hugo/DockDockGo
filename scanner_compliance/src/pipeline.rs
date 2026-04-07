@@ -195,6 +195,7 @@ pub fn image_from_scan_request(req: ScanRequest) -> Result<ImageData, String> {
                     }
                     .to_string(),
                 ),
+                link_target: node.link_target,
             })
             .collect()
     } else {

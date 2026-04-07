@@ -87,6 +87,11 @@ pub struct FsEntry {
     /// "file" | "dir" | "symlink" (optionnel)
     #[serde(default)]
     pub kind: Option<String>,
+
+    /// Symlink target (only set when kind == "symlink").
+    /// Guaranteed to be a relative path with no `..` components.
+    #[serde(default)]
+    pub link_target: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

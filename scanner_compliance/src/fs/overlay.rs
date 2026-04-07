@@ -14,6 +14,7 @@ pub enum FsNodeKind {
 pub struct FsNode {
     pub kind: FsNodeKind,
     pub mode: Option<u32>,
+    pub link_target: Option<String>,
 }
 
 /// Index “final view” du filesystem : path -> node
@@ -45,6 +46,7 @@ pub fn node_from_entry(e: &FsEntry) -> FsNode {
     FsNode {
         kind: kind_from_entry(e),
         mode: e.mode,
+        link_target: e.link_target.clone(),
     }
 }
 
