@@ -119,7 +119,7 @@ pub struct InputsSummary {
     pub layers_received: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     ManifestOnly,
@@ -127,13 +127,8 @@ pub enum Stage {
     PartialLayers,
     Final,
     /// Pour les vieux appels qui n'ont pas de stage
+    #[default]
     Legacy,
-}
-
-impl Default for Stage {
-    fn default() -> Self {
-        Stage::Legacy
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

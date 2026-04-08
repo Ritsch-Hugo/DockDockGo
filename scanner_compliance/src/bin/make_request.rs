@@ -1,14 +1,17 @@
 use serde_json::Value;
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
-fn looks_like_json(path: &PathBuf) -> bool {
+fn looks_like_json(path: &Path) -> bool {
     if let Ok(bytes) = fs::read(path) {
         return bytes.first() == Some(&b'{');
     }
     false
 }
 
-fn digest_to_blob_path(blobs_dir: &PathBuf, digest: &str) -> PathBuf {
+fn digest_to_blob_path(blobs_dir: &Path, digest: &str) -> PathBuf {
     let hex = digest.strip_prefix("sha256:").unwrap_or(digest);
     blobs_dir.join(hex)
 }
