@@ -99,7 +99,7 @@ impl WorkspaceGuard {
 impl Drop for WorkspaceGuard {
     fn drop(&mut self) {
         if let Err(e) = fs::remove_dir_all(&self.path) {
-            eprintln!("Workspace cleanup error for {:?}: {}", self.path, e);
+            eprintln!("[workspace] cleanup error for {:?}: {}", self.path, e);
         }
     }
 }
@@ -160,7 +160,15 @@ async fn main() {
 /* ---------------- JSON ENDPOINT ---------------- */
 
 async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
+    let request_id = Uuid::new_v4().to_string();
+    eprintln!("[req:{}] scan_handler start", request_id);
+
     if req.manifest_raw.len() > MAX_MANIFEST_BYTES {
+        eprintln!(
+            "[req:{}] rejected: manifest_raw too large ({} bytes)",
+            request_id,
+            req.manifest_raw.len()
+        );
         return (
             StatusCode::BAD_REQUEST,
             format!(
@@ -174,11 +182,17 @@ async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
     let image = match pipeline::image_from_scan_request(req) {
         Ok(img) => img,
         Err(e) => {
+            eprintln!("[req:{}] pipeline error: {}", request_id, e);
             return (StatusCode::BAD_REQUEST, format!("Invalid request: {}", e)).into_response();
         }
     };
 
     let report = pipeline::scan_image(&image);
+    eprintln!(
+        "[req:{}] scan complete, {} findings",
+        request_id,
+        report.findings.len()
+    );
 
     (StatusCode::OK, Json(report)).into_response()
 }
@@ -190,14 +204,21 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     // The guard removes the directory automatically when it goes out of scope,
     // covering both normal returns and every early-return error path.
     let request_id = Uuid::new_v4().to_string();
+    eprintln!("[req:{}] upload_handler start", request_id);
+
     let workspace = match WorkspaceGuard::create(&request_id) {
         Ok(w) => w,
         Err(e) => {
+            eprintln!("[req:{}] workspace creation failed: {}", request_id, e);
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     };
 
-    println!("📂 Workspace created: {:?}", workspace.path());
+    eprintln!(
+        "[req:{}] workspace created: {:?}",
+        request_id,
+        workspace.path()
+    );
 
     let mut manifest_path: Option<PathBuf> = None;
     let mut blobs: Vec<RawBlob> = Vec::new();
@@ -215,6 +236,10 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         let safe_name = match sanitize_file_name(&raw_file_name) {
             Some(n) => n,
             None => {
+                eprintln!(
+                    "[req:{}] rejected unsafe file_name: {:?}",
+                    request_id, raw_file_name
+                );
                 return (
                     StatusCode::BAD_REQUEST,
                     format!("Rejected unsafe file_name: {:?}", raw_file_name),
@@ -231,6 +256,13 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
         };
 
         if data.len() > MAX_BLOB_BYTES {
+            eprintln!(
+                "[req:{}] rejected blob '{}': {} bytes exceeds max {} bytes",
+                request_id,
+                safe_name,
+                data.len(),
+                MAX_BLOB_BYTES
+            );
             return (
                 StatusCode::BAD_REQUEST,
                 format!(
@@ -265,7 +297,13 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
                 .into_response();
         }
 
-        println!("📥 Received '{}' -> {:?}", field_name, file_path);
+        eprintln!(
+            "[req:{}] received field '{}' ({} bytes) -> {:?}",
+            request_id,
+            field_name,
+            data.len(),
+            file_path
+        );
 
         if field_name == "manifest" {
             manifest_path = Some(file_path.clone());
@@ -276,6 +314,10 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
             let computed = sha256_hex(&data);
 
             if computed != declared {
+                eprintln!(
+                    "[req:{}] digest mismatch for blob '{}': declared sha256:{}, computed sha256:{}",
+                    request_id, safe_name, declared, computed
+                );
                 return (
                     StatusCode::BAD_REQUEST,
                     format!(
@@ -285,6 +327,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
                 )
                     .into_response();
             }
+            eprintln!("[req:{}] blob '{}' digest OK", request_id, safe_name);
 
             blobs.push(RawBlob {
                 digest: format!("sha256:{}", safe_name),
@@ -300,6 +343,7 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     let manifest_path = match manifest_path {
         Some(p) => p,
         None => {
+            eprintln!("[req:{}] rejected: no manifest provided", request_id);
             return (StatusCode::BAD_REQUEST, "No manifest provided").into_response();
         }
     };
@@ -328,12 +372,19 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     let image = match pipeline::image_from_scan_request(req) {
         Ok(img) => img,
         Err(e) => {
+            eprintln!("[req:{}] pipeline error: {}", request_id, e);
             return (StatusCode::BAD_REQUEST, format!("ScanRequest error: {}", e)).into_response();
         }
     };
 
     let report = pipeline::scan_image(&image);
+    eprintln!(
+        "[req:{}] scan complete, {} findings",
+        request_id,
+        report.findings.len()
+    );
 
     // workspace drops here → Drop::drop() removes /tmp/scans/<uuid> automatically
+    eprintln!("[req:{}] workspace cleanup triggered", request_id);
     (StatusCode::OK, Json(report)).into_response()
 }
