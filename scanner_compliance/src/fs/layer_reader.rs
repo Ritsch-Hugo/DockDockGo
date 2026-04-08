@@ -33,10 +33,7 @@ impl<R: Read> LimitedReader<R> {
 impl<R: Read> Read for LimitedReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.remaining == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "decompressed layer exceeds size limit",
-            ));
+            return Err(io::Error::other("decompressed layer exceeds size limit"));
         }
 
         let max = buf.len().min(self.remaining as usize);
@@ -151,7 +148,7 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
             _ => continue,
         };
 
-        let mode = entry.header().mode().ok().map(|m| m as u32);
+        let mode = entry.header().mode().ok();
         let entry_type = entry.header().entry_type();
 
         // For symlinks: read, validate and store the target.
