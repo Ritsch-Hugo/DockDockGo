@@ -12,7 +12,9 @@ use std::fs;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use uuid::Uuid;
 
 /// Maximum total HTTP body size (10 GB).
@@ -102,11 +104,41 @@ impl Drop for WorkspaceGuard {
     }
 }
 
+/// Reads rate-limit settings from environment variables, with safe defaults.
+///
+/// - `RATE_LIMIT_PER_SECOND`  : replenish 1 token every N seconds (default: 1 → 1 req/s)
+/// - `RATE_LIMIT_BURST`       : maximum burst size (default: 10)
+fn rate_limit_config() -> (u64, u32) {
+    let per_second = std::env::var("RATE_LIMIT_PER_SECOND")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1);
+    let burst = std::env::var("RATE_LIMIT_BURST")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(10);
+    (per_second, burst)
+}
+
 #[tokio::main]
 async fn main() {
+    let (per_second, burst) = rate_limit_config();
+    println!("Rate limit: 1 req / {}s, burst {}", per_second, burst);
+
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(per_second)
+            .burst_size(burst)
+            .finish()
+            .expect("Invalid rate-limit configuration"),
+    );
+
     let app = Router::new()
         .route("/v1/scan", post(scan_handler))
         .route("/v1/scan-upload", post(upload_handler))
+        .layer(GovernorLayer {
+            config: governor_conf,
+        })
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
@@ -117,7 +149,12 @@ async fn main() {
         .await
         .expect("Failed to bind address");
 
-    axum::serve(listener, app).await.expect("Server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("Server error");
 }
 
 /* ---------------- JSON ENDPOINT ---------------- */
