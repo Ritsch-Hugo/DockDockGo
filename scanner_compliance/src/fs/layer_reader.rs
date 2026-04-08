@@ -158,40 +158,60 @@ pub fn read_layer_entries(layer_path: &str) -> Result<Vec<FsEntry>, String> {
         // Entries with an absolute target or a target containing `..` are
         // silently skipped to prevent future path-escape if content reading
         // is ever added.
-        let link_target: Option<String> = if entry_type == EntryType::Symlink {
-            match entry.link_name() {
-                Err(e) => {
-                    eprintln!("tar: failed to read symlink target, skipping entry: {e}");
-                    continue;
-                }
-                Ok(None) => None,
-                Ok(Some(target)) => {
-                    let ts = match target.to_str() {
-                        Some(s) => s.to_string(),
-                        None => {
-                            eprintln!("tar: symlink target is not valid UTF-8, skipping entry");
+        //
+        // Hard links (EntryType::Link) receive the same validation: a hard
+        // link pointing outside the workspace (absolute path or `..`) is
+        // equally dangerous and is rejected with the same logic.
+        let link_target: Option<String> =
+            if entry_type == EntryType::Symlink || entry_type == EntryType::Link {
+                let entry_kind_str = if entry_type == EntryType::Symlink {
+                    "symlink"
+                } else {
+                    "hard link"
+                };
+                match entry.link_name() {
+                    Err(e) => {
+                        eprintln!(
+                            "tar: failed to read {} target, skipping entry: {e}",
+                            entry_kind_str
+                        );
+                        continue;
+                    }
+                    Ok(None) => None,
+                    Ok(Some(target)) => {
+                        let ts = match target.to_str() {
+                            Some(s) => s.to_string(),
+                            None => {
+                                eprintln!(
+                                    "tar: {} target is not valid UTF-8, skipping entry",
+                                    entry_kind_str
+                                );
+                                continue;
+                            }
+                        };
+                        if ts.starts_with('/') {
+                            eprintln!("tar: rejecting absolute {} target {:?}", entry_kind_str, ts);
                             continue;
                         }
-                    };
-                    if ts.starts_with('/') {
-                        eprintln!("tar: rejecting absolute symlink target {:?}", ts);
-                        continue;
+                        if ts.split('/').any(|c| c == "..") {
+                            eprintln!(
+                                "tar: rejecting {} target containing '..': {:?}",
+                                entry_kind_str, ts
+                            );
+                            continue;
+                        }
+                        Some(ts)
                     }
-                    if ts.split('/').any(|c| c == "..") {
-                        eprintln!("tar: rejecting symlink target containing '..': {:?}", ts);
-                        continue;
-                    }
-                    Some(ts)
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         let kind = match entry_type {
             EntryType::Directory => "dir",
             EntryType::Regular => "file",
             EntryType::Symlink => "symlink",
+            EntryType::Link => "hardlink",
             _ => "other",
         }
         .to_string();
