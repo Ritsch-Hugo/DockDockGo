@@ -26,6 +26,45 @@ const MAX_BLOB_BYTES: usize = 2 * 1024 * 1024 * 1024;
 /// Maximum size of manifest_raw (1 MB).
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
+/// Maximum JSON nesting depth allowed in manifest_raw.
+const MAX_JSON_DEPTH: usize = 64;
+
+/// Checks that a JSON string does not exceed `MAX_JSON_DEPTH` levels of nesting.
+///
+/// Walks the raw bytes counting `{` / `[` (open) and `}` / `]` (close),
+/// skipping characters inside string literals to avoid false positives.
+/// Returns `Err` with a message if the depth limit is exceeded.
+fn check_json_depth(s: &str) -> Result<(), String> {
+    let mut depth: usize = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for b in s.bytes() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match b {
+            b'\\' if in_string => escaped = true,
+            b'"' => in_string = !in_string,
+            b'{' | b'[' if !in_string => {
+                depth += 1;
+                if depth > MAX_JSON_DEPTH {
+                    return Err(format!(
+                        "manifest_raw JSON nesting depth exceeds limit of {}",
+                        MAX_JSON_DEPTH
+                    ));
+                }
+            }
+            b'}' | b']' if !in_string => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Computes the hex-encoded SHA256 of the given bytes.
 fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -177,6 +216,11 @@ async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
             ),
         )
             .into_response();
+    }
+
+    if let Err(e) = check_json_depth(&req.manifest_raw) {
+        eprintln!("[req:{}] rejected: {}", request_id, e);
+        return (StatusCode::BAD_REQUEST, e).into_response();
     }
 
     let image = match pipeline::image_from_scan_request(req) {
@@ -359,6 +403,11 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
                 .into_response();
         }
     };
+
+    if let Err(e) = check_json_depth(&manifest_raw) {
+        eprintln!("[req:{}] rejected: {}", request_id, e);
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
 
     // Construire ScanRequest
     let req = ScanRequest {
