@@ -18,7 +18,8 @@ struct Args {
     pretty: bool,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     let raw = std::fs::read_to_string(&args.request)
@@ -27,7 +28,7 @@ fn main() -> Result<()> {
     let req: ScanRequest = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse JSON request: {}", args.request))?;
 
-    let resp = engine::run(&req).context("engine pipeline failed")?;
+    let resp = engine::run(&req).await.context("engine pipeline failed")?;
 
     if args.pretty {
         println!("{}", serde_json::to_string_pretty(&resp)?);

@@ -409,7 +409,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
         }),
     };
 
-    let scan_res = match pipeline::run(&req) {
+    let scan_res = match pipeline::run(&req).await {
         Ok(r) => r,
         Err(e) => {
             let err = ScanResponse {

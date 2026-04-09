@@ -8,7 +8,7 @@ use crate::scanner::trivy::run_trivy;
 use crate::scanner::trivy_parser::parse_trivy;
 use crate::workspace::Workspace;
 
-pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
+pub async fn run(req: &ScanRequest) -> Result<ScanResponse> {
     let parsed = parse_manifest(&req.manifest_path)?;
 
     let (complete, missing) = check_layers(&req.blob_store_dir, &parsed.layer_digests);
@@ -38,7 +38,7 @@ pub fn run(req: &ScanRequest) -> Result<ScanResponse> {
     }
 
     println!("rootfs ready at {:?}", ws.rootfs);
-    let trivy_output = run_trivy(&ws.rootfs)?;
+    let trivy_output = run_trivy(&ws.rootfs).await?;
 
     let (summary, findings) = parse_trivy(&trivy_output);
 
