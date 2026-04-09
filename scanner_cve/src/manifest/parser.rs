@@ -29,10 +29,37 @@ pub fn parse_manifest(path: &str) -> Result<ParsedManifest> {
 
     let manifest: Manifest = serde_json::from_str(&raw).context("invalid manifest JSON")?;
 
-    let layer_digests = manifest.layers.into_iter().map(|l| l.digest).collect();
+    validate_digest(&manifest.config.digest).context("invalid config digest")?;
+
+    let layer_digests: Vec<String> = manifest
+        .layers
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| {
+            validate_digest(&l.digest)
+                .with_context(|| format!("invalid digest for layer {}", i))?;
+            Ok(l.digest)
+        })
+        .collect::<Result<_>>()?;
 
     Ok(ParsedManifest {
         config_digest: manifest.config.digest,
         layer_digests,
     })
+}
+
+fn validate_digest(digest: &str) -> Result<()> {
+    let hash = digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| anyhow::anyhow!("digest must start with 'sha256:': {}", digest))?;
+
+    if hash.len() != 64 {
+        anyhow::bail!("digest hash must be 64 characters: {}", digest);
+    }
+
+    if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("digest hash must be lowercase hex: {}", digest);
+    }
+
+    Ok(())
 }

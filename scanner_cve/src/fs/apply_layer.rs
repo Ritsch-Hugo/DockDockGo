@@ -127,7 +127,17 @@ fn open_layer_reader(file: File) -> Result<Box<dyn Read>> {
     }
 }
 
+const MAX_PATH_LEN: usize = 4096;
+
 fn sanitize_relative_path(path: &Path) -> Result<PathBuf> {
+    if path.as_os_str().len() > MAX_PATH_LEN {
+        anyhow::bail!(
+            "path too long ({} bytes): {}",
+            path.as_os_str().len(),
+            path.display()
+        );
+    }
+
     let mut clean = PathBuf::new();
 
     for comp in path.components() {
