@@ -191,10 +191,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 if data.len() > MAX_CONFIG_SIZE {
                     return (
                         StatusCode::BAD_REQUEST,
-                        Json(error_response(
-                            Some(request_id.clone()),
-                            "config too large",
-                        )),
+                        Json(error_response(Some(request_id.clone()), "config too large")),
                     )
                         .into_response();
                 }
@@ -283,10 +280,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 if blob_count > MAX_BLOBS {
                     return (
                         StatusCode::BAD_REQUEST,
-                        Json(error_response(
-                            Some(request_id.clone()),
-                            "too many blobs",
-                        )),
+                        Json(error_response(Some(request_id.clone()), "too many blobs")),
                     )
                         .into_response();
                 }

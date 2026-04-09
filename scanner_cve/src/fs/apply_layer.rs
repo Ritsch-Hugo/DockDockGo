@@ -1,7 +1,7 @@
 use std::fs::{self, File};
-use std::io::{self, BufReader, Read};
-use std::path::{Component, Path, PathBuf};
 use std::io::BufRead;
+use std::io::{BufReader, Read, Write};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
@@ -56,18 +56,14 @@ pub fn apply_layer(blob_store: &str, digest: &str, rootfs: &Path) -> Result<()> 
         if is_opaque_whiteout(&rel_path) {
             let parent = rel_path.parent().unwrap_or(Path::new(""));
             clear_directory_contents_in_rootfs(rootfs, parent).with_context(|| {
-                format!(
-                    "failed to apply opaque whiteout for {}",
-                    rel_path.display()
-                )
+                format!("failed to apply opaque whiteout for {}", rel_path.display())
             })?;
             continue;
         }
 
         if let Some(target) = whiteout_target(&rel_path) {
-            safe_remove_in_rootfs(rootfs, &target).with_context(|| {
-                format!("failed to apply whiteout for {}", rel_path.display())
-            })?;
+            safe_remove_in_rootfs(rootfs, &target)
+                .with_context(|| format!("failed to apply whiteout for {}", rel_path.display()))?;
             continue;
         }
 
@@ -82,27 +78,6 @@ pub fn apply_layer(blob_store: &str, digest: &str, rootfs: &Path) -> Result<()> 
             }
 
             EntryType::Regular => {
-                let size = entry
-                    .header()
-                    .size()
-                    .context("cannot read entry size")?;
-
-                if size > MAX_FILE_SIZE {
-                    anyhow::bail!(
-                        "file too large in layer: {} ({} bytes)",
-                        rel_path.display(),
-                        size
-                    );
-                }
-
-                total_unpacked = total_unpacked
-                    .checked_add(size)
-                    .context("total unpacked size overflow")?;
-
-                if total_unpacked > MAX_TOTAL_UNPACKED {
-                    anyhow::bail!("layer unpacked size limit exceeded");
-                }
-
                 if let Some(parent) = dest.parent() {
                     reject_if_symlink_in_path(rootfs, parent)?;
                     fs::create_dir_all(parent).with_context(|| {
@@ -115,8 +90,7 @@ pub fn apply_layer(blob_store: &str, digest: &str, rootfs: &Path) -> Result<()> 
                 let mut outfile = File::create(&dest)
                     .with_context(|| format!("failed to create file {}", dest.display()))?;
 
-                io::copy(&mut entry, &mut outfile)
-                    .with_context(|| format!("failed to extract file {}", dest.display()))?;
+                total_unpacked = copy_bounded(&mut entry, &mut outfile, &rel_path, total_unpacked)?;
             }
 
             EntryType::Symlink => {
@@ -217,11 +191,54 @@ fn reject_if_symlink_in_path(rootfs: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Copie `src` vers `dst` chunk par chunk en comptant les octets réellement écrits.
+/// Vérifie MAX_FILE_SIZE (par fichier) et MAX_TOTAL_UNPACKED (cumulé sur le layer).
+/// Retourne le nouveau total cumulé.
+fn copy_bounded<R: Read>(
+    src: &mut R,
+    dst: &mut File,
+    rel_path: &Path,
+    mut total: u64,
+) -> Result<u64> {
+    let mut buf = [0u8; 64 * 1024]; // 64 KB par chunk
+    let mut file_written: u64 = 0;
+
+    loop {
+        let n = src.read(&mut buf).context("read error during extraction")?;
+        if n == 0 {
+            break;
+        }
+
+        file_written = file_written
+            .checked_add(n as u64)
+            .context("file size overflow")?;
+
+        if file_written > MAX_FILE_SIZE {
+            anyhow::bail!(
+                "file too large in layer: {} ({} bytes written, limit {} bytes)",
+                rel_path.display(),
+                file_written,
+                MAX_FILE_SIZE
+            );
+        }
+
+        total = total
+            .checked_add(n as u64)
+            .context("total unpacked size overflow")?;
+
+        if total > MAX_TOTAL_UNPACKED {
+            anyhow::bail!("layer unpacked size limit exceeded");
+        }
+
+        dst.write_all(&buf[..n])
+            .context("write error during extraction")?;
+    }
+
+    Ok(total)
+}
+
 fn is_opaque_whiteout(rel_path: &Path) -> bool {
-    rel_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        == Some(".wh..wh..opq")
+    rel_path.file_name().and_then(|n| n.to_str()) == Some(".wh..wh..opq")
 }
 
 fn whiteout_target(rel_path: &Path) -> Option<PathBuf> {
@@ -265,7 +282,10 @@ fn clear_directory_contents_in_rootfs(rootfs: &Path, rel_dir: &Path) -> Result<(
     }
 
     if !abs_dir.is_dir() {
-        anyhow::bail!("opaque whiteout target is not a directory: {}", abs_dir.display());
+        anyhow::bail!(
+            "opaque whiteout target is not a directory: {}",
+            abs_dir.display()
+        );
     }
 
     for entry_res in fs::read_dir(&abs_dir)
@@ -284,7 +304,10 @@ fn clear_directory_contents_in_rootfs(rootfs: &Path, rel_dir: &Path) -> Result<(
             fs::remove_dir_all(&path)
                 .with_context(|| format!("failed to remove dir {}", path.display()))?;
         } else {
-            anyhow::bail!("unsupported entry while clearing opaque whiteout: {}", path.display());
+            anyhow::bail!(
+                "unsupported entry while clearing opaque whiteout: {}",
+                path.display()
+            );
         }
     }
 
