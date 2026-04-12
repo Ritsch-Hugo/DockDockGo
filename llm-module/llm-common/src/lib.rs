@@ -10,5 +10,5 @@ pub use errors::LlmError;
 pub use traits::LlmBackend;
 pub use types::{
     ArtifactBundle, ArtifactContent, ArtifactFile,
-    ChatMessage, Digest, LlmVote, PullContext, ScanDecision,
+    ChatMessage, Digest, LlmResponse, LlmVote, PullContext, ScanDecision, ToolCall,
 };

@@ -111,6 +111,31 @@ impl ChatMessage {
 }
 
 // ============================================================
+// Tool calling
+// ============================================================
+
+/// Un appel d'outil émis par le LLM (format OpenAI tool_calls).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Nom de l'outil à appeler (ex: "run_static_scan").
+    pub name: String,
+    /// Arguments parsés depuis le JSON retourné par le LLM.
+    pub arguments: serde_json::Value,
+}
+
+/// Réponse possible d'un LLM en mode tool calling.
+///
+/// Le LLM peut soit répondre avec du texte (analyse libre),
+/// soit émettre un ou plusieurs tool calls (décision d'exécuter des scans).
+#[derive(Debug, Clone)]
+pub enum LlmResponse {
+    /// Le LLM a répondu avec du texte libre (pas de scan demandé).
+    Text(String),
+    /// Le LLM a demandé l'exécution d'un ou plusieurs outils.
+    ToolCalls(Vec<ToolCall>),
+}
+
+// ============================================================
 // Décision de scan
 // ============================================================
 
@@ -133,6 +158,8 @@ pub struct LlmVote {
 pub struct ScanDecision {
     /// UUID du pull concerné, pour corrélation avec l'orchestrateur.
     pub pull_id: Uuid,
+
+    // --- Décision ---
     pub run_static_scan: bool,
     pub run_compliance_scan: bool,
     pub run_dynamic_scan: bool,
@@ -142,4 +169,15 @@ pub struct ScanDecision {
     pub arbiter_rationale: String,
     /// Votes des 3 workers, conservés pour audit et historique.
     pub votes: Vec<LlmVote>,
+
+    // --- Résultats des scans exécutés via MCP ---
+    /// Résultat du scan statique CVE (Trivy). None si non lancé ou échoué.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub static_scan_result: Option<serde_json::Value>,
+    /// Résultat du scan de conformité. None si non lancé ou échoué.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compliance_scan_result: Option<serde_json::Value>,
+    /// Résultat du scan dynamique. None si non lancé ou non implémenté.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_scan_result: Option<serde_json::Value>,
 }

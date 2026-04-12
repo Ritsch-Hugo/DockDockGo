@@ -36,6 +36,10 @@ pub struct Config {
     /// Valeur par défaut : localhost (dev local)
     /// En Docker/Kubernetes : IP ou nom du service manager.
     pub manager_host: String,
+
+    /// URL du serveur MCP (mcp-tools-server).
+    /// llm-decision s'y connecte pour charger les tool schemas et exécuter les scans.
+    pub mcp_server_url: String,
 }
 
 impl Config {
@@ -53,15 +57,15 @@ impl Config {
 
             worker_models: [
                 std::env::var("LLM_WORKER_1")
-                    .unwrap_or_else(|_| "qwen3:8b".to_string()),
+                    .unwrap_or_else(|_| "granite3.3:8b".to_string()),
                 std::env::var("LLM_WORKER_2")
-                    .unwrap_or_else(|_| "deepseek-r1:8b".to_string()),
+                    .unwrap_or_else(|_| "granite3.3:8b".to_string()),
                 std::env::var("LLM_WORKER_3")
-                    .unwrap_or_else(|_| "gemma3:12b".to_string()),
+                    .unwrap_or_else(|_| "granite3.3:8b".to_string()),
             ],
 
             arbiter_model: std::env::var("LLM_ARBITER")
-                .unwrap_or_else(|_| "mistral-nemo:latest".to_string()),
+                .unwrap_or_else(|_| "granite3.3:8b".to_string()),
 
             llm_timeout_secs: std::env::var("LLM_TIMEOUT_SECS")
                 .ok()
@@ -71,7 +75,7 @@ impl Config {
             decision_port: std::env::var("DECISION_PORT")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(3002),
+                .unwrap_or(3005),
 
             manager_port: std::env::var("MANAGER_PORT")
                 .ok()
@@ -80,6 +84,9 @@ impl Config {
 
             manager_host: std::env::var("MANAGER_HOST")
                 .unwrap_or_else(|_| "localhost".to_string()),
+
+            mcp_server_url: std::env::var("MCP_SERVER_URL")
+                .unwrap_or_else(|_| "http://localhost:3004/mcp".to_string()),
         }
     }
 

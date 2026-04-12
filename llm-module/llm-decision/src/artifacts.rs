@@ -16,22 +16,29 @@ fn image_root(quarantine_path: &Path, ctx: &PullContext) -> std::path::PathBuf {
 /// Lit un fichier et détermine s'il est JSON ou binaire.
 /// On ne charge jamais le contenu binaire en mémoire — on note uniquement la taille.
 async fn read_artifact(path: &Path) -> Result<ArtifactContent, LlmError> {
-    let metadata = tokio::fs::metadata(path).await.map_err(|e| {
-        LlmError::ArtifactNotFound(format!("{} : {}", path.display(), e))
-    })?;
-
     match tokio::fs::read_to_string(path).await {
         Ok(content) => {
             // Vérifie que c'est bien du JSON valide avant de l'accepter
             if serde_json::from_str::<serde_json::Value>(&content).is_ok() {
                 Ok(ArtifactContent::Json(content))
             } else {
-                // Texte mais pas JSON valide → traiter comme binaire
-                Ok(ArtifactContent::Binary { size_bytes: metadata.len() })
+                // Texte mais pas JSON valide → traiter comme binaire, récupérer la taille
+                let size_bytes = tokio::fs::metadata(path)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(content.len() as u64);
+                Ok(ArtifactContent::Binary { size_bytes })
             }
         }
-        // Impossible à lire comme UTF-8 → fichier binaire (gzip layer)
-        Err(_) => Ok(ArtifactContent::Binary { size_bytes: metadata.len() }),
+        Err(e) => {
+            // Impossible à lire comme UTF-8 → fichier binaire (gzip layer) ou introuvable.
+            // On tente metadata() pour la taille ; s'il échoue aussi, le fichier est introuvable.
+            let size_bytes = tokio::fs::metadata(path)
+                .await
+                .map_err(|_| LlmError::ArtifactNotFound(format!("{} : {}", path.display(), e)))?
+                .len();
+            Ok(ArtifactContent::Binary { size_bytes })
+        }
     }
 }
 
