@@ -1,0 +1,15 @@
+[package]
+name = "mcp-tools-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+axum = "0.8.8"
+reqwest = { version = "0.13.2", features = ["json", "multipart"] }
+rmcp = { version = "1.3.0", features = ["server", "transport-streamable-http-server", "schemars"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.51.0", features = ["full"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

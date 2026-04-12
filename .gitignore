@@ -1,0 +1,23 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Cargo lock (à conserver pour les binaires, supprimer pour les libs)
+# Cargo.lock  ← on le garde volontairement
+
+# Variables d'environnement locales
+.env
+.env.*
+
+# Logs
+*.log
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
