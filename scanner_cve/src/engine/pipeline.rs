@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::debug;
 
 use crate::engine::layer_gate::check_layers;
 use crate::fs::apply_layer::apply_layer;
@@ -28,16 +29,16 @@ pub async fn run(req: &ScanRequest) -> Result<ScanResponse> {
 
     // workspace temporaire
     let ws = Workspace::new()?;
-    println!("workspace created at {:?}", ws.rootfs);
+    debug!(path = ?ws.rootfs, "workspace created");
 
     // reconstruction rootfs
     for layer in &parsed.layer_digests {
-        println!("applying layer {}", layer);
+        debug!(layer = %layer, "applying layer");
 
         apply_layer(&req.blob_store_dir, layer, &ws.rootfs)?;
     }
 
-    println!("rootfs ready at {:?}", ws.rootfs);
+    debug!(path = ?ws.rootfs, "rootfs ready");
     let trivy_output = run_trivy(&ws.rootfs).await?;
 
     let (summary, findings) = parse_trivy(&trivy_output);

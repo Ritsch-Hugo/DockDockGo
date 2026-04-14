@@ -94,11 +94,59 @@ pub fn apply_layer(blob_store: &str, digest: &str, rootfs: &Path) -> Result<()> 
             }
 
             EntryType::Symlink => {
-                anyhow::bail!("symlinks are forbidden in layer: {}", rel_path.display());
+                let link_target = entry
+                    .link_name()
+                    .context("cannot read symlink target")?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("symlink missing target: {}", rel_path.display())
+                    })?;
+
+                if let Some(parent) = dest.parent() {
+                    reject_if_symlink_in_path(rootfs, parent)?;
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("failed to create parent for symlink {}", dest.display())
+                    })?;
+                }
+
+                std::os::unix::fs::symlink(&*link_target, &dest).with_context(|| {
+                    format!(
+                        "failed to create symlink {} -> {}",
+                        dest.display(),
+                        link_target.display()
+                    )
+                })?;
             }
 
             EntryType::Link => {
-                anyhow::bail!("hardlinks are forbidden in layer: {}", rel_path.display());
+                let link_target = entry
+                    .link_name()
+                    .context("cannot read hardlink target")?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("hardlink missing target: {}", rel_path.display())
+                    })?;
+
+                let target_rel =
+                    sanitize_relative_path(link_target.as_ref()).with_context(|| {
+                        format!("invalid hardlink target: {}", link_target.display())
+                    })?;
+                let target_abs = ensure_within_rootfs(rootfs, &target_rel).with_context(|| {
+                    format!("hardlink target escapes rootfs: {}", link_target.display())
+                })?;
+
+                if let Some(parent) = dest.parent() {
+                    reject_if_symlink_in_path(rootfs, parent)?;
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("failed to create parent for hardlink {}", dest.display())
+                    })?;
+                }
+
+                fs::copy(&target_abs, &dest).with_context(|| {
+                    format!(
+                        "failed to copy hardlink {} -> {}",
+                        target_abs.display(),
+                        dest.display()
+                    )
+                })?;
             }
 
             other => {

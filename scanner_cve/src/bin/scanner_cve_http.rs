@@ -14,7 +14,10 @@ use std::{
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::Instant,
 };
+
+use tracing::{error, info, warn};
 
 use scanner_cve::engine::pipeline;
 use scanner_cve::models::{ScanRequest, ScanResponse, ScanStatus};
@@ -28,13 +31,21 @@ const MAX_BLOBS: usize = 128;
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/scan-upload", post(scan_upload))
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3002));
-    println!("🚀 CVE Scanner listening on http://{}", addr);
+    info!(address = %addr, "CVE scanner listening");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -51,10 +62,14 @@ async fn health() -> &'static str {
 
 async fn scan_upload(mut multipart: Multipart) -> Response {
     let request_id = Uuid::new_v4().to_string();
+    let start = Instant::now();
     let base = PathBuf::from(format!("/tmp/dockdockgo-cve-{}", request_id));
     let blobs_dir = base.join("blobs").join("sha256");
 
+    info!(request_id = %request_id, "scan request received");
+
     if let Err(e) = fs::create_dir_all(&blobs_dir) {
+        error!(request_id = %request_id, error = %e, "failed to create workspace");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_response(
@@ -81,6 +96,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
         let next = match multipart.next_field().await {
             Ok(v) => v,
             Err(e) => {
+                warn!(request_id = %request_id, reason = "multipart error", error = %e, "input rejected");
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(error_response(
@@ -99,6 +115,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
         match name.as_str() {
             "manifest" => {
                 if seen_manifest {
+                    warn!(request_id = %request_id, reason = "duplicate manifest field", "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -113,6 +130,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 let data = match field.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
+                        warn!(request_id = %request_id, reason = "failed reading manifest", error = %e, "input rejected");
                         return (
                             StatusCode::BAD_REQUEST,
                             Json(error_response(
@@ -125,6 +143,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 };
 
                 if data.len() > MAX_MANIFEST_SIZE {
+                    warn!(request_id = %request_id, reason = "manifest too large", size = data.len(), "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -136,6 +155,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 }
 
                 if let Err(e) = serde_json::from_slice::<Value>(&data) {
+                    warn!(request_id = %request_id, reason = "invalid manifest json", error = %e, "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -148,6 +168,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
 
                 let path = base.join("manifest.json");
                 if let Err(e) = fs::write(&path, &data) {
+                    error!(request_id = %request_id, error = %e, "failed writing manifest");
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(error_response(
@@ -163,6 +184,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
 
             "config" => {
                 if seen_config {
+                    warn!(request_id = %request_id, reason = "duplicate config field", "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -177,6 +199,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 let data = match field.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
+                        warn!(request_id = %request_id, reason = "failed reading config", error = %e, "input rejected");
                         return (
                             StatusCode::BAD_REQUEST,
                             Json(error_response(
@@ -189,6 +212,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 };
 
                 if data.len() > MAX_CONFIG_SIZE {
+                    warn!(request_id = %request_id, reason = "config too large", size = data.len(), "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(Some(request_id.clone()), "config too large")),
@@ -197,6 +221,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 }
 
                 if let Err(e) = serde_json::from_slice::<Value>(&data) {
+                    warn!(request_id = %request_id, reason = "invalid config json", error = %e, "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -209,6 +234,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
 
                 let path = base.join("config.json");
                 if let Err(e) = fs::write(&path, &data) {
+                    error!(request_id = %request_id, error = %e, "failed writing config");
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(error_response(
@@ -224,6 +250,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
 
             "pull_context" | "pullContext" => {
                 if seen_pull_context {
+                    warn!(request_id = %request_id, reason = "duplicate pull_context field", "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -238,6 +265,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 let data = match field.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
+                        warn!(request_id = %request_id, reason = "failed reading pull_context", error = %e, "input rejected");
                         return (
                             StatusCode::BAD_REQUEST,
                             Json(error_response(
@@ -250,6 +278,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 };
 
                 if data.len() > MAX_PULL_CONTEXT_SIZE {
+                    warn!(request_id = %request_id, reason = "pull_context too large", size = data.len(), "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -261,6 +290,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 }
 
                 if let Err(e) = serde_json::from_slice::<Value>(&data) {
+                    warn!(request_id = %request_id, reason = "invalid pull_context json", error = %e, "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -278,6 +308,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 blob_count += 1;
 
                 if blob_count > MAX_BLOBS {
+                    warn!(request_id = %request_id, reason = "too many blobs", count = blob_count, "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(Some(request_id.clone()), "too many blobs")),
@@ -290,6 +321,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 let safe_blob_name = match sanitize_blob_filename(&raw_filename) {
                     Ok(v) => v,
                     Err(msg) => {
+                        warn!(request_id = %request_id, reason = "invalid blob filename", filename = %raw_filename, "input rejected");
                         return (
                             StatusCode::BAD_REQUEST,
                             Json(error_response(Some(request_id.clone()), &msg)),
@@ -299,6 +331,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 };
 
                 if !seen_blob_names.insert(safe_blob_name.clone()) {
+                    warn!(request_id = %request_id, reason = "duplicate blob filename", filename = %safe_blob_name, "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -312,6 +345,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 let data = match field.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
+                        warn!(request_id = %request_id, reason = "failed reading blob", error = %e, "input rejected");
                         return (
                             StatusCode::BAD_REQUEST,
                             Json(error_response(
@@ -324,6 +358,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 };
 
                 if data.len() > MAX_BLOB_SIZE {
+                    warn!(request_id = %request_id, reason = "blob too large", filename = %safe_blob_name, size = data.len(), "input rejected");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(error_response(
@@ -337,6 +372,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 let path = blobs_dir.join(&safe_blob_name);
 
                 if let Err(e) = fs::write(&path, &data) {
+                    error!(request_id = %request_id, error = %e, "failed writing blob");
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(error_response(
@@ -349,6 +385,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
             }
 
             _ => {
+                warn!(request_id = %request_id, reason = "unexpected multipart field", field = %name, "input rejected");
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(error_response(
@@ -364,6 +401,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
     let manifest_path = match manifest_path {
         Some(p) => p,
         None => {
+            warn!(request_id = %request_id, reason = "missing manifest field", "input rejected");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(error_response(
@@ -380,6 +418,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
         Some(raw) => match serde_json::from_slice::<Value>(&raw) {
             Ok(v) => v,
             Err(e) => {
+                warn!(request_id = %request_id, reason = "invalid pull_context json", error = %e, "input rejected");
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(error_response(
@@ -403,9 +442,12 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
         }),
     };
 
+    info!(request_id = %request_id, blobs = blob_count, "starting scan pipeline");
+
     let scan_res = match pipeline::run(&req).await {
         Ok(r) => r,
         Err(e) => {
+            error!(request_id = %request_id, error = %e, duration_ms = start.elapsed().as_millis(), "scan pipeline failed");
             let err = ScanResponse {
                 request_id: req.request_id.clone(),
                 status: ScanStatus::Error,
@@ -419,6 +461,22 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
             return (StatusCode::OK, Json(err)).into_response();
         }
     };
+
+    if let Some(ref summary) = scan_res.summary {
+        info!(
+            request_id = %request_id,
+            status = "complete",
+            total = summary.vulnerabilities_total,
+            critical = summary.severity_count.critical,
+            high = summary.severity_count.high,
+            medium = summary.severity_count.medium,
+            low = summary.severity_count.low,
+            duration_ms = start.elapsed().as_millis(),
+            "scan complete"
+        );
+    } else {
+        info!(request_id = %request_id, status = ?scan_res.status, duration_ms = start.elapsed().as_millis(), "scan complete");
+    }
 
     drop(cleanup_guard);
 
