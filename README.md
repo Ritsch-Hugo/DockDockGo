@@ -62,6 +62,15 @@ docker run -d \
 
 ---
 
+  ### Exemple de réponse `/health`
+
+  ```json
+  { "status": "ok", "database": "ok" }
+  ```
+
+
+---
+
 ## 🔐 Gestion des certificats MITM
 
 Le proxy présente un certificat TLS signé par sa propre CA pour chaque registre intercepté. Le client doit faire confiance à cette CA.
@@ -136,6 +145,28 @@ Dans main.rs configurer l'adresse qui heberge la base de donnée
 DATABASE_URL=postgres://docdockgo_admin:docdockgo@localhost:5432/docdockgo
 ```
 
+---
+
+### Fichier `.env` complet
+
+```env
+DATABASE_URL=postgres://UTILISATEUR:MOT_DE_PASSE@HOST:PORT/NOM_DE_LA_BASE
+
+#Blob 2Go Max
+MAX_BLOB_SIZE=<max_blob_size>
+
+#Concurrent Pull
+MAX_CONCURRENT_PULLS=<nb_max_concurrent_pull>
+
+#Timout (en sec)
+CONTEXT_TIMEOUT=<temps_timout_context>
+
+#Url Orchestrateur
+ORCH_URL=http://127.0.0.1:3000/v1/decision
+
+#Timout pour finir pull après SIGTERM | Doit etre < Timeout SIGKILL Kubernetes
+SHUTDOWN_DRAIN_TIMEOUT_SECS=<temps_timout_shutdown>
+```
 ---
 
 ## 📁 Structure du filesystem
