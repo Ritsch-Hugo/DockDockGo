@@ -400,10 +400,10 @@ pub async fn get_pull_context(
                             .await
                             .unwrap_or_else(|e| { eprintln!("[DB] Erreur INSERT pull_digests: {}", e); Default::default() });
 
-                            println!(
+                            /*println!(
                                 "[PullContext] Digest ajouté à manifest_digests: {}",
                                 digest_struct.as_str()
-                            );
+                            );*/
                         }
                     }
                     "blobs" => {
@@ -644,16 +644,16 @@ pub async fn digest_process_for_head(
     repository: &str,
     tag: &str,
 ) -> Result<Digest, anyhow::Error> {
-    println!(
+    /*println!(
         "[HEAD] Récupération du digest racine pour {}/{}",
         repository, tag
-    );
+    );*/
     //On recupère pas le token de la meme façon en fonction des registres
     let token = RegistryClient::from_registry(registry)
         .get_token(client, repository)
         .await?;
 
-    println!("[HEAD] Token Docker récupéré");
+    //println!("[HEAD] Token Docker récupéré");
 
     // 2️⃣ Télécharger le manifest associé au tag
     let manifest_url = format!("https://{}/v2/{}/manifests/{}", registry, repository, tag);
@@ -682,12 +682,12 @@ pub async fn digest_process_for_head(
     let headers = manifest_resp.headers().clone();
 
     // Rate limit (depuis le clone déjà fait)
-    if let Some(limit) = headers.get("ratelimit-limit") {
+    /*if let Some(limit) = headers.get("ratelimit-limit") {
         println!(
             "[RATE-LIMIT] limit = {}",
             limit.to_str().unwrap_or("invalid")
         );
-    }
+    }*/
     if let Some(remaining) = headers.get("ratelimit-remaining") {
         let remaining_str = remaining.to_str().unwrap_or("invalid");
         println!("[RATE-LIMIT] remaining = {}", remaining_str);
@@ -695,12 +695,12 @@ pub async fn digest_process_for_head(
             anyhow::bail!("Docker Hub rate-limit atteint (remaining=0)");
         }
     }
-    if let Some(src) = headers.get("docker-ratelimit-source") {
+    /*if let Some(src) = headers.get("docker-ratelimit-source") {
         println!(
             "[RATE-LIMIT] source = {}",
             src.to_str().unwrap_or("invalid")
         );
-    }
+    }*/
 
     // Digest racine
     let manifest_digest = headers
@@ -717,7 +717,7 @@ pub async fn digest_process_for_head(
         value: digest_clean.to_string(),
     };
 
-    println!("[HEAD] Digest racine prêt: {}", digest_clean);
+    //println!("[HEAD] Digest racine prêt: {}", digest_clean);
 
     Ok(racine_digest)
 }
@@ -749,6 +749,7 @@ async fn create_context_from_tag(
             } else if msg.contains("refusé") {
                 PullContextError::DigestNotAllowed
             } else {
+                println!("[PullContext] Erreur inattendue lors du HEAD: {}", msg);
                 PullContextError::StorageError
             }
         })?;

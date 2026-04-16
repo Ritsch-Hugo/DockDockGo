@@ -129,12 +129,12 @@ pub fn fetch_and_process_manifest<'a>(
         let json: serde_json::Value = serde_json::from_slice(&content)?;
 
         //Log
-        println!(
+        /*println!(
             "[FETCH DEBUG] manifest {}: config={:?}, layers={:?}",
             digest_clean,
             json.get("config"),
             json.get("layers")
-        );
+        );*/
 
         // Ajouter digest du manifest lui-même
         if !digests.iter().any(|d| d.value == digest_clean) {
@@ -190,37 +190,23 @@ pub async fn predict_digests_docker(
     uuid: &Uuid,
     registry: &str,
     repository: &str,
-    tag: &str,
+    _tag: &str,
     os: &str,
     arch: &str,
     manifest_racine_digest: &Digest,
 ) -> Result<Vec<Digest>> {
-    println!(
+    /*println!(
         "LOG - MANIFEST RACINE DIGEST : {}",
         manifest_racine_digest.value
     );
     println!(
         "[PREDICT] Using provided manifest digest for {}:{}, target={}/{}",
         repository, tag, os, arch
-    );
+    );*/
 
     // ============================
     // 1️⃣ Récupération du token
     // ============================
-
-    /*
-    let token_url = format!(
-        "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
-        repository
-    );
-    let token_resp = client.get(&token_url).send().await?;
-    let token_json: serde_json::Value = token_resp.json().await?;
-
-    let token = token_json
-        .get("token")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Token Docker manquant"))?;
-    */
 
     let token = RegistryClient::from_registry(registry)
         .get_token(client, repository)
@@ -434,10 +420,10 @@ pub async fn predict_digests_docker(
     }
 
     //affiche les digests prédites par predict_digests
-    println!("[PREDICT] Collected digests:");
+    /*println!("[PREDICT] Collected digests:");
     for d in &digests {
         println!(" - {}:{}", d.algorithm, d.value);
-    }
+    }*/
 
     Ok(digests)
 }
@@ -514,7 +500,7 @@ pub async fn predict_digests_podman(
         // On a trouvé le bon manifest
         if let Some(d) = m.get("digest").and_then(|d| d.as_str()) {
             digest_amd64 = Some(d.trim_start_matches("sha256:").to_string());
-            println!("[PREDICT PODMAN] Manifest {}/{} trouvé: {}", os, arch, d);
+            //println!("[PREDICT PODMAN] Manifest {}/{} trouvé: {}", os, arch, d);
             break;
         }
     }
@@ -555,15 +541,15 @@ pub async fn predict_digests_podman(
 
         let content = resp.bytes().await?;
         fs::write(&manifest_amd64_path, &content)?;
-        println!(
+        /*println!(
             "[PREDICT PODMAN] Manifest {}/{} stocké: {}",
             os, arch, manifest_amd64_path
-        );
+        );*/
     } else {
-        println!(
+        /*println!(
             "[PREDICT PODMAN] Manifest {}/{} déjà présent: {}",
             os, arch, manifest_amd64_path
-        );
+        );*/
     }
 
     // ============================
@@ -602,7 +588,7 @@ pub async fn predict_digests_podman(
             algorithm: "sha256".to_string(),
             value: clean.to_string(),
         });
-        println!("[PREDICT PODMAN] Config: {}", clean);
+        //println!("[PREDICT PODMAN] Config: {}", clean);
     } else {
         eprintln!("[PREDICT PODMAN] Champ 'config.digest' absent du manifest");
     }
@@ -616,7 +602,7 @@ pub async fn predict_digests_podman(
                     algorithm: "sha256".to_string(),
                     value: clean.to_string(),
                 });
-                println!("[PREDICT PODMAN] Layer: {}", clean);
+                //println!("[PREDICT PODMAN] Layer: {}", clean);
             }
         }
     } else {

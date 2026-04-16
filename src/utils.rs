@@ -628,10 +628,10 @@ pub async fn store_digest(
     tag: &str,
     uuid: &Uuid,
 ) -> Result<Digest, anyhow::Error> {
-    println!(
+    /*println!(
         "[STORE] Téléchargement et stockage du manifest pour {}/{}",
         repository, tag
-    );
+    );*/
 
     // Récupérer le digest racine
     let digest = digest_process_for_head(client, registry, repository, tag).await?;
@@ -677,9 +677,9 @@ pub async fn store_digest(
     let filename = format!("{}/{}.json", tmp_dir, digest.value);
     if !Path::new(&filename).exists() {
         fs::write(&filename, &bytes)?;
-        println!("[STORE] Manifest stocké: {}", filename);
+        // Manifest stocké: {}", filename);
     } else {
-        println!("[STORE] Manifest déjà présent: {}", filename);
+        //println!("[STORE] Manifest déjà présent: {}", filename);
     }
 
     Ok(digest)
@@ -841,7 +841,7 @@ pub async fn add_context_to_blacklist_or_whitelist(
 pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
     let context_timeout: u64 = std::env::var("CONTEXT_TIMEOUT")
         .and_then(|s| s.parse().map_err(|_| std::env::VarError::NotPresent))
-        .unwrap_or(300);
+        .unwrap_or(360);
 
     let pool_clone = pool.clone();
 
@@ -855,6 +855,11 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
             let before = list.len();
 
             list.retain(|ctx| {
+                // Ne jamais expirer un contexte qui a des requêtes actives en cours
+                if ctx.active_requests.load(Ordering::SeqCst) > 0 
+                {
+                    return true;
+                }
                 let alive = ctx.last_activity.elapsed() < Duration::from_secs(context_timeout);
                 if !alive {
                     println!(

@@ -90,7 +90,7 @@ pub async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result
                     return form;
                 }
 
-                println!("[ORCH INFO] ajout fichier: {}", path);
+                //println!("[ORCH INFO] ajout fichier: {}", path);
 
                 let mime = if path.contains("/manifests/") || path.contains("/referrers/") {
                     "application/json"

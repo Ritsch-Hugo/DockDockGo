@@ -10,6 +10,9 @@ use std::{convert::Infallible, fs::File, io::BufReader, sync::Arc};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex as TokioMutex;
 use tokio_rustls::TlsAcceptor;
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::watch;
+use tokio::time::Duration;
 
 mod db;
 mod models;
@@ -63,6 +66,42 @@ async fn handle(
 
     // Découper le path pour extraire repo, tag, digest
     let parts: Vec<&str> = path.trim_start_matches("/v2/").split('/').collect();
+
+    // Health check avec vérification de la base de données
+    if path == "/health" {
+        if req.method() != Method::GET {
+            return Response::builder()
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .body(Body::empty())
+                .unwrap();
+        }
+
+        // On tente d'acquérir une connexion du pool pour vérifier la santé de la BDD
+        let db_status = match pool.acquire().await {
+            Ok(_) => "ok",
+            Err(e) => {
+                eprintln!("[HEALTH] Erreur base de données : {}", e);
+                "error"
+            }
+        };
+
+        let status_code = if db_status == "ok" {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE // 503 si la BDD est tombée
+        };
+
+        let body_str = format!(r#"{{"status":"{}","database":"{}"}}"#, 
+            if db_status == "ok" { "ok" } else { "degraded" },
+            db_status
+        );
+
+        return Response::builder()
+            .status(status_code)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body_str))
+            .unwrap();
+    }
 
     //VALIDATION HEADERS — avant tout, y compris /v2/
     if let Err(e) = validation::validate_headers(&req) {
@@ -892,7 +931,7 @@ async fn handle(
                         Some(ScanDecision::ALLOW) => {
                             println!("[SECURITY CHECK] Image conforme -> autorisation du pull");
 
-                            sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
+                            sqlx::query("UPDATE pulls SET scan_completed = true, decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
                             .bind(context_uuid.to_string())
                             .execute(&pool)
                             .await
@@ -1027,6 +1066,9 @@ async fn handle(
                             println!("[SCAN FINAL] PENDING -> Scan en cours");
 
                             let mut list = pull_contexts.lock().await;
+
+                            //Point d'attention : Le contexte est supprimé donc 
+                            
                             list.retain(|c| c.uuid != context_uuid);
                             return Response::builder()
                                 .status(StatusCode::FORBIDDEN)
@@ -1035,7 +1077,7 @@ async fn handle(
                         }
 
                         None => {
-                            println!("[SECURITY CHECK]- Race condition détectée ou erreur lors du scan final");
+                            println!("[SECURITY CHECK]- Scan deja en cours");
 
                             {
                                 let mut list = pull_contexts.lock().await;
@@ -1118,42 +1160,148 @@ async fn main() -> Result<()> {
     let rate_limiter = Arc::new(RateLimiter::new(100, 60));
     rate_limiter.clone().start_cleanup();
 
+
+
+
+    // Canal shutdown : le sender déclenche l'arrêt, les receivers l'attendent
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    // Écoute SIGTERM en background
+    let mut sigterm = signal(SignalKind::terminate())
+        .expect("Impossible d'enregistrer SIGTERM");
+    let mut sigint = signal(SignalKind::interrupt())
+        .expect("Impossible d'enregistrer SIGINT");
+
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = sigterm.recv() => {
+                eprintln!("[SHUTDOWN] SIGTERM reçu — arrêt gracieux en cours");
+            }
+            _ = sigint.recv() => {
+                eprintln!("[SHUTDOWN] SIGINT reçu — arrêt gracieux en cours");
+            }
+        }
+        let _ = shutdown_tx_clone.send(true);
+    });
+
     loop {
-        let (stream, addr) = listener.accept().await?;
-        let acceptor = acceptor.clone();
-        let client = client.clone();
-        let pull_contexts = pull_context.clone();
-        let pool = pool.clone();
-        let rate_limiter = rate_limiter.clone();
+        let mut shutdown_rx_loop = shutdown_rx.clone();
 
-        tokio::spawn(async move {
-            println!("[CONN] Client {:?}", addr);
-            if let Ok(tls) = acceptor.accept(stream).await {
+        tokio::select! {
+            // Nouvelle connexion entrante
+            result = listener.accept() => {
+                let (stream, addr) = match result {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        eprintln!("[CONN] Erreur accept: {}", e);
+                        continue;
+                    }
+                };
+
+                let acceptor = acceptor.clone();
                 let client = client.clone();
-                let pull_contexts = pull_contexts.clone();
+                let pull_contexts = pull_context.clone();
+                let pool = pool.clone();
+                let rate_limiter = rate_limiter.clone();
+                let mut shutdown_rx_conn = shutdown_rx.clone();
 
-                let service = service_fn(move |mut req| {
-                    let client = client.clone();
-                    let addr = addr; // passer addr
-                    let pull_contexts = pull_contexts.clone();
-                    let pool = pool.clone();
-                    let rate_limiter = rate_limiter.clone();
-                    async move {
-                        // stocker addr dans la requête pour handle
-                        req.extensions_mut().insert(addr);
-                        Ok::<_, Infallible>(
-                            handle(req, client, pull_contexts, pool, rate_limiter).await,
-                        )
+                tokio::spawn(async move {
+                    // Si shutdown déjà demandé, on rejette immédiatement
+                    if *shutdown_rx_conn.borrow() {
+                        return;
+                    }
+
+                    println!("[CONN] Client {:?}", addr);
+                    if let Ok(tls) = acceptor.accept(stream).await {
+                        let client = client.clone();
+                        let pull_contexts = pull_contexts.clone();
+
+                        let service = service_fn(move |mut req| {
+                            let client = client.clone();
+                            let addr = addr;
+                            let pull_contexts = pull_contexts.clone();
+                            let pool = pool.clone();
+                            let rate_limiter = rate_limiter.clone();
+                            async move {
+                                req.extensions_mut().insert(addr);
+                                Ok::<_, Infallible>(
+                                    handle(req, client, pull_contexts, pool, rate_limiter).await,
+                                )
+                            }
+                        });
+
+                        tokio::select! {
+                            _ = Http::new()
+                                .max_buf_size(16 * 1024)
+                                .serve_connection(tls, service) => {}
+                            // Connexion coupée proprement si shutdown demandé
+                            _ = shutdown_rx_conn.changed() => {
+                                println!("[SHUTDOWN] Connexion {:?} interrompue", addr);
+                            }
+                        }
                     }
                 });
-                let _ = Http::new()
-                    .max_buf_size(16 * 1024) // 16 KB max buffer
-                    .serve_connection(tls, service)
-                    .await;
             }
-        });
+
+            // Signal shutdown reçu → on sort de la boucle accept
+            _ = shutdown_rx_loop.changed() => {
+                eprintln!("[SHUTDOWN] Arrêt du listener — plus de nouvelles connexions acceptées");
+                break;
+            }
+        }
     }
+
+    // Phase de drain : attendre que tous les pulls en cours se terminent
+    eprintln!("[SHUTDOWN] Drain des contextes actifs en cours...");
+
+    let drain_timeout = std::env::var("SHUTDOWN_DRAIN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(drain_timeout);
+
+    loop {
+        let active_count = {
+            let list = pull_context.lock().await;
+            list.iter()
+                .map(|c| c.active_requests.load(std::sync::atomic::Ordering::SeqCst))
+                .sum::<usize>()
+        };
+
+        if active_count == 0 {
+            eprintln!("[SHUTDOWN] Aucune requête active — arrêt propre");
+            break;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            eprintln!("[SHUTDOWN] Timeout drain ({} s) — {} requêtes encore actives, arrêt forcé",
+                drain_timeout, active_count);
+            break;
+        }
+
+        //eprintln!("[SHUTDOWN] {} requêtes actives, attente...", active_count);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // On récupère tous les contextes restants pour nettoyer leurs fichiers
+    {
+        let mut list = pull_context.lock().await;
+        eprintln!("[SHUTDOWN] Nettoyage final de {} contextes...", list.len());
+
+        for ctx in list.iter() {
+            // On retire le .await ici
+            utils::cleanup_tmp_for_uuid(&ctx.uuid); 
+        }
+        list.clear();
+    }
+    eprintln!("[SHUTDOWN] Proxy arrêté proprement");
+    Ok(())
 }
+
+
+
 
 /// 🔑 Chargement des certificats TLS
 fn load_certs(path: &str) -> Result<Vec<Certificate>> {
