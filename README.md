@@ -137,6 +137,32 @@ psql -U docdockgo_admin -d docdockgo -h localhost
 
 La base est mise à jour dynamiquement au fil des pulls et des scans
 
+
+## 📁 Structure du filesystem
+
+```
+DockDockGo/
+├── src/
+│   ├── main.rs                  # Serveur TLS, Fonctions principales
+│   ├── pull_context.rs          # Logique de recupèration du contexte
+│   ├── utils.rs                 # Fonctions annexes
+│   ├── db.rs                    # Gestion de BDD
+│   ├── predict_digests_utils.rs # Prediction des digests demandés par Docker/Podman
+│   ├── registry_auth.rs         # Authentification pour registres (DockerHub + Generic)
+│   ├── validation.rs            # Validation des inputs
+│   ├── scan_utils.rs            # Communication avec Orchestrateur
+│   └── models.rs		 # Structures et impl
+├── certs-mitm/                  # Certificats
+├── cache/                       # Images approuvées (préalablement scannées) 
+├── quarantaine/                 # Images en cours d'analyse
+├── tmp/                         # Manifests stockés temporairement
+├── registry_whitelist.json      # Liste des registres autorisés
+├── Cargo.toml
+├── Dockerfile
+└── README.md
+```
+--- 
+
 ### Variable d'environnement
 
 Dans main.rs configurer l'adresse qui heberge la base de donnée
@@ -167,32 +193,6 @@ ORCH_URL=http://127.0.0.1:3000/v1/decision
 #Timout pour finir pull après SIGTERM | Doit etre < Timeout SIGKILL Kubernetes
 SHUTDOWN_DRAIN_TIMEOUT_SECS=<temps_timout_shutdown>
 ```
----
-
-## 📁 Structure du filesystem
-
-```
-DockDockGo/
-├── src/
-│   ├── main.rs                  # Serveur TLS, Fonctions principales
-│   ├── pull_context.rs          # Logique de recupèration du contexte
-│   ├── utils.rs                 # Fonctions annexes
-│   ├── db.rs                    # Gestion de BDD
-│   ├── predict_digests_utils.rs # Prediction des digests demandés par Docker/Podman
-│   ├── registry_auth.rs         # Authentification pour registres (DockerHub + Generic)
-│   ├── validation.rs            # Validation des inputs
-│   ├── scan_utils.rs            # Communication avec Orchestrateur
-│   └── models.rs		 # Structures et impl
-├── certs-mitm/                  # Certificats
-├── cache/                       # Images approuvées (préalablement scannées) 
-├── quarantaine/                 # Images en cours d'analyse
-├── tmp/                         # Manifests stockés temporairement
-├── registry_whitelist.json      # Liste des registres autorisés
-├── Cargo.toml
-├── Dockerfile
-└── README.md
-```
-
 ---
 
 ## 🔥 Features
