@@ -6,270 +6,397 @@
 <title>DocDockGo — Dashboard Dev</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
-    --bg-primary: #1c1c1a;
-    --bg-secondary: #252523;
-    --bg-tertiary: #161614;
-    --bg-info: #0c447c;
-    --bg-success: #27500a;
-    --bg-warning: #633806;
-    --bg-danger: #791f1f;
-    --text-primary: #e8e6e0;
-    --text-secondary: #a09e97;
-    --text-tertiary: #5f5e5a;
-    --text-info: #85b7eb;
-    --text-success: #c0dd97;
-    --text-warning: #fac775;
-    --text-danger: #f09595;
-    --border: rgba(255,255,255,0.08);
-    --border-md: rgba(255,255,255,0.15);
-    --radius-md: 8px;
-    --radius-lg: 12px;
+    --bg-primary: #1c1c1a; --bg-secondary: #252523; --bg-tertiary: #161614;
+    --bg-info: #0c447c; --bg-success: #27500a; --bg-warning: #633806; --bg-danger: #791f1f;
+    --text-primary: #e8e6e0; --text-secondary: #a09e97; --text-tertiary: #5f5e5a;
+    --text-info: #85b7eb; --text-success: #c0dd97; --text-warning: #fac775; --text-danger: #f09595;
+    --border: rgba(255,255,255,0.08); --border-md: rgba(255,255,255,0.15);
+    --radius-md: 8px; --radius-lg: 12px;
     --font: 'Segoe UI', system-ui, sans-serif;
     --font-mono: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
-    --blue: #378ADD;
-    --green: #639922;
-    --amber: #BA7517;
-    --red: #E24B4A;
+    --blue: #378ADD; --green: #639922; --amber: #BA7517; --red: #E24B4A;
   }
-
   body { font-family: var(--font); font-size: 14px; color: var(--text-primary); background: var(--bg-tertiary); height: 100vh; overflow: hidden; }
   .shell { display: flex; height: 100vh; }
-
-  /* SIDEBAR */
   .sidebar { width: 210px; min-width: 210px; background: var(--bg-primary); border-right: 0.5px solid var(--border); display: flex; flex-direction: column; padding: 16px 0; }
   .logo { padding: 0 16px 14px; border-bottom: 0.5px solid var(--border); margin-bottom: 8px; }
   .logo-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
   .logo-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
   .role-badge { display: flex; padding: 8px 16px; margin-bottom: 4px; }
-  .role-label { flex: 1; padding: 5px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); text-align: center; font-family: var(--font); }
+  .role-label { flex: 1; padding: 5px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); text-align: center; }
   .nav-section { font-size: 10px; color: var(--text-tertiary); padding: 10px 16px 4px; text-transform: uppercase; letter-spacing: .06em; }
   .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 16px; cursor: pointer; color: var(--text-secondary); font-size: 13px; border-left: 2px solid transparent; transition: all .1s; }
   .nav-item:hover { background: var(--bg-secondary); color: var(--text-primary); }
   .nav-item.active { background: var(--bg-secondary); color: var(--text-primary); border-left: 2px solid var(--blue); }
   .nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-md); flex-shrink: 0; }
-  .nav-dot.green { background: var(--green); }
-  .nav-dot.red { background: var(--red); }
-  .nav-dot.amber { background: var(--amber); }
-  .nav-dot.blue { background: var(--blue); }
+  .nav-dot.green { background: var(--green); } .nav-dot.red { background: var(--red); }
+  .nav-dot.amber { background: var(--amber); } .nav-dot.blue { background: var(--blue); }
   .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 0.5px solid var(--border); }
   .avatar { display: flex; align-items: center; gap: 8px; }
   .av-circle { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-secondary); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; border: 0.5px solid var(--border-md); }
-  .av-name { font-size: 12px; font-weight: 500; }
-  .av-role { font-size: 10px; color: var(--text-tertiary); }
-  /* logout-btn utilisé sur un <a> : on retire les styles de bouton natifs */
+  .av-name { font-size: 12px; font-weight: 500; } .av-role { font-size: 10px; color: var(--text-tertiary); }
   .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; display: block; text-align: center; text-decoration: none; }
   .logout-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
-
-  /* MAIN */
   .main { flex: 1; overflow-y: auto; padding: 22px 26px; background: var(--bg-tertiary); }
   .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
   .page-title { font-size: 18px; font-weight: 500; }
-
-  /* BADGES */
   .badge { display: inline-flex; align-items: center; font-size: 11px; padding: 3px 8px; border-radius: var(--radius-md); font-weight: 500; }
   .badge-green { background: var(--bg-success); color: var(--text-success); }
   .badge-red { background: var(--bg-danger); color: var(--text-danger); }
   .badge-amber { background: var(--bg-warning); color: var(--text-warning); }
   .badge-blue { background: var(--bg-info); color: var(--text-info); }
   .badge-gray { background: var(--bg-secondary); color: var(--text-secondary); }
-
-  /* CARDS */
   .card { background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 14px; }
   .section-title { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .04em; }
-
-  /* TABLE */
   .table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .table th { text-align: left; color: var(--text-secondary); font-weight: 500; padding: 0 8px 8px; border-bottom: 0.5px solid var(--border); }
   .table td { padding: 8px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
   .table tr:last-child td { border-bottom: none; }
   .table tr:hover td { background: var(--bg-secondary); }
-
-  /* PROGRESS */
   .progress-bar { height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; min-width: 80px; border: 0.5px solid var(--border); }
   .progress-fill { height: 100%; border-radius: 3px; background: var(--blue); }
   .progress-fill.green { background: var(--green); }
-
-  /* BUTTONS */
-  .btn { padding: 5px 12px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; font-size: 12px; cursor: pointer; color: var(--text-primary); font-family: var(--font); transition: background .1s; }
-  .btn:hover { background: var(--bg-secondary); }
-
-  /* SEARCH BAR */
+  .chip { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 7px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); margin-right: 4px; border: 0.5px solid var(--border); }
   .search-bar { display: flex; gap: 8px; margin-bottom: 14px; }
   .search-bar input, .search-bar select { padding: 7px 10px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); font-size: 12px; background: var(--bg-primary); color: var(--text-primary); font-family: var(--font); }
   .search-bar input { flex: 1; }
   .search-bar input:focus, .search-bar select:focus { outline: none; border-color: var(--blue); }
-
-  /* TIMELINE */
-  .timeline { position: relative; padding-left: 20px; }
-  .tl-item { position: relative; padding-bottom: 14px; }
-  .tl-item::before { content: ''; position: absolute; left: -14px; top: 6px; width: 1px; height: 100%; background: var(--border); }
-  .tl-item:last-child::before { display: none; }
-  .tl-dot { position: absolute; left: -18px; top: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--blue); border: 2px solid var(--bg-primary); }
-  .tl-dot.green { background: var(--green); }
-  .tl-dot.red { background: var(--red); }
-  .tl-dot.amber { background: var(--amber); }
-  .tl-label { font-size: 12px; font-weight: 500; }
-  .tl-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
-
-  /* LOGS */
-  .log-line { font-family: var(--font-mono); font-size: 11px; padding: 3px 0; border-bottom: 0.5px solid var(--border); color: var(--text-secondary); line-height: 1.6; }
-  .log-line:last-child { border-bottom: none; }
-  .log-ok { color: var(--text-success); }
-  .log-err { color: var(--text-danger); }
-  .log-warn { color: var(--text-warning); }
-
-  /* CHIP */
-  .chip { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 7px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); margin-right: 4px; border: 0.5px solid var(--border); }
-
   .hidden { display: none !important; }
+  .ip-tag { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 8px; border-radius: var(--radius-md); background: var(--bg-info); color: var(--text-info); border: 0.5px solid rgba(133,183,235,0.3); margin-right: 4px; }
+  .section-sep { font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .06em; padding: 10px 0 6px; border-bottom: 0.5px solid var(--border); margin-bottom: 10px; }
 </style>
 </head>
 <body>
 <div class="shell">
 
-<!-- SIDEBAR -->
 <div class="sidebar">
   <div class="logo">
     <div class="logo-title">DocDockGo</div>
     <div class="logo-sub">Security Proxy</div>
   </div>
-  <div class="role-badge">
-    <div class="role-label">Dev</div>
-  </div>
-
+  <div class="role-badge"><div class="role-label">Dev</div></div>
   <div class="nav-section">Mon activité</div>
-  <div class="nav-item active" onclick="showPage('dev-pulls', this)"><div class="nav-dot blue"></div>Mes pulls</div>
-  <div class="nav-item" onclick="showPage('dev-decisions', this)"><div class="nav-dot amber"></div>Décisions scanner</div>
-  <div class="nav-item" onclick="showPage('dev-recent', this)"><div class="nav-dot green"></div>Images récentes</div>
-  <div class="nav-section">Outils</div>
-  <div class="nav-item" onclick="showPage('dev-search', this)"><div class="nav-dot"></div>Recherche</div>
-  <div class="nav-item" onclick="showPage('dev-logs', this)"><div class="nav-dot"></div>Logs proxy</div>
-
+  <div class="nav-item active" onclick="showPage('pulls', this)"><div class="nav-dot blue"></div>Mes pulls</div>
+  <div class="nav-item" onclick="showPage('search', this)"><div class="nav-dot"></div>Recherche</div>
   <div class="sidebar-footer">
     <div class="avatar">
       <div class="av-circle">DV</div>
       <div>
-        <div class="av-name">C. Dupont</div>
-        <div class="av-role">Dev</div>
+        <div class="av-name">{{DEV_USERNAME}}</div>
+        <div class="av-role">Dev — {{DEV_IPS}}</div>
       </div>
     </div>
-    <!-- <a> au lieu de <button> + fetch : navigation directe, pas de CORS -->
     <a href="/logout" class="logout-btn">Se déconnecter</a>
   </div>
 </div>
 
-<!-- MAIN -->
-<div class="main" id="main-content">
+<div class="main">
 
-<!-- PAGE: dev-pulls -->
-<div id="page-dev-pulls">
-  <div class="topbar"><div class="page-title">Mes pulls</div><span class="badge badge-blue">IP: 172.16.0.8</span></div>
+<!-- PAGE: pulls -->
+<div id="page-pulls">
+  <div class="topbar">
+    <div class="page-title">Mes pulls</div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span id="last-update" style="font-size:11px;color:var(--text-tertiary)">En direct</span>
+      <span class="badge badge-green">En ligne</span>
+    </div>
+  </div>
+
+  <!-- Pulls en cours -->
   <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="section-title" style="margin:0">Pulls en cours</div>
+      <span class="badge badge-blue" id="active-count-badge">{{ACTIVE_COUNT}} actifs</span>
+    </div>
     <table class="table">
-      <tr><th>Image</th><th>Démarré</th><th>Progression</th><th>Statut</th></tr>
-      <tr>
-        <td>python:3.12-slim</td><td style="color:var(--text-secondary)">il y a 2 min</td>
-        <td><div class="progress-bar" style="width:140px"><div class="progress-fill" style="width:45%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">5/11 digests</div></td>
-        <td><span class="badge badge-amber">PENDING</span></td>
-      </tr>
-      <tr>
-        <td>library/alpine:3.19</td><td style="color:var(--text-secondary)">il y a 12 min</td>
-        <td><div class="progress-bar" style="width:140px"><div class="progress-fill green" style="width:100%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">10/10 digests</div></td>
-        <td><span class="badge badge-green">ALLOW</span></td>
-      </tr>
-      {{SCAN_ROWS}}
+      <thead><tr><th>UUID</th><th>Image</th><th>IP</th><th>Arch</th><th>Progression</th><th>Statut</th></tr></thead>
+      <tbody id="active-pulls-tbody">{{ACTIVE_PULLS_ROWS}}</tbody>
+    </table>
+  </div>
+
+  <!-- Pulls terminés -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="section-title" style="margin:0">Historique de mes pulls</div>
+      <span class="badge badge-gray" id="history-count-badge">{{HISTORY_COUNT}} pulls</span>
+    </div>
+    <div class="search-bar" style="margin-bottom:10px">
+      <input type="text" id="history-filter" placeholder="Filtrer par image, IP..." oninput="filterTable('history-pulls-tbody', this.value)">
+      <select id="history-decision-filter" onchange="filterHistoryByDecision()">
+        <option value="">Toutes décisions</option>
+        <option value="ALLOW">ALLOW</option>
+        <option value="DENY">DENY</option>
+        <option value="PENDING">PENDING</option>
+      </select>
+    </div>
+    <table class="table">
+      <thead><tr><th>Horodatage</th><th>Image</th><th>IP</th><th>Client</th><th>Décision</th></tr></thead>
+      <tbody id="history-pulls-tbody">{{HISTORY_PULLS_ROWS}}</tbody>
     </table>
   </div>
 </div>
 
-<!-- PAGE: dev-decisions -->
-<div id="page-dev-decisions" class="hidden">
-  <div class="topbar"><div class="page-title">Décisions scanner</div></div>
-  <div class="card" style="margin-bottom:14px">
-    <div style="font-size:13px;font-weight:500;margin-bottom:12px">python:3.12-slim — pull b7d1…4412</div>
-    <div class="timeline">
-      <div class="tl-item"><div class="tl-dot blue"></div><div class="tl-label">scan_haut_niveau</div><div class="tl-sub">14:30:01 · Manifest list reçu · <span class="badge badge-amber" style="font-size:10px">PENDING</span></div></div>
-      <div class="tl-item"><div class="tl-dot blue"></div><div class="tl-label">scan_par_digest</div><div class="tl-sub">14:30:04 · sha256:a3f2…c8 · <span class="badge badge-amber" style="font-size:10px">PENDING</span></div></div>
-      <div class="tl-item"><div class="tl-dot green"></div><div class="tl-label">scan_par_digest</div><div class="tl-sub">14:30:07 · sha256:7b1d…12 · <span class="badge badge-green" style="font-size:10px">ALLOW</span></div></div>
-      <div class="tl-item" style="padding-bottom:0"><div class="tl-dot amber"></div><div class="tl-label">scan_final — en attente</div><div class="tl-sub">Pull non terminé</div></div>
-    </div>
-  </div>
+<!-- PAGE: search -->
+<div id="page-search" class="hidden">
+  <div class="topbar"><div class="page-title">Recherche</div></div>
   <div class="card">
-    <div class="section-title">Réponse IA — dernier scan</div>
-    <div style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px;font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);line-height:1.7">
-      {"pull_id":"b7d14412","state":"PENDING","reason":"Layer sha256:7b1d analysé — aucune CVE critique détectée. Config.json en attente d'analyse complète.","score":0.42}
+    <div style="position:relative;margin-bottom:14px">
+      <input type="text" id="search-input" placeholder="Nom d'image, tag ou IP..."
+        style="width:100%;padding:8px 12px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:13px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font);outline:none;"
+        oninput="searchAutocomplete(this.value)" autocomplete="off">
+      <div id="search-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-primary);border:0.5px solid var(--border-md);border-radius:var(--radius-md);z-index:100;max-height:280px;overflow-y:auto;margin-top:4px;"></div>
     </div>
+    <div id="search-result" style="display:none;">
+      <table class="table">
+        <thead><tr><th>Image</th><th>IP</th><th>Démarré</th><th>Décision</th></tr></thead>
+        <tbody id="search-result-tbody"></tbody>
+      </table>
+    </div>
+    <div id="search-empty" style="color:var(--text-tertiary);font-size:12px;display:none">Aucun résultat</div>
   </div>
 </div>
 
-<!-- PAGE: dev-recent -->
-<div id="page-dev-recent" class="hidden">
-  <div class="topbar"><div class="page-title">Images récemment pullées</div></div>
-  <div class="card">
-    <table class="table">
-      <tr><th>Image</th><th>Date</th><th>Durée</th><th>Source</th><th>Décision</th></tr>
-      <tr><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">aujourd'hui 14:30</td><td>4.2s</td><td><span class="badge badge-green">Cache</span></td><td><span class="badge badge-green">ALLOW</span></td></tr>
-      <tr><td>library/nginx:latest</td><td style="color:var(--text-secondary)">hier 16:42</td><td>18.7s</td><td><span class="badge badge-blue">Scanné</span></td><td><span class="badge badge-green">ALLOW</span></td></tr>
-      <tr><td>library/ubuntu:latest</td><td style="color:var(--text-secondary)">hier 09:11</td><td>2.1s</td><td><span class="badge badge-blue">Scanné</span></td><td><span class="badge badge-red">DENY</span></td></tr>
-    </table>
-  </div>
-</div>
-
-<!-- PAGE: dev-search -->
-<div id="page-dev-search" class="hidden">
-  <div class="topbar"><div class="page-title">Recherche d'image</div></div>
-  <div class="card">
-    <div style="display:flex;gap:8px;margin-bottom:14px">
-      <input type="text" placeholder="Ex: library/alpine:3.19" style="flex:1;padding:8px 12px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:13px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
-      <button class="btn">Rechercher</button>
-    </div>
-    <div style="padding:12px;background:var(--bg-secondary);border-radius:var(--radius-md)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-weight:500;font-size:13px">library/alpine:3.19</span>
-        <span class="badge badge-green">En cache</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">
-        <div><span style="color:var(--text-secondary)">Whitelist</span><br>Oui</div>
-        <div><span style="color:var(--text-secondary)">Dernier pull</span><br>aujourd'hui 14:30</div>
-        <div><span style="color:var(--text-secondary)">Décision finale</span><br><span class="badge badge-green" style="font-size:11px">ALLOW</span></div>
-        <div><span style="color:var(--text-secondary)">Pulls total</span><br>12</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- PAGE: dev-logs -->
-<div id="page-dev-logs" class="hidden">
-  <div class="topbar"><div class="page-title">Logs proxy</div><span class="badge badge-green">Live</span></div>
-  <div class="search-bar">
-    <input type="text" placeholder="Filtrer par uuid, registry...">
-    <select><option>Tous niveaux</option><option>INFO</option><option>WARN</option><option>ERROR</option></select>
-  </div>
-  <div class="card">
-    <div class="log-line log-ok">[14:30:01] [REQ] GET /v2/library/python/manifests/3.12-slim</div>
-    <div class="log-line">[14:30:01] [CLIENT] type détecté: podman</div>
-    <div class="log-line">[14:30:02] [PullContext] Contexte créé | uuid=b7d14412 registry=registry-1.docker.io</div>
-    <div class="log-line">[14:30:03] [ORCH] SCAN FINAL → envoi de tous les digests</div>
-    <div class="log-line log-warn">[14:30:04] [SCAN] PENDING — analyse en cours</div>
-    <div class="log-line">[14:30:05] [CTX] +1 active_requests=2 uuid=b7d14412</div>
-    <div class="log-line log-ok">[14:30:07] [CACHE] Digest trouvé en cache</div>
-    <div class="log-line log-err">[14:28:11] [SCAN] DENY — library/ubuntu:latest | ip=172.16.0.14</div>
-    <div class="log-line">[14:28:11] [BLACKLIST] registry-1.docker.io/library/ubuntu:latest ajouté</div>
-  </div>
-</div>
-
-</div>
-</div>
+</div><!-- fin .main -->
+</div><!-- fin .shell -->
 
 <script>
+// IPs autorisées pour ce dev (injectées par le serveur)
+const DEV_ALLOWED_IPS = {{DEV_ALLOWED_IPS_JSON}};
+
+// ── Navigation ────────────────────────────────────────────────────────────────
 function showPage(page, el) {
   document.querySelectorAll('[id^="page-"]').forEach(p => p.classList.add('hidden'));
   document.getElementById('page-' + page).classList.remove('hidden');
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   if (el) el.classList.add('active');
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function badgeClass(decision) {
+  return decision === 'ALLOW' ? 'badge-green' : decision === 'DENY' ? 'badge-red' : 'badge-amber';
+}
+
+function makeRowClickable(tr, uuid) {
+  tr.style.cursor = 'pointer';
+  tr.addEventListener('click', () => { window.location.href = '/dashboard/pull/' + uuid; });
+}
+
+// Vérifie si l'ip du pull appartient aux IPs autorisées de ce dev
+function isMyPull(ip) {
+  return DEV_ALLOWED_IPS.includes(ip);
+}
+
+// ── Filtre tableau ────────────────────────────────────────────────────────────
+function filterTable(tbodyId, query) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  const q = query.toLowerCase();
+  Array.from(tbody.rows).forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function filterHistoryByDecision() {
+  const decision = document.getElementById('history-decision-filter').value;
+  const query = document.getElementById('history-filter')?.value.toLowerCase() || '';
+  const tbody = document.getElementById('history-pulls-tbody');
+  Array.from(tbody.rows).forEach(row => {
+    const matchDecision = !decision || row.textContent.includes(decision);
+    const matchQuery = !query || row.textContent.toLowerCase().includes(query);
+    row.style.display = (matchDecision && matchQuery) ? '' : 'none';
+  });
+}
+
+// ── Rend cliquables les lignes existantes au chargement ───────────────────────
+document.querySelectorAll('#active-pulls-tbody tr[data-uuid], #history-pulls-tbody tr[data-uuid]').forEach(tr => {
+  makeRowClickable(tr, tr.dataset.uuid);
+});
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/dashboard/events');
+  es.onopen = () => console.log('[SSE DEV] Connecté');
+
+  es.onmessage = (event) => {
+    let payload;
+    try { payload = JSON.parse(event.data); } catch { return; }
+    const { table, action, data } = payload;
+
+    // Mise à jour du timestamp
+    const lu = document.getElementById('last-update');
+    if (lu) lu.textContent = 'Mis à jour à ' + new Date().toLocaleTimeString();
+
+    if (table === 'pulls') handlePullsUpdate(action, data);
+  };
+
+  es.onerror = () => { es.close(); setTimeout(connectSSE, 3010); };
+}
+
+// ── Gestion des mises à jour de pulls ────────────────────────────────────────
+function handlePullsUpdate(action, data) {
+  // Filtrer : on n'affiche que les pulls dont l'IP appartient à ce dev
+  if (!isMyPull(data.ip_client)) return;
+
+  const activeTbody  = document.getElementById('active-pulls-tbody');
+  const historyTbody = document.getElementById('history-pulls-tbody');
+  const uuid = data.uuid || '';
+  const decision = data.decision_final || 'PENDING';
+  const badge = badgeClass(decision);
+  const uuidShort = uuid.substring(0, 8);
+
+  // Pull terminé → retirer des actifs, ajouter à l'historique
+  if (data.scan_completed === true || data.scan_completed === 'true') {
+    if (activeTbody) {
+      const row = activeTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (row) row.remove();
+      updateActiveBadge();
+    }
+
+    if (historyTbody) {
+      // Évite les doublons
+      if (!historyTbody.querySelector(`tr[data-uuid="${uuid}"]`)) {
+        const tr = document.createElement('tr');
+        tr.dataset.uuid = uuid;
+        tr.innerHTML = `
+          <td style="color:var(--text-secondary)">${new Date().toLocaleString()}</td>
+          <td>${data.repository}:${data.tag || 'latest'}</td>
+          <td style="color:var(--text-secondary)">${data.ip_client}</td>
+          <td><span class="chip">${data.client_type || 'unknown'}</span></td>
+          <td><span class="badge ${badge}">${decision}</span></td>`;
+        makeRowClickable(tr, uuid);
+        historyTbody.insertAdjacentElement('afterbegin', tr);
+        // Retire le message vide si présent
+        const empty = historyTbody.querySelector('td[colspan]');
+        if (empty) empty.parentElement.remove();
+        updateHistoryBadge();
+      }
+    }
+    return;
+  }
+
+  if (action === 'DELETE') {
+    if (activeTbody) {
+      const row = activeTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (row) { row.remove(); updateActiveBadge(); }
+    }
+    return;
+  }
+
+  // INSERT ou UPDATE dans les pulls actifs
+  if (activeTbody) {
+    const rowHtml = `
+      <tr data-uuid="${uuid}" style="cursor:pointer">
+        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">${uuidShort}...</td>
+        <td>${data.repository}:${data.tag || 'latest'}</td>
+        <td style="color:var(--text-secondary)">${data.ip_client}</td>
+        <td><span class="chip">${data.arch || 'unknown'}</span></td>
+        <td><div class="progress-bar" style="width:80px"><div class="progress-fill" style="width:50%"></div></div></td>
+        <td><span class="badge ${badge}">${decision}</span></td>
+      </tr>`;
+
+    const existing = activeTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+    if (action === 'INSERT' && !existing) {
+      activeTbody.insertAdjacentHTML('afterbegin', rowHtml);
+      const tr = activeTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (tr) makeRowClickable(tr, uuid);
+      // Retire le message vide si présent
+      const empty = activeTbody.querySelector('td[colspan]');
+      if (empty) empty.parentElement.remove();
+      updateActiveBadge();
+    } else if (action === 'UPDATE' && existing) {
+      existing.outerHTML = rowHtml;
+      const tr = activeTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (tr) makeRowClickable(tr, uuid);
+    }
+  }
+}
+
+function updateActiveBadge() {
+  const tbody = document.getElementById('active-pulls-tbody');
+  const badge = document.getElementById('active-count-badge');
+  if (!tbody || !badge) return;
+  const count = tbody.querySelectorAll('tr[data-uuid]').length;
+  badge.textContent = count + ' actifs';
+}
+
+function updateHistoryBadge() {
+  const tbody = document.getElementById('history-pulls-tbody');
+  const badge = document.getElementById('history-count-badge');
+  if (!tbody || !badge) return;
+  const count = tbody.querySelectorAll('tr[data-uuid]').length;
+  badge.textContent = count + ' pulls';
+}
+
+// ── Recherche avec autocomplétion (filtrée sur les IPs du dev) ────────────────
+let searchTimer = null;
+
+function searchAutocomplete(query) {
+  clearTimeout(searchTimer);
+  const suggestions = document.getElementById('search-suggestions');
+  const result = document.getElementById('search-result');
+  const empty = document.getElementById('search-empty');
+
+  if (query.length < 2) {
+    suggestions.style.display = 'none';
+    result.style.display = 'none';
+    if (empty) empty.style.display = 'none';
+    return;
+  }
+
+  searchTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch('/dashboard/api/search/dev?q=' + encodeURIComponent(query));
+      const results = await resp.json();
+
+      if (!results.length) {
+        suggestions.style.display = 'none';
+        result.style.display = 'none';
+        if (empty) empty.style.display = 'block';
+        return;
+      }
+
+      if (empty) empty.style.display = 'none';
+
+      suggestions.innerHTML = results.map(r => `
+        <div onclick="selectResult('${r.uuid}', '${r.repository}:${r.tag}')"
+          style="padding:8px 12px;cursor:pointer;border-bottom:0.5px solid var(--border);font-size:12px;"
+          onmouseover="this.style.background='var(--bg-secondary)'"
+          onmouseout="this.style.background=''">
+          <span style="font-weight:500">${r.repository}:${r.tag}</span>
+          <span style="color:var(--text-tertiary);margin-left:8px">${r.ip_client}</span>
+          <span class="badge ${badgeClass(r.decision)}" style="float:right;margin-top:-1px">${r.decision}</span>
+        </div>`).join('');
+      suggestions.style.display = 'block';
+
+      const tbody = document.getElementById('search-result-tbody');
+      tbody.innerHTML = results.map(r => `
+        <tr data-uuid="${r.uuid}" style="cursor:pointer" onclick="window.location.href='/dashboard/pull/${r.uuid}'">
+          <td>${r.repository}:${r.tag}</td>
+          <td style="color:var(--text-secondary)">${r.ip_client}</td>
+          <td style="color:var(--text-secondary)">${r.started_at}</td>
+          <td><span class="badge ${badgeClass(r.decision)}">${r.decision}</span></td>
+        </tr>`).join('');
+      result.style.display = 'block';
+
+    } catch(e) { console.error('[SEARCH DEV]', e); }
+  }, 300);
+}
+
+function selectResult(uuid, label) {
+  document.getElementById('search-input').value = label;
+  document.getElementById('search-suggestions').style.display = 'none';
+  window.location.href = '/dashboard/pull/' + uuid;
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#search-input') && !e.target.closest('#search-suggestions')) {
+    const s = document.getElementById('search-suggestions');
+    if (s) s.style.display = 'none';
+  }
+});
+
+connectSSE();
 </script>
 </body>
 </html>

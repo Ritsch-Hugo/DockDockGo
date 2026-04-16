@@ -16,8 +16,8 @@ use dotenvy::dotenv;
 
 const ZITADEL_ISSUER: &str = "https://docdockgo-kgfmnj.eu1.zitadel.cloud";
 const CLIENT_ID: &str = "365975639251042712";
-const REDIRECT_URI: &str = "http://localhost:3000/callback";
-const POST_LOGOUT_REDIRECT_URI: &str = "http://localhost:3000/logged-out";
+const REDIRECT_URI: &str = "http://localhost:3010/callback";
+const POST_LOGOUT_REDIRECT_URI: &str = "http://localhost:3010/logged-out";
 
 
 #[derive(Clone)]
@@ -154,12 +154,14 @@ pub async fn callback_handler(
         }
     };
 
-    //println!("[AUTH] Role attribue : {}", role);
+    println!("[AUTH] Role attribue : {}", role);
 
     // --- DÉBUT AJOUT BASE DE DONNÉES ---
 
     // 1. Récupérer les IPs du .env
+    dotenvy::dotenv().ok();
     let allowed_ips_raw = std::env::var("ALLOWED_IPS").unwrap_or_default();
+    println!("[DEBUG] IPs lues depuis l'env : '{}'", allowed_ips_raw);
     let allowed_ips: Vec<String> = allowed_ips_raw
         .split(',')
         .map(|s| s.trim().to_string())
@@ -216,6 +218,12 @@ pub async fn callback_handler(
         .parse()
         .unwrap(),
     );
+    headers.append(
+    header::SET_COOKIE,
+    format!("sub={}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800", claims.sub)
+        .parse()
+        .unwrap(),
+    );
 
     (headers, Redirect::to(&format!("/dashboard/{}", role))).into_response()
 }
@@ -239,6 +247,12 @@ pub async fn logout(headers: HeaderMap) -> Response {
     resp_headers.append(
         header::SET_COOKIE,
         "id_token=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+            .parse()
+            .unwrap(),
+    );
+    resp_headers.append(
+        header::SET_COOKIE,
+        "sub=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
             .parse()
             .unwrap(),
     );

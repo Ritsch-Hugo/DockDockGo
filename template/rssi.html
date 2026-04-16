@@ -6,142 +6,93 @@
 <title>DocDockGo — Dashboard RSSI</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
-    --bg-primary: #1c1c1a;
-    --bg-secondary: #252523;
-    --bg-tertiary: #161614;
-    --bg-info: #0c447c;
-    --bg-success: #27500a;
-    --bg-warning: #633806;
-    --bg-danger: #791f1f;
-    --text-primary: #e8e6e0;
-    --text-secondary: #a09e97;
-    --text-tertiary: #5f5e5a;
-    --text-info: #85b7eb;
-    --text-success: #c0dd97;
-    --text-warning: #fac775;
-    --text-danger: #f09595;
-    --border: rgba(255,255,255,0.08);
-    --border-md: rgba(255,255,255,0.15);
-    --radius-md: 8px;
-    --radius-lg: 12px;
+    --bg-primary: #1c1c1a; --bg-secondary: #252523; --bg-tertiary: #161614;
+    --bg-info: #0c447c; --bg-success: #27500a; --bg-warning: #633806; --bg-danger: #791f1f;
+    --text-primary: #e8e6e0; --text-secondary: #a09e97; --text-tertiary: #5f5e5a;
+    --text-info: #85b7eb; --text-success: #c0dd97; --text-warning: #fac775; --text-danger: #f09595;
+    --border: rgba(255,255,255,0.08); --border-md: rgba(255,255,255,0.15);
+    --radius-md: 8px; --radius-lg: 12px;
     --font: 'Segoe UI', system-ui, sans-serif;
     --font-mono: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
-    --blue: #378ADD;
-    --green: #639922;
-    --amber: #BA7517;
-    --red: #E24B4A;
+    --blue: #378ADD; --green: #639922; --amber: #BA7517; --red: #E24B4A;
   }
-
   body { font-family: var(--font); font-size: 14px; color: var(--text-primary); background: var(--bg-tertiary); height: 100vh; overflow: hidden; }
   .shell { display: flex; height: 100vh; }
-
-  /* SIDEBAR */
   .sidebar { width: 210px; min-width: 210px; background: var(--bg-primary); border-right: 0.5px solid var(--border); display: flex; flex-direction: column; padding: 16px 0; }
   .logo { padding: 0 16px 14px; border-bottom: 0.5px solid var(--border); margin-bottom: 8px; }
-  .logo-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+  .logo-title { font-size: 15px; font-weight: 600; }
   .logo-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
   .role-badge { display: flex; padding: 8px 16px; margin-bottom: 4px; }
-  .role-label { flex: 1; padding: 5px 0; font-size: 11px; border: 0.5px solid #b5d4f4; border-radius: var(--radius-md); background: var(--bg-info); color: var(--text-info); text-align: center; font-family: var(--font); }
+  .role-label { flex: 1; padding: 5px 0; font-size: 11px; border: 0.5px solid #b5d4f4; border-radius: var(--radius-md); background: var(--bg-info); color: var(--text-info); text-align: center; }
   .nav-section { font-size: 10px; color: var(--text-tertiary); padding: 10px 16px 4px; text-transform: uppercase; letter-spacing: .06em; }
   .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 16px; cursor: pointer; color: var(--text-secondary); font-size: 13px; border-left: 2px solid transparent; transition: all .1s; }
   .nav-item:hover { background: var(--bg-secondary); color: var(--text-primary); }
   .nav-item.active { background: var(--bg-secondary); color: var(--text-primary); border-left: 2px solid var(--blue); }
   .nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-md); flex-shrink: 0; }
-  .nav-dot.green { background: var(--green); }
-  .nav-dot.red { background: var(--red); }
-  .nav-dot.amber { background: var(--amber); }
-  .nav-dot.blue { background: var(--blue); }
+  .nav-dot.green { background: var(--green); } .nav-dot.red { background: var(--red); }
+  .nav-dot.amber { background: var(--amber); } .nav-dot.blue { background: var(--blue); }
   .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 0.5px solid var(--border); }
   .avatar { display: flex; align-items: center; gap: 8px; }
   .av-circle { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-info); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-info); flex-shrink: 0; }
-  .av-name { font-size: 12px; font-weight: 500; }
-  .av-role { font-size: 10px; color: var(--text-tertiary); }
+  .av-name { font-size: 12px; font-weight: 500; } .av-role { font-size: 10px; color: var(--text-tertiary); }
   .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; display: block; text-align: center; text-decoration: none; }
   .logout-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
-
-  /* MAIN */
   .main { flex: 1; overflow-y: auto; padding: 22px 26px; background: var(--bg-tertiary); }
   .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
   .page-title { font-size: 18px; font-weight: 500; }
-
-  /* BADGES */
   .badge { display: inline-flex; align-items: center; font-size: 11px; padding: 3px 8px; border-radius: var(--radius-md); font-weight: 500; }
   .badge-green { background: var(--bg-success); color: var(--text-success); }
   .badge-red { background: var(--bg-danger); color: var(--text-danger); }
   .badge-amber { background: var(--bg-warning); color: var(--text-warning); }
   .badge-blue { background: var(--bg-info); color: var(--text-info); }
   .badge-gray { background: var(--bg-secondary); color: var(--text-secondary); }
-
-  /* METRICS */
   .metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 18px; }
   .metric-card { background: var(--bg-secondary); border-radius: var(--radius-md); padding: 12px 14px; }
   .metric-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
   .metric-value { font-size: 24px; font-weight: 500; }
-  .metric-value.green { color: var(--text-success); }
-  .metric-value.red { color: var(--text-danger); }
-  .metric-value.amber { color: var(--text-warning); }
-  .metric-value.blue { color: var(--text-info); }
-
-  /* CARDS */
+  .metric-value.green { color: var(--text-success); } .metric-value.red { color: var(--text-danger); }
+  .metric-value.amber { color: var(--text-warning); } .metric-value.blue { color: var(--text-info); }
   .card { background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 14px; }
   .section-title { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
-
-  /* TABLE */
   .table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .table th { text-align: left; color: var(--text-secondary); font-weight: 500; padding: 0 8px 8px; border-bottom: 0.5px solid var(--border); }
   .table td { padding: 8px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
   .table tr:last-child td { border-bottom: none; }
   .table tr:hover td { background: var(--bg-secondary); }
-
-  /* PROGRESS */
   .progress-bar { height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; min-width: 80px; border: 0.5px solid var(--border); }
   .progress-fill { height: 100%; border-radius: 3px; background: var(--blue); }
   .progress-fill.green { background: var(--green); }
-
-  /* ALERTS */
-  .alert-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--border); }
+  .alert-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--border); cursor: pointer; }
   .alert-row:last-child { border-bottom: none; }
+  .alert-row:hover { background: var(--bg-secondary); border-radius: var(--radius-md); padding-left: 6px; }
   .alert-icon { width: 20px; height: 20px; border-radius: 50%; background: var(--bg-danger); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .alert-icon.amber { background: var(--bg-warning); }
   .alert-icon-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
-  .alert-text { font-size: 12px; line-height: 1.5; }
-  .alert-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
-
-  /* BUTTONS */
+  .alert-icon-dot.amber { background: var(--amber); }
+  .alert-text { font-size: 12px; line-height: 1.5; } .alert-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
   .btn { padding: 5px 12px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; font-size: 12px; cursor: pointer; color: var(--text-primary); font-family: var(--font); transition: background .1s; }
   .btn:hover { background: var(--bg-secondary); }
-  .btn-danger { border-color: #f09595; color: var(--text-danger); }
-  .btn-danger:hover { background: var(--bg-danger); }
-  .btn-success { border-color: #c0dd97; color: var(--text-success); }
-  .btn-success:hover { background: var(--bg-success); }
-
-  /* SEARCH BAR */
+  .btn-danger { border-color: #f09595; color: var(--text-danger); } .btn-danger:hover { background: var(--bg-danger); }
+  .btn-success { border-color: #c0dd97; color: var(--text-success); } .btn-success:hover { background: var(--bg-success); }
   .search-bar { display: flex; gap: 8px; margin-bottom: 14px; }
   .search-bar input, .search-bar select { padding: 7px 10px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); font-size: 12px; background: var(--bg-primary); color: var(--text-primary); font-family: var(--font); }
   .search-bar input { flex: 1; }
   .search-bar input:focus, .search-bar select:focus { outline: none; border-color: var(--blue); }
-
-  /* CHIP */
   .chip { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 7px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); margin-right: 4px; border: 0.5px solid var(--border); }
-
   .hidden { display: none !important; }
 </style>
 </head>
 <body>
 <div class="shell">
 
-<!-- SIDEBAR -->
 <div class="sidebar">
   <div class="logo">
     <div class="logo-title">DocDockGo</div>
     <div class="logo-sub">Security Proxy</div>
   </div>
-  <div class="role-badge">
-    <div class="role-label">RSSI</div>
-  </div>
-
+  <div class="role-badge"><div class="role-label">RSSI</div></div>
   <div class="nav-section">Supervision</div>
   <div class="nav-item active" onclick="showPage('overview', this)"><div class="nav-dot green"></div>Vue globale</div>
   <div class="nav-item" onclick="showPage('pulls', this)"><div class="nav-dot blue"></div>Pulls en cours</div>
@@ -151,158 +102,120 @@
   <div class="nav-item" onclick="showPage('lists', this)"><div class="nav-dot red"></div>White / Blacklist</div>
   <div class="nav-item" onclick="showPage('history', this)"><div class="nav-dot"></div>Historique</div>
   <div class="nav-item" onclick="showPage('search', this)"><div class="nav-dot"></div>Recherche</div>
-
   <div class="sidebar-footer">
     <div class="avatar">
       <div class="av-circle">RS</div>
-      <div>
-        <div class="av-name">A. Martin</div>
-        <div class="av-role">RSSI</div>
-      </div>
+      <div><div class="av-name">RSSI</div><div class="av-role">Administrateur</div></div>
     </div>
-    <!-- CHANGEMENT : <a> au lieu de <button> + fetch.
-         window.location.href = navigation directe = pas de CORS -->
     <a href="/logout" class="logout-btn">Se déconnecter</a>
   </div>
 </div>
 
-<!-- MAIN -->
-<div class="main" id="main-content">
+<div class="main">
 
 <!-- PAGE: overview -->
 <div id="page-overview">
   <div class="topbar">
     <div class="page-title">Vue globale</div>
     <div style="display:flex;align-items:center;gap:8px">
-      <span style="font-size:11px;color:var(--text-tertiary)">Mise à jour : il y a 2s</span>
+      <span id="last-update" style="font-size:11px;color:var(--text-tertiary)">En direct</span>
       <span class="badge badge-green">En ligne</span>
     </div>
   </div>
   <div class="metrics">
-    <div class="metric-card"><div class="metric-label">Pulls en cours</div><div class="metric-value blue">7</div></div>
-    <div class="metric-card"><div class="metric-label">Bloqués aujourd'hui</div><div class="metric-value red">3</div></div>
-    <div class="metric-card"><div class="metric-label">En quarantaine</div><div class="metric-value amber">12</div></div>
-    <div class="metric-card"><div class="metric-label">Images en cache</div><div class="metric-value green">48</div></div>
+    <div class="metric-card"><div class="metric-label">Pulls en cours</div><div class="metric-value blue" id="metric-pulls">{{PULLS_ACTIFS}}</div></div>
+    <div class="metric-card"><div class="metric-label">Bloqués aujourd'hui</div><div class="metric-value red" id="metric-deny">{{BLOQUES_TODAY}}</div></div>
+    <div class="metric-card"><div class="metric-label">Digests en quarantaine</div><div class="metric-value amber" id="metric-quarantine">{{EN_QUARANTAINE}}</div></div>
+    <div class="metric-card"><div class="metric-label">Digests en cache</div><div class="metric-value green" id="metric-cache">{{EN_CACHE}}</div></div>
   </div>
   <div class="two-col">
     <div class="card">
-      <div class="section-title">Alertes actives</div>
-      <div class="alert-row">
-        <div class="alert-icon"><div class="alert-icon-dot"></div></div>
-        <div><div class="alert-text"><strong>DENY</strong> — library/ubuntu:latest</div><div class="alert-text" style="color:var(--text-secondary)">172.16.0.14 · registry-1.docker.io</div><div class="alert-time">Il y a 3 min</div></div>
-      </div>
-      <div class="alert-row">
-        <div class="alert-icon"><div class="alert-icon-dot"></div></div>
-        <div><div class="alert-text"><strong>DENY</strong> — nginx:1.25-alpine</div><div class="alert-text" style="color:var(--text-secondary)">172.16.0.22 · registry-1.docker.io</div><div class="alert-time">Il y a 18 min</div></div>
-      </div>
-      <div class="alert-row">
-        <div class="alert-icon" style="background:var(--bg-warning)"><div class="alert-icon-dot" style="background:var(--amber)"></div></div>
-        <div><div class="alert-text"><strong>PENDING</strong> — python:3.12-slim</div><div class="alert-text" style="color:var(--text-secondary)">172.16.0.8 · registry-1.docker.io</div><div class="alert-time">Il y a 42 min</div></div>
-      </div>
+      <!-- FIX: Alertes actives affiche maintenant aussi PENDING -->
+      <div class="section-title">Alertes actives (DENY / PENDING récents)</div>
+      <div id="alerts-container" style="max-height:180px;overflow-y:auto;">{{ALERTS_ROWS}}</div>
     </div>
     <div class="card">
       <div class="section-title">Décisions — 24 dernières heures</div>
       <div style="display:flex;flex-direction:column;gap:10px;padding-top:4px">
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>ALLOW</span><span style="color:var(--text-success);font-weight:500">64</span></div>
-          <div class="progress-bar"><div class="progress-fill green" style="width:74%"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span>ALLOW</span><span style="color:var(--text-success);font-weight:500" id="allow-count">{{ALLOW_24H}}</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill green" id="allow-bar" style="width:{{ALLOW_PCT}}%"></div></div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>PENDING</span><span style="color:var(--text-warning);font-weight:500">19</span></div>
-          <div class="progress-bar"><div class="progress-fill" style="width:22%;background:var(--amber)"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span>PENDING</span><span style="color:var(--text-warning);font-weight:500" id="pending-count">{{PENDING_24H}}</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" id="pending-bar" style="width:{{PENDING_PCT}}%;background:var(--amber)"></div></div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>DENY</span><span style="color:var(--text-danger);font-weight:500">3</span></div>
-          <div class="progress-bar"><div class="progress-fill" style="width:4%;background:var(--red)"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span>DENY</span><span style="color:var(--text-danger);font-weight:500" id="deny-count">{{DENY_24H}}</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" id="deny-bar" style="width:{{DENY_PCT}}%;background:var(--red)"></div></div>
         </div>
-      </div>
-      <div style="margin-top:12px;padding-top:10px;border-top:0.5px solid var(--border);display:flex;gap:8px;flex-wrap:wrap">
-        <span class="chip">86 pulls total</span>
-        <span class="chip">3 depuis le cache</span>
-        <span class="chip">5 nouvelles images</span>
       </div>
     </div>
   </div>
   <div class="card">
     <div class="section-title">Pulls actifs</div>
+    <div style="max-height:220px;overflow-y:auto;">
     <table class="table">
       <tr><th>Image</th><th>IP client</th><th>Client</th><th>Progression</th><th>Statut</th></tr>
-      <tr><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">172.16.0.5</td><td><span class="chip">docker</span></td><td><div class="progress-bar" style="width:100px"><div class="progress-fill green" style="width:80%"></div></div></td><td><span class="badge badge-green">ALLOW</span></td></tr>
-      <tr><td>python:3.12-slim</td><td style="color:var(--text-secondary)">172.16.0.8</td><td><span class="chip">podman</span></td><td><div class="progress-bar" style="width:100px"><div class="progress-fill" style="width:45%"></div></div></td><td><span class="badge badge-amber">PENDING</span></td></tr>
-      <tr><td>node:20-bookworm</td><td style="color:var(--text-secondary)">172.16.0.12</td><td><span class="chip">docker</span></td><td><div class="progress-bar" style="width:100px"><div class="progress-fill" style="width:20%"></div></div></td><td><span class="badge badge-amber">PENDING</span></td></tr>
+      <tbody id="overview-pulls-tbody">{{OVERVIEW_PULLS}}</tbody>
     </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="section-title">Flux d'activité</div>
+    <div id="live-feed" style="max-height:150px;overflow-y:auto;font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column-reverse;gap:4px;">
+      <div style="color:var(--text-tertiary)">&gt; En attente d'événements...</div>
+    </div>
   </div>
 </div>
 
 <!-- PAGE: pulls -->
 <div id="page-pulls" class="hidden">
-  <div class="topbar"><div class="page-title">Pulls en cours</div><span class="badge badge-blue">7 actifs</span></div>
+  <div class="topbar">
+    <div class="page-title">Pulls en cours</div>
+    <span class="badge badge-blue" id="pulls-count-badge">{{PULLS_ACTIFS}} actifs</span>
+  </div>
   <div class="card">
     <table class="table">
-      <tr><th>UUID</th><th>Image</th><th>IP</th><th>OS/Arch</th><th>Digests</th><th>Statut</th><th>Action</th></tr>
-      <tr>
-        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">a3f2…c891</td>
-        <td>library/alpine:3.19</td><td style="color:var(--text-secondary)">172.16.0.5</td>
-        <td><span class="chip">linux/amd64</span></td>
-        <td><div class="progress-bar" style="width:80px"><div class="progress-fill green" style="width:80%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">8/10</div></td>
-        <td><span class="badge badge-green">ALLOW</span></td>
-        <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Forcer DENY</button></td>
-      </tr>
-      <tr>
-        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">b7d1…4412</td>
-        <td>python:3.12-slim</td><td style="color:var(--text-secondary)">172.16.0.8</td>
-        <td><span class="chip">linux/amd64</span></td>
-        <td><div class="progress-bar" style="width:80px"><div class="progress-fill" style="width:45%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">5/11</div></td>
-        <td><span class="badge badge-amber">PENDING</span></td>
-        <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Forcer DENY</button></td>
-      </tr>
-      <tr>
-        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">f9c3…7730</td>
-        <td>node:20-bookworm</td><td style="color:var(--text-secondary)">172.16.0.12</td>
-        <td><span class="chip">linux/amd64</span></td>
-        <td><div class="progress-bar" style="width:80px"><div class="progress-fill" style="width:20%"></div></div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">2/10</div></td>
-        <td><span class="badge badge-amber">PENDING</span></td>
-        <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Forcer DENY</button></td>
-      </tr>
+      <thead><tr><th>UUID</th><th>Image</th><th>IP</th><th>OS/Arch</th><th>Progression</th><th>Statut</th><th>Action</th></tr></thead>
+      <tbody id="pulls-tbody">{{PULLS_ROWS}}</tbody>
     </table>
   </div>
 </div>
 
 <!-- PAGE: quarantine -->
 <div id="page-quarantine" class="hidden">
-  <div class="topbar"><div class="page-title">Quarantaine</div><span class="badge badge-amber">12 images</span></div>
+  <div class="topbar">
+    <div class="page-title">Quarantaine</div>
+    <span class="badge badge-amber" id="quarantine-count-badge">{{QUARANTINE_COUNT}} fichiers</span>
+  </div>
   <div class="card">
     <table class="table">
-      <tr><th>Image</th><th>Registry</th><th>Taille</th><th>Depuis</th><th>Digests</th><th>Actions</th></tr>
-      <tr>
-        <td>library/ubuntu:22.04</td><td style="color:var(--text-secondary)">registry-1.docker.io</td>
-        <td>78 MB</td><td style="color:var(--text-secondary)">14 min</td>
-        <td><span class="chip">3 manifests</span><span class="chip">8 blobs</span></td>
-        <td><button class="btn btn-success" style="font-size:11px;padding:3px 8px;margin-right:4px">Valider</button><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Rejeter</button></td>
-      </tr>
-      <tr>
-        <td>redis:7-alpine</td><td style="color:var(--text-secondary)">registry-1.docker.io</td>
-        <td>12 MB</td><td style="color:var(--text-secondary)">31 min</td>
-        <td><span class="chip">2 manifests</span><span class="chip">4 blobs</span></td>
-        <td><button class="btn btn-success" style="font-size:11px;padding:3px 8px;margin-right:4px">Valider</button><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Rejeter</button></td>
-      </tr>
+      <thead><tr><th>Digest</th><th>Repository</th><th>Registry</th><th>Taille</th><th>Depuis</th><th>Type</th><th>Actions</th></tr></thead>
+      <tbody id="quarantine-tbody">{{QUARANTINE_ROWS}}</tbody>
     </table>
   </div>
 </div>
 
 <!-- PAGE: cache -->
 <div id="page-cache" class="hidden">
-  <div class="topbar"><div class="page-title">Cache</div><span class="badge badge-green">48 images validées</span></div>
+  <div class="topbar">
+    <div class="page-title">Cache</div>
+    <span class="badge badge-green" id="cache-count-badge">{{CACHE_COUNT}} fichiers</span>
+  </div>
   <div class="search-bar">
-    <input type="text" placeholder="Filtrer par image...">
-    <select><option>Tous les registres</option><option>registry-1.docker.io</option><option>ghcr.io</option></select>
+    <input type="text" id="cache-filter" placeholder="Filtrer par image..." oninput="filterTable('cache-tbody', this.value)">
   </div>
   <div class="card">
     <table class="table">
-      <tr><th>Image</th><th>Registry</th><th>Taille</th><th>Mis en cache le</th><th>Actions</th></tr>
-      <tr><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">registry-1.docker.io</td><td>8 MB</td><td style="color:var(--text-secondary)">aujourd'hui 09:14</td><td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Supprimer</button></td></tr>
-      <tr><td>library/nginx:latest</td><td style="color:var(--text-secondary)">registry-1.docker.io</td><td>54 MB</td><td style="color:var(--text-secondary)">hier 16:42</td><td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Supprimer</button></td></tr>
-      <tr><td>library/postgres:16</td><td style="color:var(--text-secondary)">registry-1.docker.io</td><td>132 MB</td><td style="color:var(--text-secondary)">hier 11:03</td><td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Supprimer</button></td></tr>
+      <thead><tr><th>Digest</th><th>Repository</th><th>Registry</th><th>Taille</th><th>Ajouté le</th><th>Actions</th></tr></thead>
+      <tbody id="cache-tbody">{{CACHE_ROWS}}</tbody>
     </table>
   </div>
 </div>
@@ -314,33 +227,33 @@
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div class="section-title" style="margin:0">Whitelist</div>
-        <span class="badge badge-green">24 entrées</span>
+        <span class="badge badge-green" id="wl-count-badge">{{WL_COUNT}} entrées</span>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:10px">
-        <input type="text" placeholder="registry/repo:tag" style="flex:1;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
-        <button class="btn btn-success" style="font-size:11px">Ajouter</button>
+        <input type="text" id="wl-registry" placeholder="registry" style="width:120px;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <input type="text" id="wl-repository" placeholder="repository" style="flex:1;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <input type="text" id="wl-tag" placeholder="tag" style="width:70px;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <button class="btn btn-success" style="font-size:11px" onclick="addToList('whitelist')">Ajouter</button>
       </div>
       <table class="table">
-        <tr><th>Image</th><th>Ajouté le</th><th></th></tr>
-        <tr><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">2024-01-15</td><td><button class="btn" style="font-size:10px;padding:2px 6px">Retirer</button></td></tr>
-        <tr><td>library/nginx:latest</td><td style="color:var(--text-secondary)">2024-01-14</td><td><button class="btn" style="font-size:10px;padding:2px 6px">Retirer</button></td></tr>
-        <tr><td>library/postgres:16</td><td style="color:var(--text-secondary)">2024-01-12</td><td><button class="btn" style="font-size:10px;padding:2px 6px">Retirer</button></td></tr>
+        <thead><tr><th>Image</th><th>Ajouté le</th><th></th></tr></thead>
+        <tbody id="wl-tbody">{{WL_ROWS}}</tbody>
       </table>
     </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div class="section-title" style="margin:0">Blacklist</div>
-        <span class="badge badge-red">3 entrées</span>
+        <span class="badge badge-red" id="bl-count-badge">{{BL_COUNT}} entrées</span>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:10px">
-        <input type="text" placeholder="registry/repo:tag" style="flex:1;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
-        <button class="btn btn-danger" style="font-size:11px">Ajouter</button>
+        <input type="text" id="bl-registry" placeholder="registry" style="width:120px;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <input type="text" id="bl-repository" placeholder="repository" style="flex:1;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <input type="text" id="bl-tag" placeholder="tag" style="width:70px;padding:5px 8px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
+        <button class="btn btn-danger" style="font-size:11px" onclick="addToList('blacklist')">Ajouter</button>
       </div>
       <table class="table">
-        <tr><th>Image</th><th>Bloquée le</th><th></th></tr>
-        <tr><td>library/ubuntu:latest</td><td style="color:var(--text-secondary)">2024-01-16</td><td><button class="btn btn-success" style="font-size:10px;padding:2px 6px">→ WL</button></td></tr>
-        <tr><td>nginx:1.25-alpine</td><td style="color:var(--text-secondary)">2024-01-16</td><td><button class="btn btn-success" style="font-size:10px;padding:2px 6px">→ WL</button></td></tr>
-        <tr><td>malicious/img:v2</td><td style="color:var(--text-secondary)">2024-01-10</td><td><button class="btn btn-success" style="font-size:10px;padding:2px 6px">→ WL</button></td></tr>
+        <thead><tr><th>Image</th><th>Bloquée le</th><th></th></tr></thead>
+        <tbody id="bl-tbody">{{BL_ROWS}}</tbody>
       </table>
     </div>
   </div>
@@ -348,19 +261,23 @@
 
 <!-- PAGE: history -->
 <div id="page-history" class="hidden">
-  <div class="topbar"><div class="page-title">Historique</div><button class="btn" style="font-size:12px">Export CSV</button></div>
+  <div class="topbar">
+    <div class="page-title">Historique</div>
+    <button class="btn" style="font-size:12px">Export CSV</button>
+  </div>
   <div class="search-bar">
-    <input type="text" placeholder="Rechercher une image...">
-    <select><option>Toutes décisions</option><option>ALLOW</option><option>DENY</option><option>PENDING</option></select>
-    <select><option>Tous registres</option><option>registry-1.docker.io</option><option>ghcr.io</option></select>
+    <input type="text" id="history-filter" placeholder="Rechercher une image..." oninput="filterTable('history-tbody', this.value)">
+    <select id="history-decision-filter" onchange="filterHistoryByDecision()">
+      <option value="">Toutes décisions</option>
+      <option value="ALLOW">ALLOW</option>
+      <option value="DENY">DENY</option>
+      <option value="PENDING">PENDING</option>
+    </select>
   </div>
   <div class="card">
     <table class="table">
-      <tr><th>Horodatage</th><th>Image</th><th>IP</th><th>Client</th><th>Décision</th><th>Cache</th></tr>
-      <tr><td style="color:var(--text-secondary)">16/01 14:32</td><td>library/alpine:3.19</td><td style="color:var(--text-secondary)">172.16.0.5</td><td><span class="chip">docker</span></td><td><span class="badge badge-green">ALLOW</span></td><td><span class="badge badge-gray">Non</span></td></tr>
-      <tr><td style="color:var(--text-secondary)">16/01 14:28</td><td>library/ubuntu:latest</td><td style="color:var(--text-secondary)">172.16.0.14</td><td><span class="chip">docker</span></td><td><span class="badge badge-red">DENY</span></td><td><span class="badge badge-gray">Non</span></td></tr>
-      <tr><td style="color:var(--text-secondary)">16/01 13:55</td><td>library/nginx:latest</td><td style="color:var(--text-secondary)">172.16.0.3</td><td><span class="chip">podman</span></td><td><span class="badge badge-green">ALLOW</span></td><td><span class="badge badge-green">Oui</span></td></tr>
-      <tr><td style="color:var(--text-secondary)">16/01 11:20</td><td>nginx:1.25-alpine</td><td style="color:var(--text-secondary)">172.16.0.22</td><td><span class="chip">docker</span></td><td><span class="badge badge-red">DENY</span></td><td><span class="badge badge-gray">Non</span></td></tr>
+      <thead><tr><th>Horodatage</th><th>Image</th><th>IP</th><th>Client</th><th>Décision</th><th>Cache</th></tr></thead>
+      <tbody id="history-tbody">{{HISTORY_ROWS}}</tbody>
     </table>
   </div>
 </div>
@@ -369,35 +286,582 @@
 <div id="page-search" class="hidden">
   <div class="topbar"><div class="page-title">Recherche d'image</div></div>
   <div class="card">
-    <div style="display:flex;gap:8px;margin-bottom:14px">
-      <input type="text" placeholder="Ex: registry-1.docker.io/library/ubuntu:22.04" style="flex:1;padding:8px 12px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:13px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font)">
-      <button class="btn">Rechercher</button>
+    <div style="position:relative;margin-bottom:14px">
+      <input type="text" id="search-input" placeholder="Nom d'image, tag ou IP..."
+        style="width:100%;padding:8px 12px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:13px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font);outline:none;"
+        oninput="searchAutocomplete(this.value)" autocomplete="off">
+      <div id="search-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-primary);border:0.5px solid var(--border-md);border-radius:var(--radius-md);z-index:100;max-height:280px;overflow-y:auto;margin-top:4px;"></div>
     </div>
-    <div style="padding:12px;background:var(--bg-secondary);border-radius:var(--radius-md)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-weight:500;font-size:13px">library/ubuntu:22.04</span>
-        <span class="badge badge-red">Blacklistée</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">
-        <div><span style="color:var(--text-secondary)">Registry</span><br>registry-1.docker.io</div>
-        <div><span style="color:var(--text-secondary)">Dernier pull</span><br>16/01/2024 14:28</div>
-        <div><span style="color:var(--text-secondary)">Pulls total</span><br>7</div>
-        <div><span style="color:var(--text-secondary)">En cache</span><br>Non</div>
-      </div>
+    <div id="search-result" style="display:none;">
+      <table class="table">
+        <thead><tr><th>Image</th><th>IP</th><th>Démarré</th><th>Décision</th></tr></thead>
+        <tbody id="search-result-tbody"></tbody>
+      </table>
     </div>
+    <div id="search-empty" style="color:var(--text-tertiary);font-size:12px;display:none">Aucun résultat</div>
   </div>
 </div>
 
-</div>
-</div>
+</div><!-- fin .main -->
+</div><!-- fin .shell -->
 
 <script>
+// ── Navigation ────────────────────────────────────────────────────────────────
 function showPage(page, el) {
   document.querySelectorAll('[id^="page-"]').forEach(p => p.classList.add('hidden'));
   document.getElementById('page-' + page).classList.remove('hidden');
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   if (el) el.classList.add('active');
 }
+
+// ── Filtre tableau ────────────────────────────────────────────────────────────
+function filterTable(tbodyId, query) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  const q = query.toLowerCase();
+  Array.from(tbody.rows).forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function filterHistoryByDecision() {
+  const decision = document.getElementById('history-decision-filter').value;
+  const tbody = document.getElementById('history-tbody');
+  Array.from(tbody.rows).forEach(row => {
+    if (!decision) { row.style.display = ''; return; }
+    row.style.display = row.textContent.includes(decision) ? '' : 'none';
+  });
+}
+
+function searchImage() {
+  const query = document.getElementById('search-input').value.toLowerCase();
+  const result = document.getElementById('search-result');
+  const tbody = document.getElementById('history-tbody');
+  if (!query) { result.style.display = 'none'; return; }
+
+  let found = null;
+  Array.from(tbody.rows).forEach(row => {
+    if (!found && row.textContent.toLowerCase().includes(query)) found = row;
+  });
+
+  if (found) {
+    const cells = found.cells;
+    const decision = cells[4]?.textContent.trim() || 'INCONNU';
+    const badgeClass = decision === 'ALLOW' ? 'badge-green' : decision === 'DENY' ? 'badge-red' : 'badge-amber';
+    result.style.display = 'block';
+    result.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-weight:500;font-size:13px">${cells[1]?.textContent || ''}</span>
+        <span class="badge ${badgeClass}">${decision}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">
+        <div><span style="color:var(--text-secondary)">IP client</span><br>${cells[2]?.textContent || '—'}</div>
+        <div><span style="color:var(--text-secondary)">Dernier pull</span><br>${cells[0]?.textContent || '—'}</div>
+        <div><span style="color:var(--text-secondary)">Client</span><br>${cells[3]?.textContent || '—'}</div>
+        <div><span style="color:var(--text-secondary)">En cache</span><br>${cells[5]?.textContent || '—'}</div>
+      </div>`;
+  } else {
+    result.style.display = 'block';
+    result.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">Aucun résultat trouvé</div>';
+  }
+}
+
+// ── SSE — mise à jour temps réel ──────────────────────────────────────────────
+function badgeClass(decision) {
+  return decision === 'ALLOW' ? 'badge-green' : decision === 'DENY' ? 'badge-red' : 'badge-amber';
+}
+
+// Rend une ligne de pull cliquable → /dashboard/pull/:uuid
+function makeRowClickable(tr, uuid) {
+  tr.style.cursor = 'pointer';
+  tr.addEventListener('click', () => { window.location.href = '/dashboard/pull/' + uuid; });
+}
+
+// Applique le clic sur toutes les lignes existantes au chargement
+document.querySelectorAll('#pulls-tbody tr[data-uuid], #overview-pulls-tbody tr[data-uuid], #history-tbody tr[data-uuid]').forEach(tr => {
+  makeRowClickable(tr, tr.dataset.uuid);
+});
+
+// FIX: Rend les lignes de la vue globale cliquables au chargement initial
+// (overview-pulls-tbody n'a pas data-uuid dans le template original, on l'ajoute côté Rust)
+// On s'assure aussi que les alertes initiales sont cliquables via le handler Rust
+
+function connectSSE() {
+  const es = new EventSource('/dashboard/events');
+  es.onopen = () => console.log('[SSE] Connecté');
+
+  es.onmessage = (event) => {
+    let payload;
+    try { payload = JSON.parse(event.data); } catch { return; }
+    const { table, action, data } = payload;
+
+    // Flux d'activité
+    const feed = document.getElementById('live-feed');
+    if (feed) {
+      const ts = new Date().toLocaleTimeString();
+      const color = action === 'INSERT' ? 'var(--text-success)' : action === 'DELETE' ? 'var(--text-danger)' : 'var(--text-info)';
+      const entry = document.createElement('div');
+      entry.innerHTML = `<span style="color:var(--text-tertiary)">[${ts}]</span> <span style="color:${color};font-weight:bold">${action}</span> ${table}: ${data.repository || data.uuid?.substring(0,8) || ''}`;
+      feed.appendChild(entry);
+      if (feed.children.length > 20) feed.removeChild(feed.firstChild);
+      const lu = document.getElementById('last-update');
+      if (lu) lu.textContent = 'Mis à jour à ' + ts;
+    }
+
+    if (table === 'pulls')      handlePullsUpdate(action, data);
+    if (table === 'quarantine') handleQuarantineUpdate(action, data);
+    if (table === 'cache')      handleCacheUpdate(action, data);
+    if (table === 'whitelist')  handleListUpdate('wl', action, data);
+    if (table === 'blacklist')  handleListUpdate('bl', action, data);
+  };
+
+  es.onerror = () => { es.close(); setTimeout(connectSSE, 3010); };
+}
+
+// ── Métriques globales — mise à jour temps réel ───────────────────────────────
+
+function updateMetricDelta(id, delta) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = Math.max(0, parseInt(el.textContent || '0') + delta);
+}
+
+// FIX: recalcule les barres et compteurs de décisions 24h à partir des deltas
+function updateDecisionCount(decision, delta) {
+  const decisionLower = (decision || '').toUpperCase();
+  if (decisionLower === 'ALLOW') {
+    const el = document.getElementById('allow-count');
+    if (el) el.textContent = Math.max(0, parseInt(el.textContent || '0') + delta);
+  } else if (decisionLower === 'DENY') {
+    const el = document.getElementById('deny-count');
+    if (el) el.textContent = Math.max(0, parseInt(el.textContent || '0') + delta);
+  } else {
+    const el = document.getElementById('pending-count');
+    if (el) el.textContent = Math.max(0, parseInt(el.textContent || '0') + delta);
+  }
+  updateDecisionBars();
+}
+
+function updateDecisionBars() {
+  const allow = parseInt(document.getElementById('allow-count')?.textContent || '0');
+  const pending = parseInt(document.getElementById('pending-count')?.textContent || '0');
+  const deny = parseInt(document.getElementById('deny-count')?.textContent || '0');
+  const total = Math.max(1, allow + pending + deny);
+  const setBar = (id, val) => { const el = document.getElementById(id); if (el) el.style.width = Math.round(val * 100 / total) + '%'; };
+  setBar('allow-bar', allow);
+  setBar('pending-bar', pending);
+  setBar('deny-bar', deny);
+}
+
+// ── Pulls ─────────────────────────────────────────────────────────────────────
+
+function handlePullsUpdate(action, data) {
+  const tbody = document.getElementById('pulls-tbody');
+  const overviewTbody = document.getElementById('overview-pulls-tbody');
+  const uuid = data.uuid || '';
+
+  // pull terminé (scan_completed = true) → sortir de "en cours", aller en historique
+  if (data.scan_completed === true || data.scan_completed === 'true') {
+    [tbody, overviewTbody].forEach(tb => {
+
+      const alerts = document.getElementById('alerts-container');
+      if (alerts) {
+        const alertRow = alerts.querySelector(`.alert-row[data-uuid="${uuid}"]`);
+        if (alertRow) alertRow.remove();
+      }
+      if (!tb) return;
+      const row = tb.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (row) row.remove();
+    });
+
+    // FIX: mise à jour correcte des compteurs de décisions 24h
+    const dec = (data.decision_final || '').toUpperCase();
+    if (dec === 'DENY') {
+      updateMetricDelta('metric-deny', 1);
+    }
+    updateDecisionCount(dec, 1);
+    updateMetricDelta('metric-pulls', -1);
+    updatePullsBadge();
+
+    // Ajouter à l'historique
+    const histTbody = document.getElementById('history-tbody');
+    if (histTbody) {
+      const badge = badgeClass(data.decision_final || 'PENDING');
+      const tr = document.createElement('tr');
+      tr.dataset.uuid = uuid;
+      tr.innerHTML = `
+        <td style="color:var(--text-secondary)">${new Date().toLocaleString()}</td>
+        <td>${data.repository}:${data.tag || 'latest'}</td>
+        <td style="color:var(--text-secondary)">${data.ip_client}</td>
+        <td><span class="chip">${data.client_type || 'unknown'}</span></td>
+        <td><span class="badge ${badge}">${data.decision_final || 'PENDING'}</span></td>
+        <td><span class="badge badge-gray">Non</span></td>`;
+      makeRowClickable(tr, uuid);
+      histTbody.insertAdjacentElement('afterbegin', tr);
+    }
+    return;
+  }
+
+  if (action === 'DELETE') {
+    [tbody, overviewTbody].forEach(tb => {
+      if (!tb) return;
+      const row = tb.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (row) row.remove();
+    });
+    return;
+  }
+
+  const decision = data.decision_final || 'PENDING';
+  const badge = badgeClass(decision);
+  const uuidShort = uuid.substring(0, 8);
+
+  // Ligne détaillée (page pulls)
+  if (tbody) {
+    const detailHtml = `
+      <tr data-uuid="${uuid}" style="cursor:pointer">
+        <td style="color:var(--text-tertiary);font-family:var(--font-mono);font-size:11px">${uuidShort}...</td>
+        <td>${data.repository}:${data.tag || 'latest'}</td>
+        <td style="color:var(--text-secondary)">${data.ip_client}</td>
+        <td><span class="chip">${data.arch || 'unknown'}</span></td>
+        <td><div class="progress-bar" style="width:80px"><div class="progress-fill" style="width:50%"></div></div></td>
+        <td><span class="badge ${badge}">${decision}</span></td>
+        <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Forcer DENY</button></td>
+      </tr>`;
+    const existing = tbody.querySelector(`tr[data-uuid="${uuid}"]`);
+    if (action === 'INSERT' && !existing) {
+      tbody.insertAdjacentHTML('afterbegin', detailHtml);
+      const tr = tbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (tr) makeRowClickable(tr, uuid);
+      updateMetricDelta('metric-pulls', 1);
+      updatePullsBadge();
+    } else if (action === 'UPDATE' && existing) {
+      existing.outerHTML = detailHtml;
+      const tr = tbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (tr) makeRowClickable(tr, uuid);
+    }
+  }
+
+  // Ligne vue globale (overview) — FIX: ajout data-uuid pour rendre cliquable
+  if (overviewTbody) {
+    const overviewHtml = `
+      <tr data-uuid="${uuid}" style="cursor:pointer">
+        <td>${data.repository}:${data.tag || 'latest'}</td>
+        <td style="color:var(--text-secondary)">${data.ip_client}</td>
+        <td><span class="chip">${data.client_type || 'unknown'}</span></td>
+        <td><div class="progress-bar" style="width:100px"><div class="progress-fill" style="width:50%"></div></div></td>
+        <td><span class="badge ${badge}">${decision}</span></td>
+      </tr>`;
+    const existingOv = overviewTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+    if (action === 'INSERT' && !existingOv) {
+      overviewTbody.insertAdjacentHTML('afterbegin', overviewHtml);
+      const tr = overviewTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (tr) makeRowClickable(tr, uuid);
+    } else if (action === 'UPDATE' && existingOv) {
+      existingOv.outerHTML = overviewHtml;
+      const tr = overviewTbody.querySelector(`tr[data-uuid="${uuid}"]`);
+      if (tr) makeRowClickable(tr, uuid);
+    }
+  }
+
+
+const decisionUpper = (data.decision_final || '').toUpperCase();
+  if (decisionUpper === 'ALLOW') {
+    const alerts = document.getElementById('alerts-container');
+    if (alerts) {
+      const alertRow = alerts.querySelector(`.alert-row[data-uuid="${uuid}"]`);
+      if (alertRow) alertRow.remove();
+    }
+  }
+  if (decisionUpper === 'DENY' || decisionUpper === 'PENDING') {
+    const alerts = document.getElementById('alerts-container');
+    if (alerts) {
+      const isPending = decisionUpper === 'PENDING';
+
+      // Cherche une alerte existante pour ce uuid
+      const existing = alerts.querySelector(`.alert-row[data-uuid="${uuid}"]`);
+
+      if (existing) {
+        // Met à jour l'alerte en place sans en recréer une
+        existing.querySelector('.alert-icon').className        = `alert-icon${isPending ? ' amber' : ''}`;
+        existing.querySelector('.alert-icon-dot').className    = `alert-icon-dot${isPending ? ' amber' : ''}`;
+        existing.querySelector('.alert-text strong').textContent = decisionUpper;
+        existing.querySelector('.alert-time').textContent      = "À l'instant";
+        // Remonte l'alerte en tête de liste
+        alerts.insertAdjacentElement('afterbegin', existing);
+      } else {
+        // Nouvelle alerte
+        const div = document.createElement('div');
+        div.className    = 'alert-row';
+        div.dataset.uuid = uuid;
+        div.innerHTML = `
+          <div class="alert-icon${isPending ? ' amber' : ''}"><div class="alert-icon-dot${isPending ? ' amber' : ''}"></div></div>
+          <div>
+            <div class="alert-text"><strong>${decisionUpper}</strong> — ${data.repository}:${data.tag||'latest'}</div>
+            <div class="alert-text" style="color:var(--text-secondary)">${data.ip_client} · ${data.registry||''}</div>
+            <div class="alert-time">À l'instant</div>
+          </div>`;
+        div.addEventListener('click', () => window.location.href = '/dashboard/pull/' + uuid);
+        alerts.insertAdjacentElement('afterbegin', div);
+        // N'incrémente metric-deny qu'à la création, pas aux updates
+        if (decisionUpper === 'DENY') {
+          updateMetricDelta('metric-deny', 1);
+        }
+      }
+    }
+    updateDecisionBars();
+  }
+}
+
+function updatePullsBadge() {
+  const metric = document.getElementById('metric-pulls');
+  const badge = document.getElementById('pulls-count-badge');
+  if (metric && badge) badge.textContent = metric.textContent + ' actifs';
+}
+
+// ── Quarantaine ───────────────────────────────────────────────────────────────
+
+function handleQuarantineUpdate(action, data) {
+  const tbody = document.getElementById('quarantine-tbody');
+  const badge = document.getElementById('quarantine-count-badge');
+  const metric = document.getElementById('metric-quarantine');
+  if (!tbody) return;
+
+  if (action === 'INSERT') {
+    const row = `<tr data-id="${data.id || ''}">
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary)">${(data.digest||'').substring(0,32)}...</td>
+      <td>${data.repository}</td>
+      <td style="color:var(--text-secondary)">${data.registry}</td>
+      <td>${data.size_bytes ? Math.round(data.size_bytes/1024) + ' KB' : '—'}</td>
+      <td style="color:var(--text-secondary)">À l'instant</td>
+      <td><span class="chip">${data.type || '?'}</span></td>
+      <td>
+        <button class="btn btn-success" style="font-size:11px;padding:3px 8px;margin-right:4px">Valider</button>
+        <button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Rejeter</button>
+      </td></tr>`;
+    tbody.insertAdjacentHTML('afterbegin', row);
+    updateMetricDelta('metric-quarantine', 1);
+    // FIX: mise à jour du badge quarantaine
+    if (metric) {
+      if (badge) badge.textContent = metric.textContent + ' fichiers';
+    }
+  } else if (action === 'DELETE') {
+    // FIX: suppression de la ligne correspondante dans le tableau quarantaine
+    if (data.id) {
+      const row = tbody.querySelector(`tr[data-id="${data.id}"]`);
+      if (row) row.remove();
+    }
+    updateMetricDelta('metric-quarantine', -1);
+    // FIX: mise à jour du badge après suppression
+    if (metric) {
+      if (badge) badge.textContent = metric.textContent + ' fichiers';
+    }
+  }
+}
+
+// ── Cache ─────────────────────────────────────────────────────────────────────
+
+function handleCacheUpdate(action, data) {
+  const tbody = document.getElementById('cache-tbody');
+  const metric = document.getElementById('metric-cache');
+  const badge = document.getElementById('cache-count-badge');
+  if (!tbody) return;
+
+  if (action === 'INSERT') {
+    const row = `<tr data-id="${data.id || ''}">
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary)">${(data.digest||'').substring(0,32)}...</td>
+      <td>${data.repository}</td>
+      <td style="color:var(--text-secondary)">${data.registry}</td>
+      <td>${data.size_bytes ? Math.round(data.size_bytes/1024) + ' KB' : '—'}</td>
+      <td style="color:var(--text-secondary)">À l'instant</td>
+      <td><button class="btn btn-danger" style="font-size:11px;padding:3px 8px"
+        onclick="deleteFromCache('${data.id || ''}', this.closest('tr'))">Supprimer</button></td>
+      </tr>`;
+    tbody.insertAdjacentHTML('afterbegin', row);
+    updateMetricDelta('metric-cache', 1);
+    if (metric) {
+      if (badge) badge.textContent = metric.textContent + ' fichiers';
+    }
+  } else if (action === 'DELETE') {
+    // FIX: suppression de la ligne correspondante dans le tableau cache
+    if (data.id) {
+      const row = tbody.querySelector(`tr[data-id="${data.id}"]`);
+      if (row) row.remove();
+    }
+    updateMetricDelta('metric-cache', -1);
+    // FIX: mise à jour du badge après suppression
+    if (metric) {
+      if (badge) badge.textContent = metric.textContent + ' fichiers';
+    }
+  }
+}
+
+// ── White / Blacklist ─────────────────────────────────────────────────────────
+
+function handleListUpdate(prefix, action, data) {
+  const tbody = document.getElementById(prefix + '-tbody');
+  const badge = document.getElementById(prefix + '-count-badge');
+  if (!tbody) return;
+
+  if (action === 'INSERT') {
+    const listType = prefix === 'wl' ? 'whitelist' : 'blacklist';
+    // FIX: ajout de data-id sur la ligne pour permettre la suppression
+    const row = `<tr data-id="${data.id || ''}">
+      <td>${data.registry}/${data.repository}:${data.tag || '*'}</td>
+      <td style="color:var(--text-secondary)">À l'instant</td>
+      <td><button class="btn${prefix === 'bl' ? '' : ''}" style="font-size:10px;padding:2px 6px"
+        onclick="removeFromList('${listType}', '${data.id || ''}', this.closest('tr'))">Retirer</button></td>
+      </tr>`;
+    tbody.insertAdjacentHTML('afterbegin', row);
+    if (badge) badge.textContent = (parseInt(badge.textContent) + 1) + ' entrées';
+  } else if (action === 'DELETE') {
+    // FIX: suppression de la ligne correspondante
+    if (data.id) {
+      const row = tbody.querySelector(`tr[data-id="${data.id}"]`);
+      if (row) row.remove();
+    }
+    if (badge) badge.textContent = Math.max(0, parseInt(badge.textContent) - 1) + ' entrées';
+  }
+}
+
+// ── Recherche avec autocomplétion ─────────────────────────────────────────────
+
+let searchTimer = null;
+
+function searchAutocomplete(query) {
+  clearTimeout(searchTimer);
+  const suggestions = document.getElementById('search-suggestions');
+  const result = document.getElementById('search-result');
+  const empty = document.getElementById('search-empty');
+
+  if (query.length < 2) {
+    suggestions.style.display = 'none';
+    result.style.display = 'none';
+    if (empty) empty.style.display = 'none';
+    return;
+  }
+
+  searchTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch('/dashboard/api/search?q=' + encodeURIComponent(query));
+      const results = await resp.json();
+
+      if (!results.length) {
+        suggestions.style.display = 'none';
+        result.style.display = 'none';
+        if (empty) empty.style.display = 'block';
+        return;
+      }
+
+      if (empty) empty.style.display = 'none';
+
+      // Suggestions dropdown
+      suggestions.innerHTML = results.map(r => `
+        <div onclick="selectResult('${r.uuid}', '${r.repository}:${r.tag}')"
+          style="padding:8px 12px;cursor:pointer;border-bottom:0.5px solid var(--border);font-size:12px;"
+          onmouseover="this.style.background='var(--bg-secondary)'"
+          onmouseout="this.style.background=''">
+          <span style="font-weight:500">${r.repository}:${r.tag}</span>
+          <span style="color:var(--text-tertiary);margin-left:8px">${r.ip_client}</span>
+          <span class="badge ${badgeClass(r.decision)}" style="float:right;margin-top:-1px">${r.decision}</span>
+        </div>`).join('');
+      suggestions.style.display = 'block';
+
+      // Tableau résultats
+      const tbody = document.getElementById('search-result-tbody');
+      tbody.innerHTML = results.map(r => `
+        <tr data-uuid="${r.uuid}" style="cursor:pointer" onclick="window.location.href='/dashboard/pull/${r.uuid}'">
+          <td>${r.repository}:${r.tag}</td>
+          <td style="color:var(--text-secondary)">${r.ip_client}</td>
+          <td style="color:var(--text-secondary)">${r.started_at}</td>
+          <td><span class="badge ${badgeClass(r.decision)}">${r.decision}</span></td>
+        </tr>`).join('');
+      result.style.display = 'block';
+
+    } catch(e) { console.error('[SEARCH]', e); }
+  }, 300);
+}
+
+function selectResult(uuid, label) {
+  document.getElementById('search-input').value = label;
+  document.getElementById('search-suggestions').style.display = 'none';
+  window.location.href = '/dashboard/pull/' + uuid;
+}
+
+// Fermer suggestions si clic dehors
+document.addEventListener('click', e => {
+  if (!e.target.closest('#search-input') && !e.target.closest('#search-suggestions')) {
+    const s = document.getElementById('search-suggestions');
+    if (s) s.style.display = 'none';
+  }
+});
+
+
+// ── API Whitelist / Blacklist / Cache ─────────────────────────────────────────
+
+async function addToList(listType) {
+  const prefix = listType === 'whitelist' ? 'wl' : 'bl';
+  const registry = document.getElementById(prefix + '-registry')?.value.trim();
+  const repository = document.getElementById(prefix + '-repository')?.value.trim();
+  const tag = document.getElementById(prefix + '-tag')?.value.trim() || null;
+
+  if (!registry || !repository) {
+    alert('Registry et repository sont requis.');
+    return;
+  }
+
+  if (!confirm(`Ajouter ${registry}/${repository}${tag ? ':' + tag : ''} à la ${listType} ?`)) return;
+
+  try {
+    const resp = await fetch(`/dashboard/api/${listType}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ registry, repository, tag })
+    });
+    const data = await resp.json();
+    if (resp.status === 409) { alert('Cette entrée est déjà présente dans la liste.'); return; }
+    if (!resp.ok) { alert('Erreur : ' + (data.error || resp.status)); return; }
+    // Vider les champs
+    ['registry', 'repository', 'tag'].forEach(f => {
+      const el = document.getElementById(prefix + '-' + f);
+      if (el) el.value = '';
+    });
+    // La ligne sera ajoutée via SSE automatiquement
+  } catch(e) { alert('Erreur réseau : ' + e); }
+}
+
+// FIX: removeFromList fonctionne maintenant correctement pour whitelist et blacklist
+async function removeFromList(listType, id, row) {
+  const label = listType === 'whitelist' ? 'la whitelist' : 'la blacklist';
+  if (!confirm(`Retirer cette entrée de ${label} ?`)) return;
+  if (!id) { alert('ID manquant, impossible de supprimer.'); return; }
+  try {
+    const resp = await fetch(`/dashboard/api/${listType}/${id}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (!resp.ok) { alert('Erreur : ' + (data.error || resp.status)); return; }
+    // FIX: suppression visuelle immédiate de la ligne
+    if (row) row.remove();
+    // Mettre à jour le badge
+    const prefix = listType === 'whitelist' ? 'wl' : 'bl';
+    const badge = document.getElementById(prefix + '-count-badge');
+    if (badge) badge.textContent = Math.max(0, parseInt(badge.textContent) - 1) + ' entrées';
+  } catch(e) { alert('Erreur réseau : ' + e); }
+}
+
+async function deleteFromCache(id, row) {
+  if (!confirm('Supprimer ce digest du cache (filesystem + base de données) ?')) return;
+  try {
+    const resp = await fetch(`/dashboard/api/cache/${id}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (!resp.ok) { alert('Erreur : ' + (data.error || resp.status)); return; }
+    // FIX: suppression visuelle immédiate (le SSE s'occupera aussi du delta compteur)
+    if (row) row.remove();
+    const metric = document.getElementById('metric-cache');
+    if (metric) metric.textContent = Math.max(0, parseInt(metric.textContent) - 1);
+    const badge = document.getElementById('cache-count-badge');
+    if (badge && metric) badge.textContent = metric.textContent + ' fichiers';
+  } catch(e) { alert('Erreur réseau : ' + e); }
+}
+
+connectSSE();
+
 </script>
-</body>
-</html>
