@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 # Web
 axum = { version = "0.7", features = ["multipart"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
 tower-http = { version = "0.5", features = ["limit", "cors"]}
 
 # Serialization

@@ -12,12 +12,7 @@ use openidconnect::{
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use dotenvy::dotenv;
-
-const ZITADEL_ISSUER: &str = "https://docdockgo-kgfmnj.eu1.zitadel.cloud";
-const CLIENT_ID: &str = "365975639251042712";
-const REDIRECT_URI: &str = "http://localhost:3010/callback";
-const POST_LOGOUT_REDIRECT_URI: &str = "http://localhost:3010/logged-out";
+//use dotenvy::dotenv;
 
 
 #[derive(Clone)]
@@ -33,16 +28,21 @@ pub struct OidcState {
 }
 
 pub async fn build_oidc_client() -> CoreClient {
-    let issuer_url = IssuerUrl::new(ZITADEL_ISSUER.to_string()).expect("Issuer URL invalide");
+    let issuer = std::env::var("ZITADEL_ISSUER").expect("ZITADEL_ISSUER manquant");
+    let client_id = std::env::var("CLIENT_ID").expect("CLIENT_ID manquant");
+    let redirect_uri = std::env::var("REDIRECT_URI").expect("REDIRECT_URI manquant");
+
+    let issuer_url = IssuerUrl::new(issuer).expect("Issuer URL invalide");
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, async_http_client)
         .await
         .expect("Echec de la decouverte OIDC Zitadel");
+
     CoreClient::from_provider_metadata(
         provider_metadata,
-        ClientId::new(CLIENT_ID.to_string()),
+        ClientId::new(client_id),
         None,
     )
-    .set_redirect_uri(RedirectUrl::new(REDIRECT_URI.to_string()).expect("Redirect URI invalide"))
+    .set_redirect_uri(RedirectUrl::new(redirect_uri).expect("Redirect URI invalide"))
 }
 
 pub async fn login_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -257,15 +257,16 @@ pub async fn logout(headers: HeaderMap) -> Response {
             .unwrap(),
     );
 
+    let issuer = std::env::var("ZITADEL_ISSUER").unwrap_or_default();
+    let post_logout_uri = std::env::var("POST_LOGOUT_REDIRECT_URI")
+        .unwrap_or_else(|_| "/logged-out".to_string());
+
     let end_session_url = if id_token_hint.is_empty() {
-        // Cookie absent (déjà expiré ?) → logout local uniquement
-        println!("[AUTH] logout sans id_token_hint");
         "/logged-out".to_string()
     } else {
-        println!("[AUTH] logout avec id_token_hint → end_session Zitadel");
         format!(
             "{}/oidc/v1/end_session?id_token_hint={}&post_logout_redirect_uri={}",
-            ZITADEL_ISSUER, id_token_hint, POST_LOGOUT_REDIRECT_URI
+            issuer, id_token_hint, post_logout_uri
         )
     };
 

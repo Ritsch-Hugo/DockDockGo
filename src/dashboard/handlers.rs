@@ -4,13 +4,10 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response, sse::{Event, Sse}},
 };
 use crate::auth::{extract_role_from_cookie, AppState};
-use crate::dashboard::store::SCAN_RESULTS;
 use futures::stream;
 use std::convert::Infallible;
 use sqlx::postgres::PgListener;
-use tokio_stream::StreamExt;
 use sqlx::types::chrono;
-use sqlx::types::chrono::Utc;
 
 // ─── Dashboard Dev ────────────────────────────────────────────────────────────
 
@@ -756,7 +753,7 @@ pub async fn pull_detail(
         ia_html = "<tr><td colspan='4' style='color:var(--text-tertiary);text-align:center;padding:16px'>Aucune décision IA</td></tr>".to_string();
     }
 
-    let uuid_str = uuid.clone();
+    let _uuid_str = uuid.clone();
 
     // FIX: layout inversé — tableaux à gauche, timeline à droite
     let html = format!(r#"<!DOCTYPE html>
