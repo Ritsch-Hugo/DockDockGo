@@ -213,6 +213,18 @@
 
   ---
 
+  ## 🔧 CI/CD
+
+  Le projet inclut :
+
+  * ✔ Format (`cargo fmt`)
+  * ✔ Lint (`cargo clippy`)
+  * ✔ Tests (`cargo test`)
+  * ✔ Audit sécurité (`cargo audit`)
+  * ✔ Build Docker
+
+  ---
+
   ## 👨‍💻 Auteur
 
   Projet développé dans le cadre de **DocDockGo** (DevSecOps / Container Security).
