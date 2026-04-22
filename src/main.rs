@@ -1,12 +1,12 @@
 use axum::{
-    body::Bytes,
-    extract::{Multipart, Path, State,DefaultBodyLimit},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -18,6 +18,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
+    http: Client,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +56,43 @@ struct DigestInput {
     digest_type: Option<String>,
     #[serde(default)]
     digest_algo: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct HighLevelDigest {
+    algorithm: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HighLevelPullContext {
+    uuid: Uuid,
+    ip_client: String,
+    registry: String,
+    repository: String,
+    tag: String,
+    manifest_digests: Vec<HighLevelDigest>,
+    blob_digests: Vec<HighLevelDigest>,
+    referrers_digests: Vec<HighLevelDigest>,
+    manifest_racine_digest: Option<HighLevelDigest>,
+    digests_possible: Vec<HighLevelDigest>,
+    digests_expected: Vec<HighLevelDigest>,
+    os: String,
+    arch: String,
+    pull_completed: bool,
+    scan_final_done: bool,
+    in_whitelist: Option<bool>,
+    in_blacklist: Option<bool>,
+    in_cache: Option<bool>,
+    check_if_verify_digest_completed: bool,
+    scan_status: Option<String>,
+    client_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HighLevelServiceResponse {
+    pull_id: Uuid,
+    opinion: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
@@ -141,15 +179,6 @@ struct ScannerCallbackPayload {
     response_scanner: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct PlannedScans {
-    dynamic_scan: bool,
-    compliance_scan: bool,
-    static_scan: bool,
-    reasoning_scan_choice: Vec<String>,
-    score: f64,
-}
-
 #[derive(Debug)]
 struct AttachmentMeta {
     field_name: String,
@@ -162,6 +191,17 @@ struct AttachmentMeta {
 enum InputMode {
     Modern,
     LegacyProxy,
+}
+
+#[derive(Debug)]
+struct HighLevelResult {
+    state: String,
+    reasoning_lines: Vec<String>,
+    raw_text: String,
+    score: f64,
+    dynamic_scan: bool,
+    compliance_scan: bool,
+    static_scan: bool,
 }
 
 #[tokio::main]
@@ -178,7 +218,8 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await?;
 
-    let state = Arc::new(AppState { pool });
+    let http = Client::builder().build()?;
+    let state = Arc::new(AppState { pool, http });
 
     let app = Router::new()
         .route("/health", get(health))
@@ -228,11 +269,11 @@ async fn decision(
     headers: HeaderMap,
     multipart: Multipart,
 ) -> Result<Response, AppError> {
-    handle_multipart_decision(&state.pool, headers, multipart).await
+    handle_multipart_decision(&state, headers, multipart).await
 }
 
 async fn handle_multipart_decision(
-    pool: &PgPool,
+    state: &Arc<AppState>,
     _headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
@@ -248,7 +289,7 @@ async fn handle_multipart_decision(
         let name = field.name().unwrap_or("").trim().to_string();
         let file_name = field.file_name().map(|s| s.to_string());
         let content_type = field.content_type().map(|s| s.to_string());
-        let bytes: Bytes = field
+        let bytes = field
             .bytes()
             .await
             .map_err(|e| AppError::bad_request(e.into()))?;
@@ -285,29 +326,26 @@ async fn handle_multipart_decision(
         )));
     };
 
-    upsert_pull(pool, &pullcontext).await?;
-    insert_missing_digests(pool, &pullcontext).await?;
+    upsert_pull(&state.pool, &pullcontext).await?;
+    insert_missing_digests(&state.pool, &pullcontext).await?;
 
-    let state = match pullcontext.phase {
-        Phase::Initial => {
-            handle_initial_phase(pool, &pullcontext).await?;
-            "PENDING".to_string()
-        }
+    let state_value = match pullcontext.phase {
+        Phase::Initial => handle_initial_phase(&state.pool, &state.http, &pullcontext).await?,
         Phase::Final => {
-            handle_final_phase(pool, &pullcontext, &attachments).await?;
-            current_decision(pool, pullcontext.pull_id).await?
+            handle_final_phase(&state.pool, &pullcontext, &attachments).await?;
+            current_decision(&state.pool, pullcontext.pull_id).await?
         }
     };
 
     let response = match input_mode {
         InputMode::Modern => {
-            (StatusCode::OK, Json(DecisionResponse { decision: state })).into_response()
+            (StatusCode::OK, Json(DecisionResponse { decision: state_value })).into_response()
         }
         InputMode::LegacyProxy => (
             StatusCode::OK,
             Json(LegacyOrchestratorResponse {
                 pull_id: pullcontext.pull_id,
-                state,
+                state: state_value,
             }),
         )
             .into_response(),
@@ -465,8 +503,12 @@ async fn scanner_callback(
     Ok((StatusCode::OK, Json(DecisionResponse { decision })))
 }
 
-async fn handle_initial_phase(pool: &PgPool, pullcontext: &PullContext) -> Result<(), AppError> {
-    let planned = plan_scans(pullcontext);
+async fn handle_initial_phase(
+    pool: &PgPool,
+    http: &Client,
+    pullcontext: &PullContext,
+) -> Result<String, AppError> {
+    let high = high_level_decision(pool, http, pullcontext).await?;
 
     let existing = sqlx::query(
         r#"
@@ -500,13 +542,13 @@ async fn handle_initial_phase(pool: &PgPool, pullcontext: &PullContext) -> Resul
                 "#,
             )
             .bind(id)
-            .bind(&planned.reasoning_scan_choice)
-            .bind(vec!["PENDING".to_string()])
-            .bind(Vec::<String>::new())
-            .bind(planned.score)
-            .bind(planned.dynamic_scan)
-            .bind(planned.compliance_scan)
-            .bind(planned.static_scan)
+            .bind(&high.reasoning_lines)
+            .bind(vec![high.state.clone()])
+            .bind(vec![high.raw_text.clone()])
+            .bind(high.score)
+            .bind(high.dynamic_scan)
+            .bind(high.compliance_scan)
+            .bind(high.static_scan)
             .execute(pool)
             .await?;
         }
@@ -530,33 +572,157 @@ async fn handle_initial_phase(pool: &PgPool, pullcontext: &PullContext) -> Resul
             )
             .bind(Uuid::new_v4())
             .bind(pullcontext.pull_id)
-            .bind(&planned.reasoning_scan_choice)
-            .bind(vec!["PENDING".to_string()])
-            .bind(Vec::<String>::new())
-            .bind(planned.score)
-            .bind(planned.dynamic_scan)
-            .bind(planned.compliance_scan)
-            .bind(planned.static_scan)
+            .bind(&high.reasoning_lines)
+            .bind(vec![high.state.clone()])
+            .bind(vec![high.raw_text.clone()])
+            .bind(high.score)
+            .bind(high.dynamic_scan)
+            .bind(high.compliance_scan)
+            .bind(high.static_scan)
             .execute(pool)
             .await?;
         }
     }
 
+    let scan_completed = high.state != "PENDING";
+
     sqlx::query(
         r#"
         UPDATE pulls
         SET
-            scan_completed = false,
-            decision_final = 'PENDING',
+            scan_completed = $2,
+            decision_final = $3,
             last_activity = NOW()
         WHERE uuid = $1
         "#,
     )
     .bind(pullcontext.pull_id)
+    .bind(scan_completed)
+    .bind(&high.state)
     .execute(pool)
     .await?;
 
-    Ok(())
+    Ok(high.state)
+}
+
+async fn high_level_decision(
+    pool: &PgPool,
+    http: &Client,
+    pullcontext: &PullContext,
+) -> Result<HighLevelResult, AppError> {
+    let blacklisted = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM blacklist
+        WHERE registry = $1
+          AND repository = $2
+          AND (tag = $3 OR tag IS NULL)
+        "#,
+    )
+    .bind(&pullcontext.registry)
+    .bind(&pullcontext.repository)
+    .bind(pullcontext.tag.clone())
+    .fetch_one(pool)
+    .await?;
+
+    if blacklisted > 0 {
+        return Ok(HighLevelResult {
+            state: "DENY".to_string(),
+            reasoning_lines: vec!["Image présente en blacklist".to_string()],
+            raw_text: "Image présente en blacklist.\nResultat : 0".to_string(),
+            score: 0.0,
+            dynamic_scan: false,
+            compliance_scan: false,
+            static_scan: false,
+        });
+    }
+
+    let high_level_url = env::var("HIGH_LEVEL_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:4000/v1/high-level".to_string());
+
+    let hl_payload = build_high_level_pullcontext(pullcontext);
+
+    let hl_resp = http
+        .post(&high_level_url)
+        .json(&hl_payload)
+        .send()
+        .await
+        .map_err(AppError::internal)?
+        .error_for_status()
+        .map_err(AppError::internal)?
+        .json::<HighLevelServiceResponse>()
+        .await
+        .map_err(AppError::internal)?;
+
+    let text = hl_resp.opinion;
+    let score = extract_score_from_text(&text).unwrap_or(50.0);
+    let state = decision_from_high_level_score(score);
+
+    let registry = pullcontext.registry.to_lowercase();
+    let repo = pullcontext.repository.to_lowercase();
+
+    let compliance_scan = registry.contains("docker.io") || registry.contains("ghcr.io");
+    let dynamic_scan = repo.contains("api") || repo.contains("web") || repo.contains("service");
+    let static_scan = true;
+
+    let mut reasoning_lines = split_reasoning_lines(&text);
+    if reasoning_lines.is_empty() {
+        reasoning_lines.push(format!("Analyse haut niveau reçue. Score={score}"));
+    }
+
+    Ok(HighLevelResult {
+        state,
+        reasoning_lines,
+        raw_text: text,
+        score,
+        dynamic_scan,
+        compliance_scan,
+        static_scan,
+    })
+}
+
+fn extract_score_from_text(text: &str) -> Option<f64> {
+    let mut last: Option<f64> = None;
+    let mut current = String::new();
+
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            current.push(ch);
+        } else if !current.is_empty() {
+            if let Ok(value) = current.parse::<f64>() {
+                if (0.0..=100.0).contains(&value) {
+                    last = Some(value);
+                }
+            }
+            current.clear();
+        }
+    }
+
+    if !current.is_empty() {
+        if let Ok(value) = current.parse::<f64>() {
+            if (0.0..=100.0).contains(&value) {
+                last = Some(value);
+            }
+        }
+    }
+
+    last
+}
+
+fn split_reasoning_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn decision_from_high_level_score(score: f64) -> String {
+    if score < 30.0 {
+        "DENY".to_string()
+    } else {
+        "PENDING".to_string()
+    }
 }
 
 async fn handle_final_phase(
@@ -593,38 +759,7 @@ async fn handle_final_phase(
     .await?;
 
     try_finalize_pull(pool, pullcontext.pull_id).await?;
-
     Ok(())
-}
-
-fn plan_scans(pullcontext: &PullContext) -> PlannedScans {
-    let repo = pullcontext.repository.to_lowercase();
-    let registry = pullcontext.registry.to_lowercase();
-
-    let static_scan = true;
-    let compliance_scan = registry.contains("docker.io") || registry.contains("ghcr.io");
-    let dynamic_scan = repo.contains("api") || repo.contains("web") || repo.contains("service");
-
-    let mut reasoning = vec![
-        "Analyse initiale reçue depuis le proxy".to_string(),
-        "Un scan statique est toujours demandé par défaut".to_string(),
-    ];
-
-    if compliance_scan {
-        reasoning.push("Le registre justifie un contrôle de conformité".to_string());
-    }
-
-    if dynamic_scan {
-        reasoning.push("Le nom du repository suggère un service exécutable".to_string());
-    }
-
-    PlannedScans {
-        dynamic_scan,
-        compliance_scan,
-        static_scan,
-        reasoning_scan_choice: reasoning,
-        score: if dynamic_scan { 0.7 } else { 0.4 },
-    }
 }
 
 async fn try_finalize_pull(pool: &PgPool, pull_id: Uuid) -> Result<(), AppError> {
@@ -941,5 +1076,76 @@ impl IntoResponse for AppError {
             })),
         )
             .into_response()
+    }
+}
+
+fn split_digest_value(full: &str, algo_hint: Option<&str>) -> Option<HighLevelDigest> {
+    if let Some((algo, value)) = full.split_once(':') {
+        if !value.is_empty() {
+            return Some(HighLevelDigest {
+                algorithm: algo.to_string(),
+                value: value.to_string(),
+            });
+        }
+    }
+
+    if !full.is_empty() {
+        return Some(HighLevelDigest {
+            algorithm: algo_hint.unwrap_or("sha256").to_string(),
+            value: full.to_string(),
+        });
+    }
+
+    None
+}
+
+fn to_high_level_digest(d: &DigestInput) -> Option<HighLevelDigest> {
+    split_digest_value(&d.digest_value, d.digest_algo.as_deref())
+}
+
+fn build_high_level_pullcontext(pullcontext: &PullContext) -> HighLevelPullContext {
+    let mut manifest_digests = Vec::new();
+    let mut blob_digests = Vec::new();
+    let mut referrers_digests = Vec::new();
+
+    for d in &pullcontext.digests {
+        let Some(hd) = to_high_level_digest(d) else {
+            continue;
+        };
+
+        match d.digest_type.as_deref() {
+            Some("blobs") => blob_digests.push(hd),
+            Some("referrers") => referrers_digests.push(hd),
+            _ => manifest_digests.push(hd),
+        }
+    }
+
+    let manifest_racine_digest = manifest_digests.first().cloned();
+
+    HighLevelPullContext {
+        uuid: pullcontext.pull_id,
+        ip_client: pullcontext.ip_client.clone(),
+        registry: pullcontext.registry.clone(),
+        repository: pullcontext.repository.clone(),
+        tag: pullcontext.tag.clone().unwrap_or_else(|| "latest".to_string()),
+        manifest_digests: manifest_digests.clone(),
+        blob_digests,
+        referrers_digests,
+        manifest_racine_digest,
+        digests_possible: manifest_digests.clone(),
+        digests_expected: manifest_digests,
+        os: pullcontext.os.clone().unwrap_or_else(|| "unknown".to_string()),
+        arch: pullcontext.arch.clone().unwrap_or_else(|| "unknown".to_string()),
+        pull_completed: false,
+        scan_final_done: false,
+        in_whitelist: None,
+        in_blacklist: None,
+        in_cache: None,
+        check_if_verify_digest_completed: false,
+        scan_status: Some("PENDING".to_string()),
+        client_type: pullcontext
+            .client_type
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
     }
 }
