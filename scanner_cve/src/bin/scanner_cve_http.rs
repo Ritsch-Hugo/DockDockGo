@@ -17,6 +17,8 @@ use std::{
     time::Instant,
 };
 
+use tokio::io::AsyncWriteExt;
+
 use tracing::{error, info, warn};
 
 use scanner_cve::engine::pipeline;
@@ -108,7 +110,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
             }
         };
 
-        let Some(field) = next else { break };
+        let Some(mut field) = next else { break };
 
         let name = field.name().unwrap_or("").to_string();
 
@@ -342,45 +344,79 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                         .into_response();
                 }
 
-                let data = match field.bytes().await {
-                    Ok(b) => b,
+                let path = blobs_dir.join(&safe_blob_name);
+
+                let mut file = match tokio::fs::File::create(&path).await {
+                    Ok(f) => f,
                     Err(e) => {
-                        warn!(request_id = %request_id, reason = "failed reading blob", error = %e, "input rejected");
+                        error!(request_id = %request_id, error = %e, "failed creating blob file");
                         return (
-                            StatusCode::BAD_REQUEST,
+                            StatusCode::INTERNAL_SERVER_ERROR,
                             Json(error_response(
                                 Some(request_id.clone()),
-                                &format!("failed reading blob: {e}"),
+                                "failed creating blob file",
                             )),
                         )
                             .into_response();
                     }
                 };
 
-                if data.len() > MAX_BLOB_SIZE {
-                    warn!(request_id = %request_id, reason = "blob too large", filename = %safe_blob_name, size = data.len(), "input rejected");
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(error_response(
-                            Some(request_id.clone()),
-                            &format!("blob too large: {}", safe_blob_name),
-                        )),
-                    )
-                        .into_response();
-                }
+                let mut written = 0usize;
+                loop {
+                    let chunk = match field.chunk().await {
+                        Ok(Some(c)) => c,
+                        Ok(None) => break,
+                        Err(e) => {
+                            warn!(request_id = %request_id, reason = "failed reading blob chunk", error = %e, "input rejected");
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(error_response(
+                                    Some(request_id.clone()),
+                                    &format!("failed reading blob: {e}"),
+                                )),
+                            )
+                                .into_response();
+                        }
+                    };
 
-                let path = blobs_dir.join(&safe_blob_name);
+                    written = match written.checked_add(chunk.len()) {
+                        Some(v) => v,
+                        None => {
+                            warn!(request_id = %request_id, reason = "blob size overflow", filename = %safe_blob_name, "input rejected");
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(error_response(
+                                    Some(request_id.clone()),
+                                    &format!("blob too large: {}", safe_blob_name),
+                                )),
+                            )
+                                .into_response();
+                        }
+                    };
 
-                if let Err(e) = fs::write(&path, &data) {
-                    error!(request_id = %request_id, error = %e, "failed writing blob");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(error_response(
-                            Some(request_id.clone()),
-                            &format!("failed writing blob: {e}"),
-                        )),
-                    )
-                        .into_response();
+                    if written > MAX_BLOB_SIZE {
+                        warn!(request_id = %request_id, reason = "blob too large", filename = %safe_blob_name, size = written, "input rejected");
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(error_response(
+                                Some(request_id.clone()),
+                                &format!("blob too large: {}", safe_blob_name),
+                            )),
+                        )
+                            .into_response();
+                    }
+
+                    if let Err(e) = file.write_all(&chunk).await {
+                        error!(request_id = %request_id, error = %e, "failed writing blob chunk");
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(error_response(
+                                Some(request_id.clone()),
+                                "failed writing blob",
+                            )),
+                        )
+                            .into_response();
+                    }
                 }
             }
 
