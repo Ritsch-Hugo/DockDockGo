@@ -51,8 +51,7 @@ docker run -d \
   -v $(pwd)/registry_whitelist.json:/app/registry_whitelist.json:ro \
   -v $(pwd)/certs-mitm:/app/certs-mitm:ro \
   -e DATABASE_URL=postgres://docdockgo_admin:docdockgo@172.17.0.1:5432/docdockgo \
-  -p 443:8443 \
-  ghcr.io/ritsch-hugo/docdockgo:latest
+  ghcr.io/ritsch-hugo/docdockgo-proxy:latest
 ```
 > `--env-file` inclusion du fichier .env contenant les credentials pour bdd, timeout, orchestrateur url... 
 > `-u 10001:10001` force l'exécution du proxy avec un utilisateur non-privilégié pour garantir la sécurité du système hôte
