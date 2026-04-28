@@ -54,13 +54,11 @@
     --name docdockgo-dashboard \
     --env-file .env \
     --network host \
-    -p 3010:3010 \
-    docdockgo-dashboard
+    ghcr.io/ritsch-hugo/docdockgo-dashboard:latest
   ```
 
   > `--env-file` charge toutes les variables d'environnement depuis le fichier `.env`  
-  > `--network host` permet l'accès à la base PostgreSQL locale  
-  > `-p 3010:3010` expose le dashboard sur le port 3010
+  > `--network host` permet l'accès à la base PostgreSQL locale
 
   ---
 
