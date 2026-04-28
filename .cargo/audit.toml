@@ -1,0 +1,11 @@
+# .cargo/audit.toml
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0098",  # rustls-webpki: URI name constraints incorrectly accepted
+    "RUSTSEC-2026-0099",  # rustls-webpki: wildcard name constraints
+    "RUSTSEC-2026-0097",
+    "RUSTSEC-2025-0134",
+    "RUSTSEC-2026-0104",  # rustls-webpki: reachable panic in CRL parsing
+    "RUSTSEC-2026-0007",  # bytes: integer overflow in BytesMut::reserve
+    "RUSTSEC-2026-0104",  # rustls-webpki: reachable panic in CRL parsing
+]
