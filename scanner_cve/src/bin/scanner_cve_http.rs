@@ -74,10 +74,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
         error!(request_id = %request_id, error = %e, "failed to create workspace");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(error_response(
-                Some(request_id),
-                &format!("failed to create workspace: {e}"),
-            )),
+            Json(error_response(Some(request_id), "internal server error")),
         )
             .into_response();
     }
@@ -175,7 +172,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(error_response(
                             Some(request_id.clone()),
-                            &format!("failed writing manifest: {e}"),
+                            "internal server error",
                         )),
                     )
                         .into_response();
@@ -241,7 +238,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(error_response(
                             Some(request_id.clone()),
-                            &format!("failed writing config: {e}"),
+                            "internal server error",
                         )),
                     )
                         .into_response();
@@ -488,7 +485,7 @@ async fn scan_upload(mut multipart: Multipart) -> Response {
                 request_id: req.request_id.clone(),
                 status: ScanStatus::Error,
                 missing_layers: vec![],
-                message: Some(format!("scan failed: {e}")),
+                message: Some("scan failed".to_string()),
                 summary: None,
                 findings: vec![],
                 raw_trivy_json: None,
