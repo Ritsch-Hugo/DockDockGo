@@ -55,11 +55,21 @@ async fn main() {
     println!("Dashboard listening on http://{addr}");
 
     // ── Graceful shutdown (SIGTERM + SIGINT) ──────────────────────────────────
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .unwrap();
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal());
 
+    // On attend SOIT que le serveur finisse, SOIT que le signal de shutdown soit reçu
+    tokio::select! {
+        res = server => {
+            if let Err(e) = res {
+                eprintln!("Erreur serveur : {}", e);
+            }
+        },
+        _ = shutdown_signal() => {
+            println!("Arrêt immédiat forcé par l'utilisateur.");
+        },
+    }
+    
     println!("Serveur arrêté proprement.");
 }
 
@@ -104,12 +114,11 @@ async fn shutdown_signal() {
             .await;
     };
 
-    // Sur Windows il n'y a pas de SIGTERM → on attend seulement SIGINT
     #[cfg(not(unix))]
     let sigterm = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c   => println!("SIGINT reçu"),
-        _ = sigterm  => println!("SIGTERM reçu"),
+        _ = ctrl_c   => { println!("SIGINT reçu, arrêt..."); },
+        _ = sigterm  => { println!("SIGTERM reçu, arrêt..."); },
     }
 }

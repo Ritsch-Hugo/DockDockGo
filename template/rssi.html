@@ -634,10 +634,7 @@ function handleQuarantineUpdate(action, data) {
       <td>${data.size_bytes ? Math.round(data.size_bytes/1024) + ' KB' : '—'}</td>
       <td style="color:var(--text-secondary)">À l'instant</td>
       <td><span class="chip">${data.type || '?'}</span></td>
-      <td>
-        <button class="btn btn-success" style="font-size:11px;padding:3px 8px;margin-right:4px">Valider</button>
-        <button class="btn btn-danger" style="font-size:11px;padding:3px 8px">Rejeter</button>
-      </td></tr>`;
+      </tr>`;
     tbody.insertAdjacentHTML('afterbegin', row);
     updateMetricDelta('metric-quarantine', 1);
     // FIX: mise à jour du badge quarantaine
