@@ -52,6 +52,11 @@ pub fn apply_layer(blob_store: &str, digest: &str, rootfs: &Path) -> Result<()> 
         let rel_path = sanitize_relative_path(&raw_path)
             .with_context(|| format!("invalid archive path: {}", raw_path.display()))?;
 
+        // "." and "./" entries represent the archive root — nothing to extract
+        if rel_path.as_os_str().is_empty() {
+            continue;
+        }
+
         // Whiteouts OCI
         if is_opaque_whiteout(&rel_path) {
             let parent = rel_path.parent().unwrap_or(Path::new(""));
@@ -149,12 +154,8 @@ pub fn apply_layer(blob_store: &str, digest: &str, rootfs: &Path) -> Result<()> 
                 })?;
             }
 
-            other => {
-                anyhow::bail!(
-                    "unsupported tar entry type for {}: {:?}",
-                    rel_path.display(),
-                    other
-                );
+            _ => {
+                // skip character devices, block devices, FIFOs — not needed for CVE scanning
             }
         }
     }
@@ -207,10 +208,6 @@ fn sanitize_relative_path(path: &Path) -> Result<PathBuf> {
                 anyhow::bail!("path prefix forbidden: {}", path.display());
             }
         }
-    }
-
-    if clean.as_os_str().is_empty() {
-        anyhow::bail!("empty resulting path: {}", path.display());
     }
 
     Ok(clean)
