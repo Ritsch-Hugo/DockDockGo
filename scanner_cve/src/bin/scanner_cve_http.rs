@@ -34,6 +34,8 @@ const MAX_BLOBS: usize = 128;
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -42,12 +44,17 @@ async fn main() {
         )
         .init();
 
+    let port: u16 = std::env::var("PORT")
+        .unwrap_or_else(|_| "3002".to_string())
+        .parse()
+        .expect("PORT must be a valid port number");
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/scan-upload", post(scan_upload))
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3002));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!(address = %addr, "CVE scanner listening");
 
     let listener = tokio::net::TcpListener::bind(addr)
