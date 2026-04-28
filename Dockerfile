@@ -16,7 +16,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY template ./template
-
+COPY .sqlx .sqlx
 # Compilation en mode Release
 # Le binaire s'appellera 'DockDockGo' car c'est le 'name' dans Cargo.toml
 RUN cargo build --release --all-features
