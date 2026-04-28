@@ -517,12 +517,14 @@ pub async fn dashboard_events_stream(
     println!("[SSE] Nouveau client connecté");
 
     let event_stream = stream::unfold(listener, |mut listener| async move {
-        while let Ok(notification) = listener.recv().await {
-            println!("[SSE] Notification : {}", notification.payload());
-            let event = Event::default().data(notification.payload());
-            return Some((Ok::<Event, Infallible>(event), listener));
+        match listener.recv().await {
+            Ok(notification) => {
+                println!("[SSE] Notification : {}", notification.payload());
+                let event = Event::default().data(notification.payload());
+                Some((Ok::<Event, Infallible>(event), listener))
+            }
+            Err(_) => None,
         }
-        None
     });
 
     Sse::new(event_stream)
