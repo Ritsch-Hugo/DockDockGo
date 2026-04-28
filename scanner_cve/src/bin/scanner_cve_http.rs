@@ -18,6 +18,7 @@ use std::{
 };
 
 use tokio::io::AsyncWriteExt;
+use tokio::signal;
 
 use tracing::{error, info, warn};
 
@@ -54,8 +55,29 @@ async fn main() {
         .expect("failed to bind TCP listener");
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("axum server failed");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    let sigterm = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c  => { info!("received SIGINT, starting graceful shutdown"); },
+        _ = sigterm => { info!("received SIGTERM, starting graceful shutdown"); },
+    }
 }
 
 async fn health() -> &'static str {
