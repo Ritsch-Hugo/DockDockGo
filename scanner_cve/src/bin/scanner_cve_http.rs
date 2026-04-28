@@ -24,11 +24,11 @@ use tracing::{error, info, warn};
 use scanner_cve::engine::pipeline;
 use scanner_cve::models::{ScanRequest, ScanResponse, ScanStatus};
 
-const MAX_BODY_SIZE: usize = 1024 * 1024 * 1024; // 1 GB
-const MAX_MANIFEST_SIZE: usize = 5 * 1024 * 1024; // 5 MB
-const MAX_CONFIG_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+const MAX_BODY_SIZE: usize = 10 * 1024 * 1024 * 1024; // 10 GB
+const MAX_MANIFEST_SIZE: usize = 1024 * 1024; // 1 MB
+const MAX_CONFIG_SIZE: usize = 5 * 1024 * 1024; // 5 MB
 const MAX_PULL_CONTEXT_SIZE: usize = 2 * 1024 * 1024; // 2 MB
-const MAX_BLOB_SIZE: usize = 200 * 1024 * 1024; // 200 MB
+const MAX_BLOB_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2 GB
 const MAX_BLOBS: usize = 128;
 
 #[tokio::main]

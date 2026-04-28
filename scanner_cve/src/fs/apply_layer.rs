@@ -9,7 +9,7 @@ use tar::{Archive, EntryType};
 
 const MAX_ENTRIES: usize = 100_000;
 const MAX_FILE_SIZE: u64 = 200 * 1024 * 1024; // 200 MB
-const MAX_TOTAL_UNPACKED: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+const MAX_TOTAL_UNPACKED: u64 = 5 * 1024 * 1024 * 1024; // 5 GB
 
 pub fn apply_layer(blob_store: &str, digest: &str, rootfs: &Path) -> Result<()> {
     let parts: Vec<&str> = digest.split(':').collect();
