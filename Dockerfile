@@ -12,10 +12,10 @@ FROM debian:trixie
 
 RUN apt-get update && \
     apt-get install -y wget ca-certificates && \
-    wget https://github.com/aquasecurity/trivy/releases/download/v0.69.3/trivy_0.69.3_Linux-64bit.tar.gz && \
-    tar zxvf trivy_0.69.3_Linux-64bit.tar.gz && \
+    wget https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz && \
+    tar zxvf trivy_0.70.0_Linux-64bit.tar.gz && \
     mv trivy /usr/local/bin/ && \
-    rm trivy_0.69.3_Linux-64bit.tar.gz && \
+    rm trivy_0.70.0_Linux-64bit.tar.gz && \
     apt-get clean
 
 WORKDIR /app
