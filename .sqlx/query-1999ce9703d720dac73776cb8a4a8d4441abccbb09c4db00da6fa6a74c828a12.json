@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, scanner_type, response_scanner, created_at, ia_decision_id,\n                llm_summary, executed\n         FROM scan_events WHERE pull_id = $1 ORDER BY created_at ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "scanner_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "response_scanner",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "ia_decision_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "llm_summary",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "executed",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1999ce9703d720dac73776cb8a4a8d4441abccbb09c4db00da6fa6a74c828a12"
+}

@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, registry, repository, tag, added_at FROM whitelist ORDER BY added_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "registry",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "repository",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "tag",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "added_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "9a43017d648293584b3d4b716fd022ec1a12e145a8c6a29177370ed061658e35"
+}

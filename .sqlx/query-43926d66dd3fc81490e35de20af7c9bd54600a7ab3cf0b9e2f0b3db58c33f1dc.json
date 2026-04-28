@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, digest_value, digest_type, digest_algo, received_at\n         FROM pull_digests WHERE pull_id = $1 ORDER BY received_at ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "digest_value",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "digest_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "digest_algo",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "received_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "43926d66dd3fc81490e35de20af7c9bd54600a7ab3cf0b9e2f0b3db58c33f1dc"
+}

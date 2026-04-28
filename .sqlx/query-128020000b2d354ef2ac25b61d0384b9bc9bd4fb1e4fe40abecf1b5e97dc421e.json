@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT uuid, ip_client, registry, repository, tag, os, arch, client_type,\n                started_at, last_activity, scan_completed, decision_final\n         FROM pulls WHERE uuid = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ip_client",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "registry",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "repository",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "tag",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "os",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "arch",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "client_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "last_activity",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "scan_completed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "decision_final",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "128020000b2d354ef2ac25b61d0384b9bc9bd4fb1e4fe40abecf1b5e97dc421e"
+}

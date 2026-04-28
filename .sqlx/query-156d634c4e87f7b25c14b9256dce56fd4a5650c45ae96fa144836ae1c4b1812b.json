@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT uuid, repository, tag, ip_client, registry, arch, client_type,\n                decision_final, scan_completed, started_at\n         FROM pulls WHERE scan_completed = false\n         ORDER BY started_at DESC LIMIT 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "repository",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "tag",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "ip_client",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "registry",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "arch",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "client_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "decision_final",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "scan_completed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "156d634c4e87f7b25c14b9256dce56fd4a5650c45ae96fa144836ae1c4b1812b"
+}
