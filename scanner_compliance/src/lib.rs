@@ -6,5 +6,6 @@ pub mod engine;
 pub mod fs;
 pub mod models;
 pub mod rules;
+pub mod security;
 
 pub mod pipeline;
