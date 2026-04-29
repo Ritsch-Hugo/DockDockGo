@@ -96,7 +96,10 @@ fn manifest_exactly_at_layer_limit_is_accepted() {
     );
 
     let result = pipeline::image_from_scan_request(req(&manifest));
-    assert!(result.is_ok(), "256 layers (limite exacte) doit etre accepte");
+    assert!(
+        result.is_ok(),
+        "256 layers (limite exacte) doit etre accepte"
+    );
 }
 
 #[test]
@@ -187,7 +190,10 @@ fn config_blob_nonexistent_path_gives_has_config_false() {
     };
 
     let result = pipeline::image_from_scan_request(bad_blob_req);
-    assert!(result.is_ok(), "chemin de blob inexistant ne doit pas crasher");
+    assert!(
+        result.is_ok(),
+        "chemin de blob inexistant ne doit pas crasher"
+    );
     assert!(
         !result.unwrap().has_config,
         "has_config doit etre false quand la lecture du blob echoue"
@@ -200,7 +206,10 @@ fn config_blob_nonexistent_path_gives_has_config_false() {
 fn json_depth_at_limit_passes() {
     // Exactement 64 niveaux : Ok
     let deep = "{\"a\":".repeat(64) + "1" + &"}".repeat(64);
-    assert!(security::check_json_depth(&deep).is_ok(), "depth=64 doit passer");
+    assert!(
+        security::check_json_depth(&deep).is_ok(),
+        "depth=64 doit passer"
+    );
 }
 
 #[test]
