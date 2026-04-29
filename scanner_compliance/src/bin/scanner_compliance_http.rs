@@ -2,7 +2,7 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart},
     http::StatusCode,
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use scanner_compliance::models::{RawBlob, ScanRequest, Stage};
@@ -105,6 +105,19 @@ impl Drop for WorkspaceGuard {
     }
 }
 
+/// Waits for SIGTERM or SIGINT and returns, triggering axum's graceful shutdown.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+
+    tokio::select! {
+        _ = sigterm.recv() => println!("[shutdown] SIGTERM received"),
+        _ = sigint.recv()  => println!("[shutdown] SIGINT received"),
+    }
+}
+
 /// Reads rate-limit settings from environment variables, with safe defaults.
 ///
 /// - `RATE_LIMIT_PER_SECOND`  : replenish 1 token every N seconds (default: 1 → 1 req/s)
@@ -126,6 +139,11 @@ async fn main() {
     let (per_second, burst) = rate_limit_config();
     println!("Rate limit: 1 req / {}s, burst {}", per_second, burst);
 
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3001);
+
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(per_second)
@@ -134,7 +152,8 @@ async fn main() {
             .expect("Invalid rate-limit configuration"),
     );
 
-    let app = Router::new()
+    // Routes soumises au rate limiting
+    let scanned = Router::new()
         .route("/v1/scan", post(scan_handler))
         .route("/v1/scan-upload", post(upload_handler))
         .layer(GovernorLayer {
@@ -142,9 +161,14 @@ async fn main() {
         })
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
+    // /health exclue du rate limiting (sondes Kubernetes)
+    let app = Router::new()
+        .route("/health", get(health_handler))
+        .merge(scanned);
 
-    println!("🚀 Scanner HTTP listening on http://{}", addr);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+    println!("Scanner HTTP listening on http://{}", addr);
 
     let listener = TcpListener::bind(addr)
         .await
@@ -154,8 +178,15 @@ async fn main() {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .expect("Server error");
+}
+
+/* ---------------- HEALTH ---------------- */
+
+async fn health_handler() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
 }
 
 /* ---------------- JSON ENDPOINT ---------------- */
