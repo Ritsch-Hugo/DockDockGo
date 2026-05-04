@@ -398,7 +398,8 @@ async fn main() -> Result<()> {
     info!("Concurrence max : {} scans simultanés", max_concurrent);
     let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
-    let router = axum::Router::new()
+    // /mcp avec rate limiting et body limit
+    let mcp_router = axum::Router::new()
         .nest_service("/mcp", service)
         .layer(axum::middleware::from_fn({
             let sem = Arc::clone(&semaphore);
@@ -416,15 +417,44 @@ async fn main() -> Result<()> {
                 }
             }
         }))
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)); // 1 MB max
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
+
+    // /health en dehors du rate limiting pour ne pas bloquer les health checks K8s
+    let router = axum::Router::new()
+        .route(
+            "/health",
+            axum::routing::get(|| async { StatusCode::OK }),
+        )
+        .merge(mcp_router);
 
     let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("En écoute sur http://0.0.0.0:{port}/mcp");
 
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("impossible d'installer le handler Ctrl+C");
+    };
+    let sigterm = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("impossible d'installer le handler SIGTERM")
+            .recv()
+            .await;
+    };
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = sigterm => {},
+    }
+    info!("Signal reçu, arrêt gracieux en cours...");
 }
 
 // ============================================================
