@@ -421,10 +421,7 @@ async fn main() -> Result<()> {
 
     // /health en dehors du rate limiting pour ne pas bloquer les health checks K8s
     let router = axum::Router::new()
-        .route(
-            "/health",
-            axum::routing::get(|| async { StatusCode::OK }),
-        )
+        .route("/health", axum::routing::get(|| async { StatusCode::OK }))
         .merge(mcp_router);
 
     let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
