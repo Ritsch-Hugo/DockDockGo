@@ -24,6 +24,9 @@ struct OpenAiRequest<'a> {
     tool_choice: Option<&'a str>,
     stream: bool,
     temperature: f32,
+    /// Hint de routing OpenRouter — ignoré silencieusement par vLLM/Ollama.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<serde_json::Value>,
 }
 
 /// Réponse de /v1/chat/completions.
@@ -194,6 +197,19 @@ impl LlmBackend for OpenAiBackend {
             Some("required")
         };
 
+        // Les providers MiniMax natifs (minimax/fp8, minimax/highspeed) retournent les
+        // tool calls dans un format XML propriétaire au lieu du format OpenAI standard.
+        // On préfère en priorité les providers OpenAI-compatibles. Si tous sont indisponibles,
+        // OpenRouter tombe sur MiniMax natif — le pipeline gère ça gracieusement (fallback 0.3).
+        // vLLM/Ollama ignorent silencieusement ce champ inconnu.
+        let provider = if model.starts_with("minimax/") {
+            Some(serde_json::json!({
+                "order": ["Fireworks", "Together", "SambaNova"]
+            }))
+        } else {
+            None
+        };
+
         let body = OpenAiRequest {
             model,
             messages: messages.iter().map(Self::message_to_json).collect(),
@@ -201,6 +217,7 @@ impl LlmBackend for OpenAiBackend {
             tool_choice,
             stream: false,
             temperature: 0.0,
+            provider,
         };
 
         let mut req = self.client.post(&url).json(&body);
