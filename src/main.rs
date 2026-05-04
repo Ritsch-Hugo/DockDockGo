@@ -905,60 +905,124 @@ async fn handle_final_phase(
         form = form.part(att.field_name.clone(), part);
     }
 
-    let decision = match http.post(&llm_url).multipart(form).send().await {
+    let llm_body: Option<Value> = match http.post(&llm_url).multipart(form).send().await {
         Err(e) => {
             warn!(
                 "LLM-decision unreachable pour pull_id={}: {} → PENDING",
                 pullcontext.pull_id, e
             );
-            "PENDING".to_string()
+            None
         }
         Ok(resp) => {
             let status = resp.status();
-
             if !status.is_success() {
                 warn!(
                     "LLM-decision HTTP {} pour pull_id={} → PENDING",
                     status, pullcontext.pull_id
                 );
-                "PENDING".to_string()
+                None
             } else {
                 let body: Value = resp.json().await.unwrap_or_else(|e| {
                     warn!("LLM-decision réponse non-JSON pull_id={}: {}", pullcontext.pull_id, e);
                     json!({})
                 });
-
                 info!(
                     "Réponse LLM-decision pull_id={}:\n{}",
                     pullcontext.pull_id,
                     serde_json::to_string_pretty(&body).unwrap_or_default()
                 );
-
-                decision_from_llm_response(&body)
+                Some(body)
             }
         }
     };
+
+    let decision = llm_body
+        .as_ref()
+        .map(|b| decision_from_llm_response(b))
+        .unwrap_or_else(|| "PENDING".to_string());
 
     info!(
         "Décision finale LLM: pull_id={}, decision={}",
         pullcontext.pull_id, decision
     );
 
-    // Enregistrement dans ia_decisions
-    sqlx::query(
-        r#"
-        INSERT INTO ia_decisions (id, pull_id, created_at, decision)
-        VALUES ($1, $2, NOW(), $3)
-        ON CONFLICT DO NOTHING
-        "#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(pullcontext.pull_id)
-    .bind(&decision)
-    .execute(pool)
-    .await?;
+    // Enregistrement dans ia_decisions uniquement si le LLM a répondu
+    if let Some(ref body) = llm_body {
+        let verdict = body.get("verdict");
 
-    info!("DB insert ia_decisions llm-decision OK: pull_id={}", pullcontext.pull_id);
+        let vuln_score = verdict
+            .and_then(|v| v.get("vulnerability_score"))
+            .and_then(|v| v.as_f64());
+        let confidence = verdict
+            .and_then(|v| v.get("confidence"))
+            .and_then(|v| v.as_f64());
+        let rationale = verdict
+            .and_then(|v| v.get("rationale"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let scan_reasoning = body.get("scan_reasoning").cloned();
+        let decision_metadata = body.get("decision_metadata").cloned();
+        let alternatives = body.get("alternatives").cloned();
+
+        let ia_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO ia_decisions (
+                id, pull_id, created_at,
+                decision,
+                vulnerability_score,
+                confidence,
+                rationale,
+                scan_reasoning,
+                decision_metadata,
+                alternatives
+            )
+            VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8, $9)
+            "#,
+        )
+        .bind(ia_id)
+        .bind(pullcontext.pull_id)
+        .bind(&decision)
+        .bind(vuln_score)
+        .bind(confidence)
+        .bind(rationale)
+        .bind(scan_reasoning)
+        .bind(decision_metadata)
+        .bind(alternatives)
+        .execute(pool)
+        .await?;
+
+        info!("DB insert ia_decisions OK: pull_id={}, id={}", pullcontext.pull_id, ia_id);
+
+        // Enregistrement des scans exécutés dans scan_events
+        if let Some(scan_analysis) = body.get("scan_analysis").and_then(|v| v.as_object()) {
+            for (scanner_type, scan_data) in scan_analysis {
+                let executed = scan_data.get("executed").and_then(|v| v.as_bool()).unwrap_or(false);
+                let llm_summary = scan_data.get("llm_summary").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let raw_result = scan_data.get("raw_result").cloned().unwrap_or(json!(null));
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO scan_events (id, pull_id, ia_decision_id, scanner_type, response_scanner, executed, llm_summary, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                    "#,
+                )
+                .bind(Uuid::new_v4())
+                .bind(pullcontext.pull_id)
+                .bind(ia_id)
+                .bind(scanner_type)
+                .bind(raw_result)
+                .bind(executed)
+                .bind(llm_summary)
+                .execute(pool)
+                .await?;
+
+                info!("DB insert scan_events OK: scanner_type={}, executed={}", scanner_type, executed);
+            }
+        }
+    }
 
     // Mise à jour de la décision finale dans pulls
     let scan_completed = decision != "PENDING";
@@ -984,10 +1048,20 @@ async fn handle_final_phase(
     Ok(decision)
 }
 
-/// Extrait ALLOW / DENY / PENDING depuis la réponse JSON du service LLM-decision.
-/// Priorité : champ "decision" explicite > champ "score" > PENDING par défaut.
 fn decision_from_llm_response(body: &Value) -> String {
-    // Champ "decision" explicite (ex: Qwen retourne { "decision": "ALLOW" })
+    // Format structuré : verdict.decision
+    if let Some(d) = body
+        .get("verdict")
+        .and_then(|v| v.get("decision"))
+        .and_then(|v| v.as_str())
+    {
+        let upper = d.to_uppercase();
+        if upper == "ALLOW" || upper == "DENY" || upper == "PENDING" {
+            return upper;
+        }
+    }
+
+    // Format plat : decision (fallback Qwen)
     if let Some(d) = body.get("decision").and_then(|v| v.as_str()) {
         let upper = d.to_uppercase();
         if upper == "ALLOW" || upper == "DENY" || upper == "PENDING" {
@@ -995,7 +1069,7 @@ fn decision_from_llm_response(body: &Value) -> String {
         }
     }
 
-    // Champ "score" numérique (ex: Qwen retourne { "score": 72 })
+    // Format plat : score numérique (fallback Qwen)
     if let Some(score) = body.get("score").and_then(|v| v.as_f64()) {
         return if score >= 50.0 {
             "ALLOW".to_string()
@@ -1004,7 +1078,6 @@ fn decision_from_llm_response(body: &Value) -> String {
         };
     }
 
-    // Champ "error" → service en erreur, on ne bloque pas
     if body.get("error").is_some() {
         return "PENDING".to_string();
     }
