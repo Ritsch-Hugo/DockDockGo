@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /build/target/release/llm-manager /usr/local/bin/llm-manager
 
 # Variables d'environnement par défaut (surchargées par Kubernetes ConfigMap)
-ENV OLLAMA_BASE_URL=http://localhost:11434
+ENV LLM_BASE_URL=http://localhost:8000
 ENV MANAGER_PORT=3003
 
 EXPOSE 3003

@@ -26,11 +26,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /build/target/release/llm-decision /usr/local/bin/llm-decision
 
 # Variables d'environnement par défaut (surchargées par Kubernetes ConfigMap)
-ENV OLLAMA_BASE_URL=http://localhost:11434
+ENV LLM_BASE_URL=http://localhost:8000
 ENV QUARANTINE_PATH=/quarantaine
-ENV DECISION_PORT=3002
+ENV DECISION_PORT=3005
 ENV MANAGER_PORT=3003
 
-EXPOSE 3002
+EXPOSE 3005
 
 ENTRYPOINT ["/usr/local/bin/llm-decision"]

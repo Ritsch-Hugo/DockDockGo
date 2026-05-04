@@ -188,12 +188,31 @@ async fn main() {
 
     info!("llm-manager en écoute sur http://{}", addr);
 
-    axum::serve(
-        tokio::net::TcpListener::bind(addr)
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("Impossible de binder le port");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("Erreur serveur axum");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
             .await
-            .expect("Impossible de binder le port"),
-        app,
-    )
-    .await
-    .expect("Erreur serveur axum");
+            .expect("impossible d'installer le handler Ctrl+C");
+    };
+    let sigterm = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("impossible d'installer le handler SIGTERM")
+            .recv()
+            .await;
+    };
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = sigterm => {},
+    }
+    info!("Signal reçu, arrêt gracieux en cours...");
 }
