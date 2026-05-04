@@ -126,6 +126,99 @@ async fn read_artifact(
     }
 }
 
+/// Charge tous les artefacts d'une image depuis la quarantaine.
+/// Les fichiers introuvables sont ignorés avec un avertissement (non bloquant),
+/// sauf si aucun artefact n'est disponible du tout.
+pub async fn load_artifacts(
+    ctx: &PullContext,
+    quarantine_path: &Path,
+) -> Result<ArtifactBundle, LlmError> {
+    let root = image_root(quarantine_path, ctx)?;
+
+    // --- Manifests ---
+    let mut manifests = Vec::new();
+    for digest in &ctx.manifest_digests {
+        let path = root
+            .join("manifests")
+            .join(format!("{}.json", digest.filename()));
+        match read_artifact(&path, Some(digest)).await {
+            Ok(content) => manifests.push(ArtifactFile {
+                digest: digest.full(),
+                content,
+            }),
+            Err(LlmError::InvalidInput(e)) => {
+                tracing::error!("Manifest {} : {}", digest.full(), e);
+                return Err(LlmError::InvalidInput(e));
+            }
+            Err(e) => tracing::warn!("Manifest introuvable {}: {}", digest.full(), e),
+        }
+    }
+
+    // --- Blobs ---
+    let mut blobs = Vec::new();
+    for digest in &ctx.blob_digests {
+        let path = root.join("blobs").join("sha256").join(digest.filename());
+        match read_artifact(&path, Some(digest)).await {
+            Ok(content) => blobs.push(ArtifactFile {
+                digest: digest.full(),
+                content,
+            }),
+            Err(LlmError::InvalidInput(e)) => {
+                tracing::error!("Blob {} : {}", digest.full(), e);
+                return Err(LlmError::InvalidInput(e));
+            }
+            Err(e) => tracing::warn!("Blob introuvable {}: {}", digest.full(), e),
+        }
+    }
+
+    // --- Referrers ---
+    let mut referrers = Vec::new();
+    for digest in &ctx.referrers_digests {
+        let path = root
+            .join("referrers")
+            .join(format!("{}.json", digest.filename()));
+        match read_artifact(&path, Some(digest)).await {
+            Ok(content) => referrers.push(ArtifactFile {
+                digest: digest.full(),
+                content,
+            }),
+            Err(LlmError::InvalidInput(e)) => {
+                tracing::warn!("Referrer {} digest invalide : {}", digest.full(), e);
+            }
+            Err(e) => tracing::warn!("Referrer introuvable {}: {}", digest.full(), e),
+        }
+    }
+
+    // --- SBOM (optionnel) ---
+    // Le sbom.json est à la racine du tag, pas dans un sous-dossier
+    let sbom_path = root.join("sbom.json");
+    let sbom = match tokio::fs::read_to_string(&sbom_path).await {
+        Ok(content) => {
+            tracing::info!("SBOM trouvé pour {}/{}", ctx.repository, ctx.tag);
+            Some(content)
+        }
+        Err(_) => {
+            tracing::info!("Pas de SBOM pour {}/{}", ctx.repository, ctx.tag);
+            None
+        }
+    };
+
+    if manifests.is_empty() && blobs.is_empty() {
+        return Err(LlmError::ArtifactNotFound(format!(
+            "Aucun artefact trouvé pour {}/{}:{} dans {:?}",
+            ctx.registry, ctx.repository, ctx.tag, quarantine_path
+        )));
+    }
+
+    Ok(ArtifactBundle {
+        pull_context: ctx.clone(),
+        manifests,
+        blobs,
+        referrers,
+        sbom,
+    })
+}
+
 // ============================================================
 // Tests unitaires
 // ============================================================
@@ -283,97 +376,4 @@ mod tests {
         let result = read_artifact(&path, Some(&mauvais_digest)).await;
         assert!(matches!(result, Err(LlmError::InvalidInput(_))));
     }
-}
-
-/// Charge tous les artefacts d'une image depuis la quarantaine.
-/// Les fichiers introuvables sont ignorés avec un avertissement (non bloquant),
-/// sauf si aucun artefact n'est disponible du tout.
-pub async fn load_artifacts(
-    ctx: &PullContext,
-    quarantine_path: &Path,
-) -> Result<ArtifactBundle, LlmError> {
-    let root = image_root(quarantine_path, ctx)?;
-
-    // --- Manifests ---
-    let mut manifests = Vec::new();
-    for digest in &ctx.manifest_digests {
-        let path = root
-            .join("manifests")
-            .join(format!("{}.json", digest.filename()));
-        match read_artifact(&path, Some(digest)).await {
-            Ok(content) => manifests.push(ArtifactFile {
-                digest: digest.full(),
-                content,
-            }),
-            Err(LlmError::InvalidInput(e)) => {
-                tracing::error!("Manifest {} : {}", digest.full(), e);
-                return Err(LlmError::InvalidInput(e));
-            }
-            Err(e) => tracing::warn!("Manifest introuvable {}: {}", digest.full(), e),
-        }
-    }
-
-    // --- Blobs ---
-    let mut blobs = Vec::new();
-    for digest in &ctx.blob_digests {
-        let path = root.join("blobs").join("sha256").join(digest.filename());
-        match read_artifact(&path, Some(digest)).await {
-            Ok(content) => blobs.push(ArtifactFile {
-                digest: digest.full(),
-                content,
-            }),
-            Err(LlmError::InvalidInput(e)) => {
-                tracing::error!("Blob {} : {}", digest.full(), e);
-                return Err(LlmError::InvalidInput(e));
-            }
-            Err(e) => tracing::warn!("Blob introuvable {}: {}", digest.full(), e),
-        }
-    }
-
-    // --- Referrers ---
-    let mut referrers = Vec::new();
-    for digest in &ctx.referrers_digests {
-        let path = root
-            .join("referrers")
-            .join(format!("{}.json", digest.filename()));
-        match read_artifact(&path, Some(digest)).await {
-            Ok(content) => referrers.push(ArtifactFile {
-                digest: digest.full(),
-                content,
-            }),
-            Err(LlmError::InvalidInput(e)) => {
-                tracing::warn!("Referrer {} digest invalide : {}", digest.full(), e);
-            }
-            Err(e) => tracing::warn!("Referrer introuvable {}: {}", digest.full(), e),
-        }
-    }
-
-    // --- SBOM (optionnel) ---
-    // Le sbom.json est à la racine du tag, pas dans un sous-dossier
-    let sbom_path = root.join("sbom.json");
-    let sbom = match tokio::fs::read_to_string(&sbom_path).await {
-        Ok(content) => {
-            tracing::info!("SBOM trouvé pour {}/{}", ctx.repository, ctx.tag);
-            Some(content)
-        }
-        Err(_) => {
-            tracing::info!("Pas de SBOM pour {}/{}", ctx.repository, ctx.tag);
-            None
-        }
-    };
-
-    if manifests.is_empty() && blobs.is_empty() {
-        return Err(LlmError::ArtifactNotFound(format!(
-            "Aucun artefact trouvé pour {}/{}:{} dans {:?}",
-            ctx.registry, ctx.repository, ctx.tag, quarantine_path
-        )));
-    }
-
-    Ok(ArtifactBundle {
-        pull_context: ctx.clone(),
-        manifests,
-        blobs,
-        referrers,
-        sbom,
-    })
 }

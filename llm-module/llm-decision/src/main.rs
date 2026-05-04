@@ -93,94 +93,6 @@ fn validate_pull_context(ctx: &PullContext) -> Result<(), &'static str> {
 }
 
 // ============================================================
-// Tests unitaires de la validation
-// ============================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use llm_common::Digest;
-
-    fn valid_digest(value: &str) -> Digest {
-        Digest {
-            algorithm: "sha256".to_string(),
-            value: value.to_string(),
-        }
-    }
-
-    fn base_ctx() -> PullContext {
-        PullContext {
-            uuid: uuid::Uuid::new_v4(),
-            ip_client: "127.0.0.1".to_string(),
-            registry: "ghcr.io".to_string(),
-            repository: "library/alpine".to_string(),
-            tag: "3.18".to_string(),
-            manifest_digests: vec![valid_digest(&"a".repeat(64))],
-            blob_digests: vec![],
-            referrers_digests: vec![],
-            manifest_racine_digest: None,
-            digests_possible: vec![],
-            digests_expected: vec![],
-            os: "linux".to_string(),
-            arch: "amd64".to_string(),
-            pull_completed: true,
-        }
-    }
-
-    #[test]
-    fn test_ctx_valide() {
-        assert!(validate_pull_context(&base_ctx()).is_ok());
-    }
-
-    #[test]
-    fn test_registry_vide() {
-        let mut ctx = base_ctx();
-        ctx.registry = "".to_string();
-        assert!(validate_pull_context(&ctx).is_err());
-    }
-
-    #[test]
-    fn test_traversal_dans_registry() {
-        let mut ctx = base_ctx();
-        ctx.registry = "../../../etc".to_string();
-        assert!(validate_pull_context(&ctx).is_err());
-    }
-
-    #[test]
-    fn test_traversal_dans_tag() {
-        let mut ctx = base_ctx();
-        ctx.tag = "../../passwd".to_string();
-        assert!(validate_pull_context(&ctx).is_err());
-    }
-
-    #[test]
-    fn test_trop_de_digests() {
-        let mut ctx = base_ctx();
-        ctx.manifest_digests = (0..51)
-            .map(|i| valid_digest(&format!("{:0>64}", i)))
-            .collect();
-        assert!(validate_pull_context(&ctx).is_err());
-    }
-
-    #[test]
-    fn test_digest_sha256_invalide() {
-        let mut ctx = base_ctx();
-        ctx.manifest_digests = vec![Digest {
-            algorithm: "sha256".to_string(),
-            value: "pas_un_sha256".to_string(),
-        }];
-        assert!(validate_pull_context(&ctx).is_err());
-    }
-
-    #[test]
-    fn test_tag_trop_long() {
-        let mut ctx = base_ctx();
-        ctx.tag = "a".repeat(129);
-        assert!(validate_pull_context(&ctx).is_err());
-    }
-}
-
-// ============================================================
 // Health check
 // ============================================================
 
@@ -449,4 +361,92 @@ async fn main() {
     )
     .await
     .expect("Erreur serveur axum");
+}
+
+// ============================================================
+// Tests unitaires de la validation
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llm_common::Digest;
+
+    fn valid_digest(value: &str) -> Digest {
+        Digest {
+            algorithm: "sha256".to_string(),
+            value: value.to_string(),
+        }
+    }
+
+    fn base_ctx() -> PullContext {
+        PullContext {
+            uuid: uuid::Uuid::new_v4(),
+            ip_client: "127.0.0.1".to_string(),
+            registry: "ghcr.io".to_string(),
+            repository: "library/alpine".to_string(),
+            tag: "3.18".to_string(),
+            manifest_digests: vec![valid_digest(&"a".repeat(64))],
+            blob_digests: vec![],
+            referrers_digests: vec![],
+            manifest_racine_digest: None,
+            digests_possible: vec![],
+            digests_expected: vec![],
+            os: "linux".to_string(),
+            arch: "amd64".to_string(),
+            pull_completed: true,
+        }
+    }
+
+    #[test]
+    fn test_ctx_valide() {
+        assert!(validate_pull_context(&base_ctx()).is_ok());
+    }
+
+    #[test]
+    fn test_registry_vide() {
+        let mut ctx = base_ctx();
+        ctx.registry = "".to_string();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_traversal_dans_registry() {
+        let mut ctx = base_ctx();
+        ctx.registry = "../../../etc".to_string();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_traversal_dans_tag() {
+        let mut ctx = base_ctx();
+        ctx.tag = "../../passwd".to_string();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_trop_de_digests() {
+        let mut ctx = base_ctx();
+        ctx.manifest_digests = (0..51)
+            .map(|i| valid_digest(&format!("{:0>64}", i)))
+            .collect();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_digest_sha256_invalide() {
+        let mut ctx = base_ctx();
+        ctx.manifest_digests = vec![Digest {
+            algorithm: "sha256".to_string(),
+            value: "pas_un_sha256".to_string(),
+        }];
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_tag_trop_long() {
+        let mut ctx = base_ctx();
+        ctx.tag = "a".repeat(129);
+        assert!(validate_pull_context(&ctx).is_err());
+    }
 }
