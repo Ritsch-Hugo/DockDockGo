@@ -1,12 +1,12 @@
 use anyhow::Result;
+use rmcp::schemars;
+use rmcp::schemars::JsonSchema;
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
-use rmcp::schemars;
-use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
@@ -38,6 +38,7 @@ struct ScanParams {
 
 #[derive(Clone)]
 struct DocDockGoTools {
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     static_scanner_url: String,
     compliance_scanner_url: String,
@@ -67,7 +68,9 @@ impl DocDockGoTools {
 #[tool_router]
 impl DocDockGoTools {
     /// Lance un scan statique CVE avec Trivy sur l'image dans la quarantaine.
-    #[tool(description = "Run a static CVE scan using Trivy on a Docker image stored in the quarantine folder. Returns a JSON report with vulnerability findings, severity counts, and CVE details.")]
+    #[tool(
+        description = "Run a static CVE scan using Trivy on a Docker image stored in the quarantine folder. Returns a JSON report with vulnerability findings, severity counts, and CVE details."
+    )]
     async fn run_static_scan(&self, params: Parameters<ScanParams>) -> String {
         let quarantine_path = params.0.quarantine_path;
         match self.do_static_scan(&quarantine_path).await {
@@ -80,7 +83,9 @@ impl DocDockGoTools {
     }
 
     /// Lance un scan de conformité sur l'image dans la quarantaine.
-    #[tool(description = "Run a compliance scan on a Docker image stored in the quarantine folder. Checks security rules: root user, dangerous permissions, exposed secrets in env/fs, forbidden binaries, missing labels, unsafe entrypoint. Returns a JSON report with pass/warn/fail findings.")]
+    #[tool(
+        description = "Run a compliance scan on a Docker image stored in the quarantine folder. Checks security rules: root user, dangerous permissions, exposed secrets in env/fs, forbidden binaries, missing labels, unsafe entrypoint. Returns a JSON report with pass/warn/fail findings."
+    )]
     async fn run_compliance_scan(&self, params: Parameters<ScanParams>) -> String {
         let quarantine_path = params.0.quarantine_path;
         match self.do_compliance_scan(&quarantine_path).await {
@@ -93,7 +98,9 @@ impl DocDockGoTools {
     }
 
     /// Lance un scan dynamique comportemental avec Falco (non encore implémenté).
-    #[tool(description = "Run a dynamic behavioral scan on a Docker image using Falco syscall monitoring. Detects suspicious runtime behavior. NOTE: Not yet implemented, returns a stub response.")]
+    #[tool(
+        description = "Run a dynamic behavioral scan on a Docker image using Falco syscall monitoring. Detects suspicious runtime behavior. NOTE: Not yet implemented, returns a stub response."
+    )]
     async fn run_dynamic_scan(&self, params: Parameters<ScanParams>) -> String {
         let _ = params;
         json!({
@@ -111,13 +118,12 @@ impl DocDockGoTools {
 #[tool_handler]
 impl ServerHandler for DocDockGoTools {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(
-                "DocDockGo security scan tools. \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "DocDockGo security scan tools. \
                  Use run_static_scan for CVE analysis with Trivy, \
                  run_compliance_scan for security rules compliance, \
                  run_dynamic_scan for behavioral analysis (stub).",
-            )
+        )
     }
 }
 
@@ -154,8 +160,12 @@ impl DocDockGoTools {
         let blobs_dir = base.join("blobs").join("sha256");
 
         // Trouver le manifest image OCI (celui qui a "layers"), pas le manifest index
-        let manifest_path = find_image_manifest(&manifests_dir).await?
-            .ok_or_else(|| anyhow::anyhow!("Aucun manifest image trouvé dans {}", manifests_dir.display()))?;
+        let manifest_path = find_image_manifest(&manifests_dir).await?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Aucun manifest image trouvé dans {}",
+                manifests_dir.display()
+            )
+        })?;
 
         let manifest_bytes = fs::read(&manifest_path).await?;
 
@@ -202,7 +212,10 @@ impl DocDockGoTools {
 
         let resp = self.http.post(&url).multipart(form).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("Scanner CVE retourné HTTP {}", resp.status()));
+            return Err(anyhow::anyhow!(
+                "Scanner CVE retourné HTTP {}",
+                resp.status()
+            ));
         }
         let text = resp.text().await?;
         Ok(text)
@@ -216,8 +229,9 @@ impl DocDockGoTools {
         let blobs_dir = base.join("blobs").join("sha256");
 
         // Lire le premier manifest
-        let manifest_path = find_first_json(&manifests_dir).await?
-            .ok_or_else(|| anyhow::anyhow!("Aucun manifest trouvé dans {}", manifests_dir.display()))?;
+        let manifest_path = find_first_json(&manifests_dir).await?.ok_or_else(|| {
+            anyhow::anyhow!("Aucun manifest trouvé dans {}", manifests_dir.display())
+        })?;
 
         let manifest_raw = fs::read_to_string(&manifest_path).await?;
 
@@ -266,7 +280,10 @@ impl DocDockGoTools {
 
         let resp = self.http.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("Scanner compliance retourné HTTP {}", resp.status()));
+            return Err(anyhow::anyhow!(
+                "Scanner compliance retourné HTTP {}",
+                resp.status()
+            ));
         }
         let text = resp.text().await?;
         Ok(text)
@@ -291,12 +308,11 @@ async fn find_image_manifest(dir: &PathBuf) -> Result<Option<PathBuf>> {
         if !path.extension().map(|x| x == "json").unwrap_or(false) {
             continue;
         }
-        if let Ok(data) = fs::read(&path).await {
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&data) {
-                if v.get("layers").is_some() {
-                    return Ok(Some(path));
-                }
-            }
+        if let Ok(data) = fs::read(&path).await
+            && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&data)
+            && v.get("layers").is_some()
+        {
+            return Ok(Some(path));
         }
     }
     Ok(None)
@@ -312,6 +328,61 @@ async fn find_first_json(dir: &PathBuf) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+// ============================================================
+// Point d'entrée
+// ============================================================
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    let port: u16 = std::env::var("MCP_SERVER_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3004);
+
+    info!("mcp-tools-server démarrage sur port {}", port);
+    info!(
+        "Scanner statique  : {}",
+        std::env::var("STATIC_SCANNER_URL").unwrap_or_else(|_| DEFAULT_STATIC_URL.to_string())
+    );
+    info!(
+        "Scanner compliance: {}",
+        std::env::var("COMPLIANCE_SCANNER_URL")
+            .unwrap_or_else(|_| DEFAULT_COMPLIANCE_URL.to_string())
+    );
+
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
+
+    // Mode stateless + réponse JSON directe (pas de SSE, pas de session).
+    // Chaque requête POST est indépendante — parfait pour un serveur de tools
+    // appelé par llm-decision via JSON-RPC.
+    let service: StreamableHttpService<DocDockGoTools, LocalSessionManager> =
+        StreamableHttpService::new(
+            || Ok(DocDockGoTools::new()),
+            Default::default(),
+            StreamableHttpServerConfig::default()
+                .with_stateful_mode(false)
+                .with_json_response(true),
+        );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+
+    let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    info!("En écoute sur http://0.0.0.0:{port}/mcp");
+
+    axum::serve(listener, router).await?;
+
+    Ok(())
 }
 
 // ============================================================
@@ -386,7 +457,9 @@ mod tests {
         let path = dir.path().join("manifest.json");
         std::fs::write(&path, manifest.to_string()).unwrap();
 
-        let result = find_image_manifest(&dir.path().to_path_buf()).await.unwrap();
+        let result = find_image_manifest(&dir.path().to_path_buf())
+            .await
+            .unwrap();
         assert!(result.is_some());
     }
 
@@ -400,71 +473,18 @@ mod tests {
         });
         std::fs::write(dir.path().join("index.json"), index.to_string()).unwrap();
 
-        let result = find_image_manifest(&dir.path().to_path_buf()).await.unwrap();
+        let result = find_image_manifest(&dir.path().to_path_buf())
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn test_find_image_manifest_dossier_vide() {
         let dir = tempfile::tempdir().unwrap();
-        let result = find_image_manifest(&dir.path().to_path_buf()).await.unwrap();
+        let result = find_image_manifest(&dir.path().to_path_buf())
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
-}
-
-// ============================================================
-// Point d'entrée
-// ============================================================
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
-    let port: u16 = std::env::var("MCP_SERVER_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3004);
-
-    info!("mcp-tools-server démarrage sur port {}", port);
-    info!(
-        "Scanner statique  : {}",
-        std::env::var("STATIC_SCANNER_URL").unwrap_or_else(|_| DEFAULT_STATIC_URL.to_string())
-    );
-    info!(
-        "Scanner compliance: {}",
-        std::env::var("COMPLIANCE_SCANNER_URL")
-            .unwrap_or_else(|_| DEFAULT_COMPLIANCE_URL.to_string())
-    );
-
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService,
-        session::local::LocalSessionManager,
-    };
-
-    // Mode stateless + réponse JSON directe (pas de SSE, pas de session).
-    // Chaque requête POST est indépendante — parfait pour un serveur de tools
-    // appelé par llm-decision via JSON-RPC.
-    let service: StreamableHttpService<DocDockGoTools, LocalSessionManager> =
-        StreamableHttpService::new(
-            || Ok(DocDockGoTools::new()),
-            Default::default(),
-            StreamableHttpServerConfig::default()
-                .with_stateful_mode(false)
-                .with_json_response(true),
-        );
-
-    let router = axum::Router::new().nest_service("/mcp", service);
-
-    let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    info!("En écoute sur http://0.0.0.0:{port}/mcp");
-
-    axum::serve(listener, router).await?;
-
-    Ok(())
 }
