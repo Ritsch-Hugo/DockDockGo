@@ -122,19 +122,40 @@ impl ServerHandler for DocDockGoTools {
 }
 
 // ============================================================
+// Validation du chemin de quarantaine
+// ============================================================
+
+fn validate_quarantine_path(path: &str) -> Result<()> {
+    if path.is_empty() || path.len() > 4096 {
+        anyhow::bail!("quarantine_path invalide : longueur hors limites");
+    }
+    if !path.starts_with('/') {
+        anyhow::bail!("quarantine_path invalide : chemin absolu requis");
+    }
+    if path.contains("..") {
+        anyhow::bail!("quarantine_path invalide : séquence de traversal interdite");
+    }
+    if path.bytes().any(|b| b == 0) {
+        anyhow::bail!("quarantine_path invalide : caractère nul interdit");
+    }
+    Ok(())
+}
+
+// ============================================================
 // Logique d'appel aux scanners
 // ============================================================
 
 impl DocDockGoTools {
     /// Lit les artefacts depuis la quarantaine et envoie un multipart au scanner CVE.
     async fn do_static_scan(&self, quarantine_path: &str) -> Result<String> {
+        validate_quarantine_path(quarantine_path)?;
         let base = PathBuf::from(quarantine_path);
         let manifests_dir = base.join("manifests");
         let blobs_dir = base.join("blobs").join("sha256");
 
-        // Trouver le premier manifest JSON
-        let manifest_path = find_first_json(&manifests_dir).await?
-            .ok_or_else(|| anyhow::anyhow!("Aucun manifest trouvé dans {}", manifests_dir.display()))?;
+        // Trouver le manifest image OCI (celui qui a "layers"), pas le manifest index
+        let manifest_path = find_image_manifest(&manifests_dir).await?
+            .ok_or_else(|| anyhow::anyhow!("Aucun manifest image trouvé dans {}", manifests_dir.display()))?;
 
         let manifest_bytes = fs::read(&manifest_path).await?;
 
@@ -167,12 +188,6 @@ impl DocDockGoTools {
 
                 let data = fs::read(&path).await?;
 
-                // Skipper les layers gzip (données binaires volumineuses)
-                if is_gzip(&data) {
-                    info!("skip layer gzip: {}", filename);
-                    continue;
-                }
-
                 form = form.part(
                     "blob",
                     reqwest::multipart::Part::bytes(data)
@@ -195,6 +210,7 @@ impl DocDockGoTools {
 
     /// Construit un ScanRequest JSON avec paths vers la quarantaine et appelle le scanner compliance.
     async fn do_compliance_scan(&self, quarantine_path: &str) -> Result<String> {
+        validate_quarantine_path(quarantine_path)?;
         let base = PathBuf::from(quarantine_path);
         let manifests_dir = base.join("manifests");
         let blobs_dir = base.join("blobs").join("sha256");
@@ -264,6 +280,26 @@ impl DocDockGoTools {
 /// Détecte les archives gzip par leur magic number (0x1f 0x8b).
 fn is_gzip(data: &[u8]) -> bool {
     data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b
+}
+
+/// Retourne le chemin du premier manifest OCI image (qui a un champ "layers"),
+/// en ignorant les manifest index (qui ont un champ "manifests").
+async fn find_image_manifest(dir: &PathBuf) -> Result<Option<PathBuf>> {
+    let mut entries = fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !path.extension().map(|x| x == "json").unwrap_or(false) {
+            continue;
+        }
+        if let Ok(data) = fs::read(&path).await {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&data) {
+                if v.get("layers").is_some() {
+                    return Ok(Some(path));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Retourne le chemin du premier fichier .json trouvé dans un répertoire.
