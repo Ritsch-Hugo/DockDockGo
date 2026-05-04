@@ -1,0 +1,5 @@
+[advisories]
+# rsa 0.9.x (Marvin Attack) - aucun fix disponible upstream.
+# Dépendance transitive de sqlx-mysql ; on n'utilise pas MySQL,
+# seul le feature "postgres" est activé dans Cargo.toml.
+ignore = ["RUSTSEC-2023-0071"]
