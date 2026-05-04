@@ -160,63 +160,56 @@ async fn execute_scans(
     quarantine_path: &str,
 ) {
     let args = json!({ "quarantine_path": quarantine_path });
+    let run_static = decision.run_static_scan;
+    let run_compliance = decision.run_compliance_scan;
+    let run_dynamic = decision.run_dynamic_scan;
 
-    if decision.run_static_scan {
-        info!("Exécution scan statique CVE via MCP...");
-        match mcp_client.call_tool("run_static_scan", args.clone()).await {
-            Ok(result_text) => {
-                // Le résultat est du JSON retourné par Trivy
-                let parsed: Value = serde_json::from_str(&result_text)
-                    .unwrap_or_else(|_| Value::String(result_text));
-                decision.static_scan_result = Some(parsed);
-                info!("Scan statique terminé");
-            }
-            Err(e) => {
-                error!("Scan statique échoué : {}", e);
-                decision.static_scan_result = Some(json!({
-                    "error": e.to_string(),
-                    "status": "ERROR"
-                }));
-            }
+    // Lancer les scans activés en parallèle
+    let static_fut = async {
+        if run_static {
+            info!("Exécution scan statique CVE via MCP...");
+            Some(mcp_client.call_tool("run_static_scan", args.clone()).await)
+        } else {
+            None
         }
+    };
+    let compliance_fut = async {
+        if run_compliance {
+            info!("Exécution scan compliance via MCP...");
+            Some(mcp_client.call_tool("run_compliance_scan", args.clone()).await)
+        } else {
+            None
+        }
+    };
+    let dynamic_fut = async {
+        if run_dynamic {
+            info!("Exécution scan dynamique via MCP...");
+            Some(mcp_client.call_tool("run_dynamic_scan", args.clone()).await)
+        } else {
+            None
+        }
+    };
+
+    let (static_res, compliance_res, dynamic_res) =
+        tokio::join!(static_fut, compliance_fut, dynamic_fut);
+
+    if let Some(r) = static_res {
+        decision.static_scan_result = Some(match r {
+            Ok(text) => { info!("Scan statique terminé"); serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text)) }
+            Err(e)   => { error!("Scan statique échoué : {}", e); json!({"error": e.to_string(), "status": "ERROR"}) }
+        });
     }
-
-    if decision.run_compliance_scan {
-        info!("Exécution scan compliance via MCP...");
-        match mcp_client.call_tool("run_compliance_scan", args.clone()).await {
-            Ok(result_text) => {
-                let parsed: Value = serde_json::from_str(&result_text)
-                    .unwrap_or_else(|_| Value::String(result_text));
-                decision.compliance_scan_result = Some(parsed);
-                info!("Scan compliance terminé");
-            }
-            Err(e) => {
-                error!("Scan compliance échoué : {}", e);
-                decision.compliance_scan_result = Some(json!({
-                    "error": e.to_string(),
-                    "status": "ERROR"
-                }));
-            }
-        }
+    if let Some(r) = compliance_res {
+        decision.compliance_scan_result = Some(match r {
+            Ok(text) => { info!("Scan compliance terminé"); serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text)) }
+            Err(e)   => { error!("Scan compliance échoué : {}", e); json!({"error": e.to_string(), "status": "ERROR"}) }
+        });
     }
-
-    if decision.run_dynamic_scan {
-        info!("Exécution scan dynamique via MCP...");
-        match mcp_client.call_tool("run_dynamic_scan", args.clone()).await {
-            Ok(result_text) => {
-                let parsed: Value = serde_json::from_str(&result_text)
-                    .unwrap_or_else(|_| Value::String(result_text));
-                decision.dynamic_scan_result = Some(parsed);
-                info!("Scan dynamique terminé (stub)");
-            }
-            Err(e) => {
-                error!("Scan dynamique échoué : {}", e);
-                decision.dynamic_scan_result = Some(json!({
-                    "error": e.to_string(),
-                    "status": "ERROR"
-                }));
-            }
-        }
+    if let Some(r) = dynamic_res {
+        decision.dynamic_scan_result = Some(match r {
+            Ok(text) => { info!("Scan dynamique terminé (stub)"); serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text)) }
+            Err(e)   => { error!("Scan dynamique échoué : {}", e); json!({"error": e.to_string(), "status": "ERROR"}) }
+        });
     }
 }
 
@@ -252,24 +245,25 @@ pub async fn run_decision(
     info!("Début analyse LLM pour {}", image);
 
     let worker_messages = build_worker_prompt(bundle, quarantine_path);
-    let mut votes: Vec<LlmVote> = Vec::new();
 
-    // --- Phase 1a : Workers séquentiels avec tool calling ---
-    for model in &config.worker_models {
-        info!("Worker {} en cours...", model);
-        match backend
-            .chat_with_tools(model, worker_messages.clone(), tool_schemas.clone())
-            .await
-        {
+    // --- Phase 1a : Workers en parallèle ---
+    info!("Lancement des {} workers en parallèle...", config.worker_models.len());
+    let [m0, m1, m2] = &config.worker_models;
+    let (r0, r1, r2) = tokio::join!(
+        backend.chat_with_tools(m0, worker_messages.clone(), tool_schemas.clone()),
+        backend.chat_with_tools(m1, worker_messages.clone(), tool_schemas.clone()),
+        backend.chat_with_tools(m2, worker_messages.clone(), tool_schemas),
+    );
+
+    let mut votes: Vec<LlmVote> = Vec::new();
+    for (result, model) in [r0, r1, r2].into_iter().zip(config.worker_models.iter()) {
+        match result {
             Ok(response) => {
                 let vote = parse_worker_vote(model, response);
                 info!(
                     "Worker {} → static={} compliance={} dynamic={} confidence={:.2}",
-                    model,
-                    vote.run_static_scan,
-                    vote.run_compliance_scan,
-                    vote.run_dynamic_scan,
-                    vote.confidence,
+                    model, vote.run_static_scan, vote.run_compliance_scan,
+                    vote.run_dynamic_scan, vote.confidence,
                 );
                 info!("Worker {} raisonnement : {}", model, vote.reasoning);
                 votes.push(vote);
@@ -545,15 +539,19 @@ pub async fn run_analysis(
 
     let analysis_schema = submit_vulnerability_analysis_schema();
     let worker_messages = build_worker_analysis_prompt(&scan_decision, bundle);
-    let mut full_analyses: Vec<WorkerAnalysisFull> = Vec::new();
 
-    // --- Phase 3a : workers analysent les résultats des scans ---
-    for model in &config.worker_models {
-        info!("Worker analyse phase 3 {} en cours...", model);
-        match backend
-            .chat_with_tools(model, worker_messages.clone(), vec![analysis_schema.clone()])
-            .await
-        {
+    // --- Phase 3a : Workers analyse en parallèle ---
+    info!("Lancement des {} workers phase 3a en parallèle...", config.worker_models.len());
+    let [m0, m1, m2] = &config.worker_models;
+    let (ra0, ra1, ra2) = tokio::join!(
+        backend.chat_with_tools(m0, worker_messages.clone(), vec![analysis_schema.clone()]),
+        backend.chat_with_tools(m1, worker_messages.clone(), vec![analysis_schema.clone()]),
+        backend.chat_with_tools(m2, worker_messages.clone(), vec![analysis_schema]),
+    );
+
+    let mut full_analyses: Vec<WorkerAnalysisFull> = Vec::new();
+    for (result, model) in [ra0, ra1, ra2].into_iter().zip(config.worker_models.iter()) {
+        match result {
             Ok(response) => {
                 let full = parse_worker_analysis(model, response);
                 info!(
@@ -748,49 +746,38 @@ async fn run_alternatives_phase(
     let alt_schema = suggest_alternatives_schema();
     let worker_messages = build_worker_alternatives_prompt(verdict, image);
 
-    // Phase 3c : workers suggèrent des alternatives
+    // Phase 3c : workers suggèrent des alternatives en parallèle
+    info!("Lancement des {} workers alternatives en parallèle...", config.worker_models.len());
+    let [m0, m1, m2] = &config.worker_models;
+    let (rb0, rb1, rb2) = tokio::join!(
+        backend.chat_with_tools(m0, worker_messages.clone(), vec![alt_schema.clone()]),
+        backend.chat_with_tools(m1, worker_messages.clone(), vec![alt_schema.clone()]),
+        backend.chat_with_tools(m2, worker_messages.clone(), vec![alt_schema]),
+    );
+
     let mut worker_suggestions: Vec<(String, Vec<(String, String, f64)>)> = Vec::new();
-
-    for model in &config.worker_models {
-        info!("Worker alternatives {} en cours...", model);
-        match backend
-            .chat_with_tools(model, worker_messages.clone(), vec![alt_schema.clone()])
-            .await
-        {
+    for (result, model) in [rb0, rb1, rb2].into_iter().zip(config.worker_models.iter()) {
+        let suggestions = match result {
             Ok(LlmResponse::ToolCalls(calls)) => {
-                let suggestions = calls
-                    .into_iter()
+                calls.into_iter()
                     .find(|tc| tc.name == "suggest_alternatives")
-                    .and_then(|tc| {
-                        serde_json::from_value::<SuggestAlternativesArgs>(tc.arguments).ok()
-                    })
-                    .map(|args| {
-                        args.alternatives
-                            .into_iter()
-                            .map(|a| (a.image, a.reason, a.confidence.clamp(0.0, 1.0)))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-
-                info!("Worker {} suggestions : {} alternatives", model, suggestions.len());
-                for (img, reason, conf) in &suggestions {
-                    info!("  → {} (confidence={:.2}) : {}", img, conf, reason);
-                }
-                worker_suggestions.push((model.clone(), suggestions));
+                    .and_then(|tc| serde_json::from_value::<SuggestAlternativesArgs>(tc.arguments).ok())
+                    .map(|args| args.alternatives.into_iter()
+                        .map(|a| (a.image, a.reason, a.confidence.clamp(0.0, 1.0)))
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default()
             }
             Ok(LlmResponse::Text(text)) => {
-                warn!(
-                    "Worker {} alternatives : réponse texte (\"{}...\")",
-                    model,
-                    text.chars().take(80).collect::<String>()
-                );
-                worker_suggestions.push((model.clone(), vec![]));
+                warn!("Worker {} alternatives : réponse texte (\"{}...\")", model, text.chars().take(80).collect::<String>());
+                vec![]
             }
-            Err(e) => {
-                warn!("Worker {} alternatives échoué : {}", model, e);
-                worker_suggestions.push((model.clone(), vec![]));
-            }
+            Err(e) => { warn!("Worker {} alternatives échoué : {}", model, e); vec![] }
+        };
+        info!("Worker {} suggestions : {} alternatives", model, suggestions.len());
+        for (img, reason, conf) in &suggestions {
+            info!("  → {} (confidence={:.2}) : {}", img, conf, reason);
         }
+        worker_suggestions.push((model.clone(), suggestions));
     }
 
     // Phase 3d : arbitre sélectionne les meilleures alternatives
@@ -927,10 +914,72 @@ mod tests {
             arguments: serde_json::json!({
                 "quarantine_path": "/q",
                 "reasoning": "Test",
-                "confidence": 99.0  // hors limites
+                "confidence": 99.0
             }),
         }];
         let vote = extract_vote_from_tool_calls("model", calls);
         assert!(vote.confidence <= 1.0);
+    }
+
+    // --- Tests parse_worker_analysis (phase 3) ---
+
+    #[test]
+    fn test_worker_analysis_valide() {
+        let calls = vec![ToolCall {
+            name: "submit_vulnerability_analysis".to_string(),
+            arguments: serde_json::json!({
+                "vulnerability_score": 7.5,
+                "confidence": 0.9,
+                "reasoning": "CVE-2024-1234 critique détecté",
+                "static_summary": "1 CVE critique",
+                "compliance_summary": null
+            }),
+        }];
+        let full = parse_worker_analysis("model", LlmResponse::ToolCalls(calls));
+        assert_eq!(full.analysis.status, "ok");
+        assert!((full.analysis.vulnerability_score.unwrap() - 7.5).abs() < 0.01);
+        assert_eq!(full.static_summary.as_deref(), Some("1 CVE critique"));
+    }
+
+    #[test]
+    fn test_worker_analysis_score_clamp() {
+        let calls = vec![ToolCall {
+            name: "submit_vulnerability_analysis".to_string(),
+            arguments: serde_json::json!({
+                "vulnerability_score": 15.0, // hors limites
+                "confidence": 0.8,
+                "reasoning": "Test"
+            }),
+        }];
+        let full = parse_worker_analysis("model", LlmResponse::ToolCalls(calls));
+        assert!(full.analysis.vulnerability_score.unwrap() <= 10.0);
+    }
+
+    #[test]
+    fn test_worker_analysis_texte_libre_echoue() {
+        let response = LlmResponse::Text("Image looks risky.".to_string());
+        let full = parse_worker_analysis("model", response);
+        assert_eq!(full.analysis.status, "failed");
+        assert!(full.analysis.vulnerability_score.is_none());
+    }
+
+    #[test]
+    fn test_worker_analysis_mauvais_tool_echoue() {
+        let calls = vec![ToolCall {
+            name: "make_final_verdict".to_string(), // mauvais tool pour un worker
+            arguments: serde_json::json!({"decision": "ALLOW"}),
+        }];
+        let full = parse_worker_analysis("model", LlmResponse::ToolCalls(calls));
+        assert_eq!(full.analysis.status, "failed");
+    }
+
+    #[test]
+    fn test_worker_analysis_arguments_invalides_echoue() {
+        let calls = vec![ToolCall {
+            name: "submit_vulnerability_analysis".to_string(),
+            arguments: serde_json::json!({"champ_inexistant": true}), // manque vulnerability_score
+        }];
+        let full = parse_worker_analysis("model", LlmResponse::ToolCalls(calls));
+        assert_eq!(full.analysis.status, "failed");
     }
 }

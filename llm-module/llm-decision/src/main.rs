@@ -5,6 +5,7 @@ mod prompt;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use axum::{extract::{DefaultBodyLimit, State}, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use serde_json::Value;
@@ -20,11 +21,11 @@ use mcp_client::{McpClient, image_is_clean_schema, mcp_to_openai_schema};
 struct AppState {
     backend: OpenAiBackend,
     config: Config,
-    /// Client MCP pour appeler les tools de scan après décision.
     mcp_client: Arc<McpClient>,
-    /// Schémas bruts MCP des tools disponibles (chargés une fois au démarrage).
-    /// Convertis en format OpenAI à chaque requête avec le bon quarantine_path.
     mcp_tools: Vec<Value>,
+    /// Limite le nombre de pipelines LLM simultanés pour éviter de saturer OpenRouter.
+    /// Chaque pipeline consomme jusqu'à 8 appels LLM séquentiels.
+    semaphore: Arc<Semaphore>,
 }
 
 // ============================================================
@@ -187,6 +188,18 @@ async fn decide(
     if let Err(reason) = validate_pull_context(&ctx) {
         return (StatusCode::BAD_REQUEST, format!("Requête invalide : {reason}")).into_response();
     }
+
+    // Acquérir un slot de concurrence — retourne 429 si tous les slots sont occupés
+    let _permit = match state.semaphore.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Trop de requêtes simultanées — réessayez dans quelques instants",
+            )
+                .into_response();
+        }
+    };
 
     info!(
         "Requête reçue pour {}/{}:{} (uuid={})",
@@ -365,12 +378,20 @@ async fn main() {
         }
     };
 
+    // Nombre max de pipelines LLM simultanés (configurable via MAX_CONCURRENT_PIPELINES)
+    let max_concurrent = std::env::var("MAX_CONCURRENT_PIPELINES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(5);
+    info!("Concurrence max : {} pipelines simultanés", max_concurrent);
+
     let port = config.decision_port;
     let state = Arc::new(AppState {
         backend,
         config,
         mcp_client,
         mcp_tools,
+        semaphore: Arc::new(Semaphore::new(max_concurrent)),
     });
 
     let app = Router::new()

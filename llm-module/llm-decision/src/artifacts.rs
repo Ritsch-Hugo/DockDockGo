@@ -1,11 +1,12 @@
+use sha2::{Digest as Sha2Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
 
 use llm_common::{
-    ArtifactBundle, ArtifactContent, ArtifactFile, LlmError, PullContext,
+    ArtifactBundle, ArtifactContent, ArtifactFile, Digest, LlmError, PullContext,
 };
 
 /// Taille maximale d'un artefact lu en mémoire.
-/// Au-delà, le fichier est traité comme binaire sans être chargé.
+/// Au-delà, le fichier est traité comme binaire sans être chargé (et le digest n'est pas vérifié).
 const MAX_ARTIFACT_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
 /// Valide qu'un composant de chemin (registry, repository, tag) ne contient
@@ -67,22 +68,45 @@ fn image_root(quarantine_path: &Path, ctx: &PullContext) -> Result<PathBuf, LlmE
     Ok(root)
 }
 
-/// Lit un fichier et détermine s'il est JSON ou binaire.
-/// Vérifie la taille avant lecture pour éviter de charger de gros fichiers en mémoire.
-async fn read_artifact(path: &Path) -> Result<ArtifactContent, LlmError> {
-    // Vérifier existence et taille avant toute lecture
+/// Lit un fichier, valide son digest SHA256 si fourni, et détermine s'il est JSON ou binaire.
+///
+/// Les fichiers dépassant MAX_ARTIFACT_SIZE_BYTES ne sont pas chargés en mémoire :
+/// ils sont traités comme binaires et la validation du digest est ignorée avec un avertissement.
+async fn read_artifact(path: &Path, expected: Option<&Digest>) -> Result<ArtifactContent, LlmError> {
     let metadata = tokio::fs::metadata(path)
         .await
         .map_err(|e| LlmError::ArtifactNotFound(format!("{} : {}", path.display(), e)))?;
 
     let size_bytes = metadata.len();
 
-    // Fichier trop grand → traiter directement comme binaire sans charger en mémoire
     if size_bytes > MAX_ARTIFACT_SIZE_BYTES {
+        if let Some(d) = expected {
+            tracing::warn!(
+                "Fichier {} ({} bytes) dépasse la limite de {}B — digest {} non vérifié",
+                path.display(), size_bytes, MAX_ARTIFACT_SIZE_BYTES, d.full()
+            );
+        }
         return Ok(ArtifactContent::Binary { size_bytes });
     }
 
-    match tokio::fs::read_to_string(path).await {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| LlmError::ArtifactNotFound(format!("{} : {}", path.display(), e)))?;
+
+    // Validation cryptographique du digest SHA256
+    if let Some(digest) = expected {
+        if digest.algorithm == "sha256" {
+            let computed = format!("{:x}", Sha256::digest(&bytes));
+            if computed != digest.value {
+                return Err(LlmError::InvalidInput(format!(
+                    "Digest invalide pour {} : annoncé sha256:{}, calculé sha256:{}",
+                    path.display(), digest.value, computed
+                )));
+            }
+        }
+    }
+
+    match String::from_utf8(bytes) {
         Ok(content) => {
             if serde_json::from_str::<serde_json::Value>(&content).is_ok() {
                 Ok(ArtifactContent::Json(content))
@@ -90,10 +114,7 @@ async fn read_artifact(path: &Path) -> Result<ArtifactContent, LlmError> {
                 Ok(ArtifactContent::Binary { size_bytes })
             }
         }
-        Err(_) => {
-            // Non UTF-8 → fichier binaire (layer gzip, etc.)
-            Ok(ArtifactContent::Binary { size_bytes })
-        }
+        Err(_) => Ok(ArtifactContent::Binary { size_bytes }),
     }
 }
 
@@ -174,6 +195,77 @@ mod tests {
         let normalized = normalize_path(p);
         assert!(!normalized.starts_with("/quarantaine"));
     }
+
+    // --- Tests read_artifact ---
+
+    #[tokio::test]
+    async fn test_read_artifact_json_valide() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = r#"{"schemaVersion":2}"#;
+        let path = dir.path().join("manifest.json");
+        tokio::fs::write(&path, content).await.unwrap();
+
+        let result = read_artifact(&path, None).await.unwrap();
+        assert!(matches!(result, ArtifactContent::Json(_)));
+    }
+
+    #[tokio::test]
+    async fn test_read_artifact_binaire_gzip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layer");
+        // Magic number gzip = 0x1f 0x8b
+        tokio::fs::write(&path, &[0x1f, 0x8b, 0x00, 0x00]).await.unwrap();
+
+        let result = read_artifact(&path, None).await.unwrap();
+        assert!(matches!(result, ArtifactContent::Binary { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_read_artifact_json_invalide_traite_comme_binaire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blob");
+        tokio::fs::write(&path, b"pas du json valide {{{").await.unwrap();
+
+        let result = read_artifact(&path, None).await.unwrap();
+        assert!(matches!(result, ArtifactContent::Binary { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_read_artifact_fichier_inexistant() {
+        let result = read_artifact(Path::new("/inexistant/fichier.json"), None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_artifact_digest_valide() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = br#"{"schemaVersion":2}"#;
+        let path = dir.path().join("manifest.json");
+        tokio::fs::write(&path, content).await.unwrap();
+
+        // Calculer le vrai digest du contenu
+        use sha2::{Digest as Sha2Digest, Sha256};
+        let hash = format!("{:x}", Sha256::digest(content));
+        let digest = llm_common::Digest { algorithm: "sha256".to_string(), value: hash };
+
+        let result = read_artifact(&path, Some(&digest)).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_artifact_digest_invalide() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        tokio::fs::write(&path, br#"{"schemaVersion":2}"#).await.unwrap();
+
+        let mauvais_digest = llm_common::Digest {
+            algorithm: "sha256".to_string(),
+            value: "a".repeat(64), // digest inventé
+        };
+
+        let result = read_artifact(&path, Some(&mauvais_digest)).await;
+        assert!(matches!(result, Err(LlmError::InvalidInput(_))));
+    }
 }
 
 /// Charge tous les artefacts d'une image depuis la quarantaine.
@@ -188,13 +280,16 @@ pub async fn load_artifacts(
     // --- Manifests ---
     let mut manifests = Vec::new();
     for digest in &ctx.manifest_digests {
-        // Les manifests ont l'extension .json dans la quarantaine
         let path = root.join("manifests").join(format!("{}.json", digest.filename()));
-        match read_artifact(&path).await {
+        match read_artifact(&path, Some(digest)).await {
             Ok(content) => manifests.push(ArtifactFile {
                 digest: digest.full(),
                 content,
             }),
+            Err(LlmError::InvalidInput(e)) => {
+                tracing::error!("Manifest {} : {}", digest.full(), e);
+                return Err(LlmError::InvalidInput(e));
+            }
             Err(e) => tracing::warn!("Manifest introuvable {}: {}", digest.full(), e),
         }
     }
@@ -202,13 +297,16 @@ pub async fn load_artifacts(
     // --- Blobs ---
     let mut blobs = Vec::new();
     for digest in &ctx.blob_digests {
-        // Les blobs n'ont pas d'extension, stockés dans blobs/sha256/
         let path = root.join("blobs").join("sha256").join(digest.filename());
-        match read_artifact(&path).await {
+        match read_artifact(&path, Some(digest)).await {
             Ok(content) => blobs.push(ArtifactFile {
                 digest: digest.full(),
                 content,
             }),
+            Err(LlmError::InvalidInput(e)) => {
+                tracing::error!("Blob {} : {}", digest.full(), e);
+                return Err(LlmError::InvalidInput(e));
+            }
             Err(e) => tracing::warn!("Blob introuvable {}: {}", digest.full(), e),
         }
     }
@@ -217,11 +315,14 @@ pub async fn load_artifacts(
     let mut referrers = Vec::new();
     for digest in &ctx.referrers_digests {
         let path = root.join("referrers").join(format!("{}.json", digest.filename()));
-        match read_artifact(&path).await {
+        match read_artifact(&path, Some(digest)).await {
             Ok(content) => referrers.push(ArtifactFile {
                 digest: digest.full(),
                 content,
             }),
+            Err(LlmError::InvalidInput(e)) => {
+                tracing::warn!("Referrer {} digest invalide : {}", digest.full(), e);
+            }
             Err(e) => tracing::warn!("Referrer introuvable {}: {}", digest.full(), e),
         }
     }
