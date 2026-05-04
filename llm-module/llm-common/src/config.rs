@@ -7,12 +7,16 @@ use std::path::PathBuf;
 /// En production Kubernetes, injecter via ConfigMap / Secret.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// URL de base d'Ollama.
-    /// Valeur par défaut : http://localhost:11434
-    /// En production : pointer vers le service Ollama du cluster.
-    pub ollama_base_url: String,
+    /// URL de base du backend LLM (vLLM, Ollama, ou tout backend OpenAI-compat).
+    /// Valeur par défaut : http://localhost:8000 (port par défaut de vLLM)
+    /// En production : pointer vers le service vLLM du cluster.
+    pub llm_base_url: String,
 
-    /// Chemin absolu vers le dossier quarantaine partagé.
+    /// Clé API pour les backends cloud (OpenRouter, etc.).
+    /// None pour les backends locaux (vLLM, Ollama).
+    pub api_key: Option<String>,
+
+/// Chemin absolu vers le dossier quarantaine partagé.
     /// En Kubernetes : chemin vers le PersistentVolume monté.
     pub quarantine_path: PathBuf,
 
@@ -40,6 +44,10 @@ pub struct Config {
     /// URL du serveur MCP (mcp-tools-server).
     /// llm-decision s'y connecte pour charger les tool schemas et exécuter les scans.
     pub mcp_server_url: String,
+
+    /// Timeout en secondes pour les appels MCP (scans Trivy, compliance).
+    /// Valeur par défaut : 300s (Trivy peut être lent sur de grosses images).
+    pub mcp_timeout_secs: u64,
 }
 
 impl Config {
@@ -47,8 +55,10 @@ impl Config {
     /// Toutes les variables sont optionnelles et ont des valeurs par défaut.
     pub fn from_env() -> Self {
         Self {
-            ollama_base_url: std::env::var("OLLAMA_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+            llm_base_url: std::env::var("LLM_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:8000".to_string()),
+
+            api_key: std::env::var("OPENROUTER_API_KEY").ok(),
 
             quarantine_path: PathBuf::from(
                 std::env::var("QUARANTINE_PATH")
@@ -57,15 +67,15 @@ impl Config {
 
             worker_models: [
                 std::env::var("LLM_WORKER_1")
-                    .unwrap_or_else(|_| "granite3.3:8b".to_string()),
+                    .unwrap_or_else(|_| "minimax/minimax-m2.7".to_string()),
                 std::env::var("LLM_WORKER_2")
-                    .unwrap_or_else(|_| "granite3.3:8b".to_string()),
+                    .unwrap_or_else(|_| "qwen/qwen3.5-35b-a3b".to_string()),
                 std::env::var("LLM_WORKER_3")
-                    .unwrap_or_else(|_| "granite3.3:8b".to_string()),
+                    .unwrap_or_else(|_| "google/gemma-4-31b-it".to_string()),
             ],
 
             arbiter_model: std::env::var("LLM_ARBITER")
-                .unwrap_or_else(|_| "granite3.3:8b".to_string()),
+                .unwrap_or_else(|_| "mistralai/mistral-small-2603".to_string()),
 
             llm_timeout_secs: std::env::var("LLM_TIMEOUT_SECS")
                 .ok()
@@ -87,6 +97,11 @@ impl Config {
 
             mcp_server_url: std::env::var("MCP_SERVER_URL")
                 .unwrap_or_else(|_| "http://localhost:3004/mcp".to_string()),
+
+            mcp_timeout_secs: std::env::var("MCP_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
         }
     }
 

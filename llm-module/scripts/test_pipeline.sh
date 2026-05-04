@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  test_pipeline.sh — Test du pipeline complet
+#  test_pipeline.sh — Lancement et test du pipeline complet
 #
-#  Prérequis (déjà lancés manuellement) :
-#    - scanner compliance  sur http://localhost:3001  (cargo run)
-#    - scanner CVE         sur http://localhost:3002  (docker run)
-#
-#  Ce script lance :
+#  Ce script lance tout de A à Z :
+#    3002 scanner-cve        (Docker)
+#    3001 scanner-compliance (Docker)
 #    3003 llm-manager
 #    3004 mcp-tools-server
-#    3005 llm-decision  (FORCE_SCANS=true → bypass LLM, scans forcés)
+#    3005 llm-decision
 #    3000 orchestrateur
+#
+#  Backend LLM : OpenRouter (cloud) — configuré dans llm-module/.env
 #
 #  Puis envoie un POST multipart à l'orchestrateur avec alpine/3.18
 #  et affiche la décision finale ALLOW / DENY.
@@ -21,61 +21,113 @@ MODULE_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$MODULE_DIR")"
 QUARANTINE="$REPO_DIR/quarantaine"
 
+# Branche mcp-tools-server clonée séparément
+MCP_REPO_DIR="${MCP_REPO_DIR:-/home/scuti/temp/mcp/DocDockGo}"
+
+# ── Charger le .env ───────────────────────────────────────────────────────────
+if [ -f "$MODULE_DIR/.env" ]; then
+    set -a
+    source "$MODULE_DIR/.env"
+    set +a
+else
+    echo "[ERR] Fichier .env introuvable : $MODULE_DIR/.env"
+    echo "      Crée-le avec OPENROUTER_API_KEY=sk-or-v1-..."
+    exit 1
+fi
+
+if [ -z "$OPENROUTER_API_KEY" ]; then
+    echo "[ERR] OPENROUTER_API_KEY manquant dans le .env"
+    exit 1
+fi
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+COMPLIANCE_IMAGE="scanner-compliance"
+CVE_IMAGE="scanner-cve"
+
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[TEST]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()  { echo -e "${RED}[ERR]${NC}  $*"; }
 
 PIDS=()
+DOCKER_CONTAINERS=()
 cleanup() {
     echo ""
     log "Arrêt des services..."
     for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
-    log "Nettoyage terminé (scanners 3001/3002 laissés actifs)."
+    for cid in "${DOCKER_CONTAINERS[@]}"; do docker stop "$cid" 2>/dev/null || true; done
+    log "Nettoyage terminé."
 }
 trap cleanup EXIT INT TERM
 
-# ── 1. Vérifier les prérequis ─────────────────────────────────────────────────
-log "Vérification des prérequis..."
-
-if ! curl -s http://localhost:11434/api/version > /dev/null 2>&1; then
-    err "Ollama non accessible sur localhost:11434 → lance : ollama serve"
-    exit 1
-fi
-log "Ollama OK"
-
-if ! curl -sv http://localhost:3001/v1/scan 2>&1 | grep -q "405\|200"; then
-    err "Scanner compliance (3001) non accessible → lance le manuellement"
-    exit 1
-fi
-log "Scanner compliance (3001) OK"
-
-if ! curl -s http://localhost:3002/health | grep -q "ok"; then
-    err "Scanner CVE (3002) non accessible → lance : docker run -p 3002:3002 scanner-cve"
-    exit 1
-fi
-log "Scanner CVE (3002) OK"
-
+# ── 1. Vérifier la quarantaine ────────────────────────────────────────────────
 if [ ! -d "$QUARANTINE/library/alpine/3.18/manifests" ]; then
     err "Quarantaine introuvable : $QUARANTINE/library/alpine/3.18"
     exit 1
 fi
-log "Quarantaine OK : $QUARANTINE/library/alpine/3.18"
+log "Quarantaine OK"
 
-# ── 2. Libérer uniquement les ports des services qu'on va lancer ──────────────
-log "Libération des ports 3000 3003 3004 3005..."
-for port in 3000 3003 3004 3005; do
+# ── 2. Libérer tous les ports ─────────────────────────────────────────────────
+log "Libération des ports 3000 3001 3002 3003 3004 3005..."
+for port in 3000 3001 3002 3003 3004 3005; do
     fuser -k "${port}/tcp" 2>/dev/null || true
 done
+docker ps -q --filter "publish=3001" --filter "publish=3002" | xargs -r docker stop 2>/dev/null || true
 sleep 1
 
-# ── 3. Build ──────────────────────────────────────────────────────────────────
+# ── 3. Scanner CVE (3002) ────────────────────────────────────────────────────
+log "Démarrage scanner CVE — image $CVE_IMAGE (port 3002)..."
+CID_CVE=$(docker run -d --rm -p 3002:3002 "$CVE_IMAGE" 2>/dev/null)
+if [ -z "$CID_CVE" ]; then
+    err "Impossible de démarrer $CVE_IMAGE"
+    err "Vérifie que l'image existe : docker images | grep $CVE_IMAGE"
+    exit 1
+fi
+DOCKER_CONTAINERS+=("$CID_CVE")
+
+log "Attente scanner CVE..."
+for i in $(seq 1 30); do
+    if curl -s http://localhost:3002/health 2>/dev/null | grep -q "ok"; then
+        log "Scanner CVE prêt (${i}s)"
+        break
+    fi
+    sleep 1
+    if [ $i -eq 30 ]; then
+        err "Scanner CVE pas prêt après 30s — vérifie : docker logs $CID_CVE"
+        exit 1
+    fi
+done
+
+# ── 4. Scanner compliance (3001) ─────────────────────────────────────────────
+log "Démarrage scanner compliance — image $COMPLIANCE_IMAGE (port 3001)..."
+CID_COMPLIANCE=$(docker run -d --rm -p 3001:3001 "$COMPLIANCE_IMAGE" 2>/dev/null)
+if [ -z "$CID_COMPLIANCE" ]; then
+    err "Impossible de démarrer $COMPLIANCE_IMAGE"
+    err "Vérifie que l'image existe : docker images | grep $COMPLIANCE_IMAGE"
+    exit 1
+fi
+DOCKER_CONTAINERS+=("$CID_COMPLIANCE")
+
+log "Attente scanner compliance..."
+for i in $(seq 1 30); do
+    if curl -sv http://localhost:3001/v1/scan 2>&1 | grep -q "405\|200"; then
+        log "Scanner compliance prêt (${i}s)"
+        break
+    fi
+    sleep 1
+    if [ $i -eq 30 ]; then
+        err "Scanner compliance pas prêt après 30s — vérifie : docker logs $CID_COMPLIANCE"
+        exit 1
+    fi
+done
+
+# ── 5. Build ──────────────────────────────────────────────────────────────────
 log "Build du workspace llm-module..."
 cd "$MODULE_DIR"
 cargo build -q 2>/dev/null || cargo build 2>&1 | tail -5
 
 log "Build de mcp-tools-server..."
-cd "$REPO_DIR/mcp-tools-server"
+cd "$MCP_REPO_DIR/mcp-tools-server"
 cargo build -q 2>/dev/null || cargo build 2>&1 | tail -5
 
 log "Build de l'orchestrateur..."
@@ -83,16 +135,19 @@ cd "$REPO_DIR/orchestrator"
 cargo build -q 2>/dev/null || cargo build 2>&1 | tail -5
 cd "$MODULE_DIR"
 
-# ── 4. llm-manager (3003) ─────────────────────────────────────────────────────
+# ── 6. llm-manager (3003) ─────────────────────────────────────────────────────
 log "Démarrage llm-manager (3003)..."
-OLLAMA_BASE_URL="http://localhost:11434" MANAGER_PORT=3003 \
+log "  Backend : $LLM_BASE_URL"
+log "  Workers : $LLM_WORKER_1 / $LLM_WORKER_2 / $LLM_WORKER_3"
+log "  Arbitre : $LLM_ARBITER"
+MANAGER_PORT=3003 \
     ./target/debug/llm-manager > /tmp/llm-manager.log 2>&1 &
 PIDS+=($!)
 
 log "Attente llm-manager..."
 for i in $(seq 1 60); do
     if curl -s http://localhost:3003/health 2>/dev/null | grep -qiE "ok|true|healthy|model"; then
-        log "llm-manager prêt (${i}s)"
+        log "llm-manager prêt (${i}×2s)"
         break
     fi
     sleep 2
@@ -101,12 +156,12 @@ for i in $(seq 1 60); do
     fi
 done
 
-# ── 5. mcp-tools-server (3004) ────────────────────────────────────────────────
+# ── 7. mcp-tools-server (3004) ────────────────────────────────────────────────
 log "Démarrage mcp-tools-server (3004)..."
 MCP_SERVER_PORT=3004 \
 STATIC_SCANNER_URL="http://localhost:3002" \
 COMPLIANCE_SCANNER_URL="http://localhost:3001" \
-    "$REPO_DIR/mcp-tools-server/target/debug/mcp-tools-server" > /tmp/mcp-tools-server.log 2>&1 &
+    "$MCP_REPO_DIR/mcp-tools-server/target/debug/mcp-tools-server" > /tmp/mcp-tools-server.log 2>&1 &
 PIDS+=($!)
 
 log "Attente mcp-tools-server..."
@@ -130,38 +185,36 @@ for t in d.get('result',{}).get('tools',[]): print(f'  - {t[\"name\"]}')
     fi
 done
 
-# ── 6. llm-decision (3005) — FORCE_SCANS=true ────────────────────────────────
+# ── 8. llm-decision (3005) ───────────────────────────────────────────────────
 log "Démarrage llm-decision (3005)..."
-OLLAMA_BASE_URL="http://localhost:11434" \
 DECISION_PORT=3005 \
 MANAGER_PORT=3003 \
 MANAGER_HOST=localhost \
 MCP_SERVER_URL="http://localhost:3004/mcp" \
 QUARANTINE_PATH="$QUARANTINE" \
-LLM_TIMEOUT_SECS=180 \
     ./target/debug/llm-decision > /tmp/llm-decision.log 2>&1 &
 PIDS+=($!)
 
-log "Attente llm-decision (peut prendre 2-3 min le temps que llm-manager valide les modèles)..."
-for i in $(seq 1 120); do
+log "Attente llm-decision..."
+for i in $(seq 1 60); do
     if grep -qi "en écoute sur\|listening on" /tmp/llm-decision.log 2>/dev/null; then
-        log "llm-decision prêt (${i}s)"
+        log "llm-decision prêt (${i}×2s)"
         break
     fi
     sleep 2
-    if [ $i -eq 120 ]; then
-        warn "llm-decision pas prêt après 240s — vérifie : tail /tmp/llm-decision.log"
+    if [ $i -eq 60 ]; then
+        warn "llm-decision pas prêt après 120s — vérifie : tail /tmp/llm-decision.log"
     fi
 done
 
-# ── 7. Orchestrateur (3000) ───────────────────────────────────────────────────
+# ── 9. Orchestrateur (3000) ──────────────────────────────────────────────────
 log "Démarrage orchestrateur (3000)..."
 "$REPO_DIR/orchestrator/target/debug/orchestrator" > /tmp/orchestrator.log 2>&1 &
 PIDS+=($!)
 sleep 2
 log "Orchestrateur prêt"
 
-# ── 8. Test — POST multipart à l'orchestrateur ────────────────────────────────
+# ── 10. Test — POST multipart à l'orchestrateur ───────────────────────────────
 log ""
 log "═══════════════════════════════════════════════════════"
 log " POST /v1/decision → orchestrateur → llm-decision"
@@ -169,7 +222,6 @@ log " → mcp-tools-server → scanners (3001 + 3002)"
 log " Image : alpine/3.18"
 log "═══════════════════════════════════════════════════════"
 
-# Manifest principal d'alpine/3.18 amd64 (config OCI + layer)
 MANIFEST_FILE="$QUARANTINE/library/alpine/3.18/manifests/fd032399cd767f310a1d1274e81cab9f0fd8a49b3589eba2c3420228cd45b6a7.json"
 
 CONTEXT='{
@@ -194,7 +246,7 @@ CONTEXT='{
   "pull_completed": true
 }'
 
-log "(les LLM peuvent prendre 5-15 min en séquentiel — patience)"
+log "(OpenRouter — jusqu'à 8 LLM en séquentiel : 4-10 min estimées pour ALLOW, plus si DENY)"
 RESPONSE=$(curl -s --max-time 900 \
     -X POST http://localhost:3000/v1/decision \
     -F "context=$CONTEXT" \
@@ -211,17 +263,19 @@ else
     log "Réponse orchestrateur :"
     echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
     echo ""
-    log "─── Résultats des scans (dans llm-decision) ────────"
+    log "─── Logs llm-decision (phases 1→3) ────────────────"
     python3 -c "
-import subprocess, json, re
-
-# Lire les logs llm-decision pour voir les résultats MCP
 with open('/tmp/llm-decision.log') as f:
     logs = f.read()
-
-# Afficher les lignes importantes
 for line in logs.splitlines():
-    if any(k in line for k in ['FORCE_SCANS', 'scan', 'Scan', 'MCP', 'mcp', 'Exéc', 'terminé', 'échoué', 'ERROR']):
+    if any(k in line for k in [
+        'scan', 'Scan', 'MCP', 'mcp', 'Exéc', 'terminé', 'échoué', 'ERROR',
+        'arbitre', 'Arbitre', 'Worker', 'raisonnement',
+        'phase 3', 'Phase 3', 'analyse', 'Analyse', 'verdict', 'Verdict',
+        'vulnérabilité', 'score', 'Score', 'ALLOW', 'DENY',
+        'alternative', 'Alternative', 'catalogue', 'Catalogue',
+        '→', '✓',
+    ]):
         print(' ', line.strip())
 " 2>/dev/null
 fi

@@ -9,11 +9,45 @@ on:
 
 jobs:
   # ============================================================
-  # CI — tourne à chaque push sur n'importe quelle branche
+  # Lint — clippy + format
+  # ============================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Installer Rust stable avec clippy et rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            llm-module/target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('llm-module/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+
+      - name: Vérification du format (rustfmt)
+        run: cargo fmt --manifest-path llm-module/Cargo.toml --all -- --check
+
+      - name: Analyse statique (clippy)
+        run: cargo clippy --manifest-path llm-module/Cargo.toml --all-targets -- -D warnings
+
+  # ============================================================
+  # CI — build + tests unitaires
   # ============================================================
   test:
     name: Build & Test
     runs-on: ubuntu-latest
+    needs: lint
 
     steps:
       - name: Checkout
@@ -40,17 +74,36 @@ jobs:
         run: cargo test --manifest-path llm-module/Cargo.toml
 
   # ============================================================
+  # Audit sécurité — RustSec (vulnérabilités des dépendances)
+  # ============================================================
+  audit:
+    name: Audit sécurité (RustSec)
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Installer cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit des dépendances
+        run: cargo audit --file llm-module/Cargo.lock
+
+  # ============================================================
   # CD — tourne uniquement sur les tags v*
   # ============================================================
   docker:
-    name: Build & Push images Docker
+    name: Build, Scan & Push images Docker
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, audit]
     if: startsWith(github.ref, 'refs/tags/v')
 
     permissions:
       contents: read
       packages: write
+      security-events: write
 
     steps:
       - name: Checkout
@@ -66,7 +119,24 @@ jobs:
       - name: Convertir le nom du owner en minuscules
         run: echo "OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-      - name: Build & Push llm-manager
+      - name: Build llm-manager (sans push)
+        uses: docker/build-push-action@v5
+        with:
+          context: llm-module
+          file: llm-module/llm-manager/Dockerfile
+          push: false
+          load: true
+          tags: llm-manager:scan
+
+      - name: Scan Trivy — llm-manager
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: llm-manager:scan
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+
+      - name: Push llm-manager
         uses: docker/build-push-action@v5
         with:
           context: llm-module
@@ -76,7 +146,24 @@ jobs:
             ghcr.io/${{ env.OWNER }}/llm-manager:${{ github.ref_name }}
             ghcr.io/${{ env.OWNER }}/llm-manager:latest
 
-      - name: Build & Push llm-decision
+      - name: Build llm-decision (sans push)
+        uses: docker/build-push-action@v5
+        with:
+          context: llm-module
+          file: llm-module/llm-decision/Dockerfile
+          push: false
+          load: true
+          tags: llm-decision:scan
+
+      - name: Scan Trivy — llm-decision
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: llm-decision:scan
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+
+      - name: Push llm-decision
         uses: docker/build-push-action@v5
         with:
           context: llm-module

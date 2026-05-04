@@ -17,9 +17,12 @@ pub enum LlmError {
     #[error("Erreur lecture fichier : {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Tous les workers LLM ont échoué ou expiré")]
-    AllWorkersFailed,
-
     #[error("Backend LLM indisponible : {0}")]
     BackendUnavailable(String),
+
+    #[error("Pipeline LLM dégradé : {0}")]
+    PipelineFailed(String),
+
+    #[error("Entrée invalide : {0}")]
+    InvalidInput(String),
 }

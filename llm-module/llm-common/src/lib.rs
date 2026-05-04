@@ -4,11 +4,14 @@ pub mod errors;
 pub mod traits;
 pub mod types;
 
-pub use backend::OllamaBackend;
+pub use backend::{ModelInfo, OpenAiBackend};
 pub use config::Config;
 pub use errors::LlmError;
 pub use traits::LlmBackend;
 pub use types::{
-    ArtifactBundle, ArtifactContent, ArtifactFile,
-    ChatMessage, Digest, LlmResponse, LlmVote, PullContext, ScanDecision, ToolCall,
+    Alternative, ArbiterAnalysis, ArtifactBundle, ArtifactContent, ArtifactFile,
+    ChatMessage, DecisionArbiterMeta, DecisionMetadata, DecisionWorkerMeta,
+    Digest, FinalReport, LlmResponse, LlmVote, PullContext,
+    ScanAnalysis, ScanDecision, ScanReasoning, ScanResult,
+    ToolCall, Verdict, WorkerAnalysis,
 };

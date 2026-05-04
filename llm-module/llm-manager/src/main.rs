@@ -5,14 +5,14 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::ge
 use serde::Serialize;
 use tracing::{error, info, warn};
 
-use llm_common::{Config, LlmBackend, OllamaBackend};
+use llm_common::{Config, OpenAiBackend};
 
 // ============================================================
 // État partagé entre les routes Axum
 // ============================================================
 
 struct AppState {
-    backend: OllamaBackend,
+    backend: OpenAiBackend,
     config: Config,
 }
 
@@ -42,10 +42,9 @@ struct ModelsResponse {
 // Routes
 // ============================================================
 
-/// GET /health — vérifie qu'Ollama tourne et que tous les modèles requis sont chargés.
+/// GET /health — vérifie que le backend LLM répond et que tous les modèles requis sont disponibles.
 /// Utilisé par llm-decision au démarrage et par les health checks Kubernetes.
 async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Vérifier chaque modèle requis (3 workers + 1 arbitre)
     let required: Vec<&str> = state
         .config
         .worker_models
@@ -54,68 +53,71 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .chain(std::iter::once(state.config.arbiter_model.as_str()))
         .collect();
 
-    let mut statuses: Vec<ModelStatus> = Vec::new();
-    let mut all_ok = true;
-    let mut ollama_up = true;
-
-    for model in &required {
-        match state.backend.is_healthy(model).await {
-            Ok(true) => {
-                info!("Modèle {} disponible", model);
-                statuses.push(ModelStatus {
-                    name: model.to_string(),
-                    available: true,
-                });
-            }
-            Ok(false) => {
-                warn!("Modèle {} manquant dans Ollama", model);
-                statuses.push(ModelStatus {
-                    name: model.to_string(),
-                    available: false,
-                });
-                all_ok = false;
-            }
-            Err(e) => {
-                error!("Erreur vérification modèle {} : {}", model, e);
-                statuses.push(ModelStatus {
-                    name: model.to_string(),
-                    available: false,
-                });
-                all_ok = false;
-                ollama_up = false;
-            }
-        }
+    // Un seul ping + un seul list_models pour tous les modèles
+    if let Err(e) = state.backend.ping().await {
+        error!("Backend LLM injoignable : {}", e);
+        let statuses = required
+            .iter()
+            .map(|m| ModelStatus { name: m.to_string(), available: false })
+            .collect();
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse { status: "unavailable", models: statuses }),
+        );
     }
 
-    let status = if !ollama_up {
-        "unavailable"
-    } else if all_ok {
-        "ok"
-    } else {
-        "degraded"
+    let available_models = match state.backend.list_models().await {
+        Ok(m) => m,
+        Err(e) => {
+            error!("Impossible de lister les modèles : {}", e);
+            let statuses = required
+                .iter()
+                .map(|m| ModelStatus { name: m.to_string(), available: false })
+                .collect();
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(HealthResponse { status: "unavailable", models: statuses }),
+            );
+        }
     };
 
-    let http_code = if all_ok {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
+    let mut statuses: Vec<ModelStatus> = Vec::new();
+    let mut all_ok = true;
+
+    for model in &required {
+        let model_lower = model.to_lowercase();
+        let available = available_models.iter().any(|m| {
+            let id = m.id.to_lowercase();
+            id == model_lower || id.contains(&model_lower) || model_lower.contains(&id)
+        });
+
+        if available {
+            info!("Modèle {} disponible", model);
+        } else {
+            warn!("Modèle {} manquant dans le backend LLM", model);
+            all_ok = false;
+        }
+        statuses.push(ModelStatus { name: model.to_string(), available });
+    }
+
+    let status = if all_ok { "ok" } else { "degraded" };
+    let http_code = if all_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
 
     (http_code, Json(HealthResponse { status, models: statuses }))
 }
 
-/// GET /models — retourne la liste de tous les modèles disponibles dans Ollama.
+/// GET /models — retourne la liste de tous les modèles disponibles dans le backend LLM.
 async fn models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.backend.list_models().await {
         Ok(list) => {
-            let names = list.into_iter().map(|m| m.name).collect();
+            let names = list.into_iter().map(|m| m.id).collect();
             (StatusCode::OK, Json(ModelsResponse { models: names })).into_response()
         }
         Err(e) => {
-            error!("Impossible de lister les modèles Ollama : {}", e);
+            error!("Impossible de lister les modèles LLM : {}", e);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Ollama injoignable : {e}"),
+                format!("LLM backend injoignable : {e}"),
             )
                 .into_response()
         }
@@ -137,10 +139,10 @@ async fn main() {
         .init();
 
     let config = Config::from_env();
-    let backend = OllamaBackend::new(config.ollama_base_url.clone(), config.llm_timeout_secs);
+    let backend = OpenAiBackend::new(config.llm_base_url.clone(), config.llm_timeout_secs, config.api_key.clone());
 
     info!("llm-manager démarrage sur le port {}", config.manager_port);
-    info!("Ollama URL : {}", config.ollama_base_url);
+    info!("LLM backend URL : {}", config.llm_base_url);
     info!(
         "Modèles requis : {:?} + arbitre {}",
         config.worker_models, config.arbiter_model

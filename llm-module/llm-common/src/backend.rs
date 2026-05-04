@@ -9,7 +9,7 @@ use crate::traits::LlmBackend;
 use crate::types::{ChatMessage, LlmResponse, ToolCall};
 
 // ============================================================
-// Structures pour l'API OpenAI-compat d'Ollama
+// Structures pour l'API OpenAI-compat (Ollama, vLLM, etc.)
 // POST /v1/chat/completions — supporte le tool calling natif.
 // ============================================================
 
@@ -18,13 +18,8 @@ use crate::types::{ChatMessage, LlmResponse, ToolCall};
 struct OpenAiRequest<'a> {
     model: &'a str,
     messages: Vec<serde_json::Value>,
-    /// Liste des tools au format OpenAI function calling.
-    /// Omis si vide (skip_serializing_if) pour ne pas perturber les modèles.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<serde_json::Value>,
-    /// Force le modèle à appeler au moins un outil quand des tools sont fournis.
-    /// "required" → le modèle DOIT faire un tool call (pas de réponse texte).
-    /// Omis si vide (pas de tools).
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a str>,
     stream: bool,
@@ -63,72 +58,101 @@ struct OpenAiFunction {
 }
 
 // ============================================================
-// Structures pour les autres endpoints Ollama (inchangés)
+// Structures pour les endpoints de découverte des modèles
+// vLLM : GET /v1/models  (format OpenAI standard)
 // ============================================================
 
+/// Réponse de GET /v1/models (format OpenAI).
 #[derive(Deserialize)]
-struct OllamaTagsResponse {
-    models: Vec<OllamaModelInfo>,
+struct ModelsListResponse {
+    data: Vec<ModelInfo>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct OllamaModelInfo {
-    pub name: String,
+#[derive(Debug, Deserialize, Clone)]
+pub struct ModelInfo {
+    /// Identifiant du modèle : chemin HuggingFace (ex: "ibm-granite/granite-3.3-8b-instruct")
+    /// ou nom court selon le backend.
+    pub id: String,
 }
 
 // ============================================================
-// OllamaBackend — implémentation concrète de LlmBackend
+// OpenAiBackend — implémentation concrète de LlmBackend
+// Compatible avec tout backend exposant l'API OpenAI : vLLM, Ollama, etc.
 // Partagée entre llm-manager (gestion) et llm-decision (inférence)
 // ============================================================
 
-pub struct OllamaBackend {
+pub struct OpenAiBackend {
     client: Client,
     base_url: String,
     timeout_secs: u64,
+    api_key: Option<String>,
 }
 
-impl OllamaBackend {
-    pub fn new(base_url: String, timeout_secs: u64) -> Self {
+impl OpenAiBackend {
+    pub fn new(base_url: String, timeout_secs: u64, api_key: Option<String>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs + 10))
             .build()
             .expect("Impossible de créer le client HTTP");
 
-        Self { client, base_url, timeout_secs }
+        Self { client, base_url, timeout_secs, api_key }
     }
 
-    /// Liste tous les modèles disponibles dans Ollama.
-    pub async fn list_models(&self) -> Result<Vec<OllamaModelInfo>, LlmError> {
-        let url = format!("{}/api/tags", self.base_url);
+    pub fn http_client(&self) -> &Client {
+        &self.client
+    }
 
-        let resp = self
-            .client
-            .get(&url)
+    /// Liste tous les modèles disponibles via GET /v1/models (format OpenAI standard).
+    pub async fn list_models(&self) -> Result<Vec<ModelInfo>, LlmError> {
+        let url = format!("{}/v1/models", self.base_url);
+
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| LlmError::BackendUnavailable(e.to_string()))?;
 
         if !resp.status().is_success() {
             return Err(LlmError::BackendUnavailable(format!(
-                "GET /api/tags retourné HTTP {}",
+                "GET /v1/models retourné HTTP {}",
                 resp.status()
             )));
         }
 
-        let tags: OllamaTagsResponse =
+        let list: ModelsListResponse =
             resp.json().await.map_err(|e| LlmError::Http(e.to_string()))?;
 
-        Ok(tags.models)
+        Ok(list.data)
     }
 
-    /// Vérifie qu'Ollama répond (appel léger).
+    /// Vérifie que le backend LLM répond.
+    /// vLLM/Ollama : GET /health — OpenRouter : GET /v1/models (pas de /health).
     pub async fn ping(&self) -> Result<(), LlmError> {
-        let url = format!("{}/api/version", self.base_url);
-        self.client
-            .get(&url)
+        let url = if self.api_key.is_some() {
+            format!("{}/v1/models", self.base_url)
+        } else {
+            format!("{}/health", self.base_url)
+        };
+
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+
+        let resp = req
             .send()
             .await
-            .map_err(|e| LlmError::BackendUnavailable(format!("Ollama injoignable : {e}")))?;
+            .map_err(|e| LlmError::BackendUnavailable(format!("LLM backend injoignable : {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(LlmError::BackendUnavailable(format!(
+                "ping retourné HTTP {}",
+                resp.status()
+            )));
+        }
         Ok(())
     }
 
@@ -142,7 +166,7 @@ impl OllamaBackend {
 }
 
 #[async_trait]
-impl LlmBackend for OllamaBackend {
+impl LlmBackend for OpenAiBackend {
     /// Appel principal — POST /v1/chat/completions avec tool schemas optionnels.
     ///
     /// Si `tools` est vide, Ollama répond en texte libre.
@@ -165,10 +189,14 @@ impl LlmBackend for OllamaBackend {
             tools,
             tool_choice,
             stream: false,
-            temperature: 0.1,
+            temperature: 0.0,
         };
 
-        let fut = self.client.post(&url).json(&body).send();
+        let mut req = self.client.post(&url).json(&body);
+        if let Some(key) = &self.api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+        let fut = req.send();
 
         let resp = timeout(Duration::from_secs(self.timeout_secs), fut)
             .await
@@ -180,7 +208,7 @@ impl LlmBackend for OllamaBackend {
 
         if !resp.status().is_success() {
             return Err(LlmError::Http(format!(
-                "Ollama HTTP {} pour le modèle {}",
+                "LLM backend HTTP {} pour le modèle {}",
                 resp.status(),
                 model
             )));
@@ -199,7 +227,7 @@ impl LlmBackend for OllamaBackend {
             .map(|c| c.message)
             .ok_or_else(|| LlmError::InvalidResponse {
                 model: model.to_string(),
-                reason: "Réponse Ollama sans aucun choix".to_string(),
+                reason: "Réponse LLM backend sans aucun choix".to_string(),
             })?;
 
         // Cas 1 : le LLM a émis des tool_calls
@@ -232,11 +260,14 @@ impl LlmBackend for OllamaBackend {
         self.ping().await?;
         let models = self.list_models().await?;
         let model_lower = model.to_lowercase();
-        Ok(models
-            .iter()
-            .any(|m| {
-                let name_lower = m.name.to_lowercase();
-                name_lower == model_lower || name_lower.starts_with(&format!("{model_lower}:"))
-            }))
+        // Correspondance flexible : le nom court peut être contenu dans l'id complet
+        // (ex: "granite3.3:8b" ⊂ "ibm-granite/granite-3.3-8b-instruct")
+        // ou être identique pour les backends qui retournent des noms courts.
+        Ok(models.iter().any(|m| {
+            let id_lower = m.id.to_lowercase();
+            id_lower == model_lower
+                || id_lower.contains(&model_lower)
+                || model_lower.contains(&id_lower)
+        }))
     }
 }

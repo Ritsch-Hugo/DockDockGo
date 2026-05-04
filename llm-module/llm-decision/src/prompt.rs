@@ -1,4 +1,4 @@
-use llm_common::{ArtifactBundle, ArtifactContent, ChatMessage, LlmVote};
+use llm_common::{ArtifactBundle, ArtifactContent, ChatMessage, LlmVote, ScanDecision, Verdict, WorkerAnalysis};
 
 /// Taille maximale d'un artefact inséré dans un prompt (en caractères).
 /// Protège contre les prompts trop longs qui feraient échouer le LLM.
@@ -128,7 +128,8 @@ pub fn build_arbiter_prompt(votes: &[LlmVote], image: &str) -> Vec<ChatMessage> 
     let system = ChatMessage::system(
         "You are a senior security arbitrator. Three independent LLM security analysts \
         have examined a Docker image and provided their scan recommendations.\n\n\
-        YOUR TASK: Produce the final authoritative security verdict.\n\n\
+        YOUR TASK: Produce the final authoritative security verdict by calling the \
+        `make_security_decision` tool. You MUST call this tool — do not respond in plain text.\n\n\
         CRITICAL RULE — DO NOT vote by majority count. Instead, evaluate the QUALITY \
         of each worker's reasoning:\n\
         - Strong evidence = specific package names/versions, concrete env var secrets, \
@@ -140,14 +141,9 @@ pub fn build_arbiter_prompt(votes: &[LlmVote], image: &str) -> Vec<ChatMessage> 
         - When ALL workers provide weak evidence, err on caution and run the scan anyway\n\
         - When ALL workers agree with strong evidence, follow them confidently\n\
         - For dynamic scan: only recommend if there is concrete behavioral risk evidence\n\n\
-        RESPONSE FORMAT — respond ONLY with this exact JSON, no other text:\n\
-        {\n\
-          \"run_static_scan\": true,\n\
-          \"run_compliance_scan\": false,\n\
-          \"run_dynamic_scan\": false,\n\
-          \"final_confidence\": 0.90,\n\
-          \"arbiter_rationale\": \"Explanation citing which workers had strong/weak reasoning and why\"\n\
-        }",
+        In `selected_worker_indices`, list the 0-based indices of workers whose reasoning \
+        was decisive (e.g. [0, 2] if workers 1 and 3 had the strongest evidence). \
+        This field is used for audit — be precise.",
     );
 
     let mut user_content = format!("Image under analysis: {}\n\n", image);
@@ -176,10 +172,324 @@ pub fn build_arbiter_prompt(votes: &[LlmVote], image: &str) -> Vec<ChatMessage> 
 
     user_content.push_str(
         "Evaluate the reasoning quality of each worker for each scan type. \
-        Produce your final JSON verdict:",
+        Call make_security_decision with your final verdict:",
     );
 
     vec![system, ChatMessage::user(user_content)]
+}
+
+// ============================================================
+// Prompts phase 3a — analyse des résultats des scans
+// ============================================================
+
+/// Construit le prompt envoyé aux workers pour analyser les résultats des scans.
+///
+/// Les workers reçoivent les résultats bruts (CVEs, règles compliance) et doivent
+/// appeler `submit_vulnerability_analysis` avec leur évaluation.
+/// Pas de system message — même règle critique qu'en phase 1.
+/// Les alternatives sont délibérément absentes de ce prompt pour éviter tout
+/// biais : un worker qui sait qu'il peut proposer des alternatives pourrait
+/// gonfler son score pour justifier ce besoin.
+pub fn build_worker_analysis_prompt(
+    scan_decision: &ScanDecision,
+    bundle: &ArtifactBundle,
+) -> Vec<ChatMessage> {
+    let ctx = &bundle.pull_context;
+    let image = format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag);
+
+    let mut content = format!(
+        "You are a Docker image security analyst. Based on the scan results below, \
+        assess the vulnerability level of this image and call submit_vulnerability_analysis. \
+        You MUST call this tool — do not respond in plain text.\n\n\
+        SCORING GUIDE (vulnerability_score, 0.0–10.0):\n\
+        - 0.0–3.9  Low      — minor issues, no critical findings, image is generally safe\n\
+        - 4.0–6.9  Medium   — concerning findings but not immediately exploitable\n\
+        - 7.0–8.9  High     — critical CVEs or significant compliance failures\n\
+        - 9.0–10.0 Critical — severe, directly exploitable vulnerabilities\n\n\
+        Score strictly based on what the scan results show. Do not speculate beyond the data.\n\n\
+        Image: {}\n\
+        OS: {}, Architecture: {}\n\n",
+        image,
+        ctx.os,
+        ctx.arch
+    );
+
+    if scan_decision.run_static_scan {
+        content.push_str("--- STATIC CVE SCAN ---\n");
+        match &scan_decision.static_scan_result {
+            Some(result) => format_static_scan(result, &mut content),
+            None => content.push_str("Status: result not available\n"),
+        }
+        content.push('\n');
+    }
+
+    if scan_decision.run_compliance_scan {
+        content.push_str("--- COMPLIANCE SCAN ---\n");
+        match &scan_decision.compliance_scan_result {
+            Some(result) => format_compliance_scan(result, &mut content),
+            None => content.push_str("Status: result not available\n"),
+        }
+        content.push('\n');
+    }
+
+    if !scan_decision.run_static_scan && !scan_decision.run_compliance_scan {
+        content.push_str(
+            "No scans were executed — the image was deemed clean in the decision phase. \
+            Assign a low vulnerability score.\n\n",
+        );
+    }
+
+    content.push_str(
+        "Call submit_vulnerability_analysis with your assessment. \
+        For each scan type that was executed, provide a concise summary \
+        (static_summary / compliance_summary) of 1-2 sentences highlighting \
+        the key findings and whether a fix is available.",
+    );
+
+    vec![ChatMessage::user(content)]
+}
+
+/// Construit le prompt envoyé à l'arbitre pour synthétiser les analyses des workers.
+///
+/// L'arbitre évalue la qualité des raisonnements et produit le verdict ALLOW/DENY.
+/// Les alternatives sont absentes — elles font l'objet d'un second tour séparé si DENY.
+pub fn build_arbiter_analysis_prompt(analyses: &[WorkerAnalysis], image: &str) -> Vec<ChatMessage> {
+    let system = ChatMessage::system(
+        "You are a senior security arbitrator. Three independent analysts have assessed \
+        the vulnerability level of a Docker image based on its scan results.\n\n\
+        YOUR TASK: Synthesize their assessments and call make_final_verdict. \
+        You MUST call this tool — do not respond in plain text.\n\n\
+        CRITICAL RULE — Evaluate reasoning QUALITY, not majority vote:\n\
+        - Strong evidence = specific CVE IDs, CVSS scores, named compliance rule failures\n\
+        - Weak evidence = vague statements, generic concerns not tied to actual findings\n\n\
+        DECISION THRESHOLDS:\n\
+        - score > 7.0 OR critical CVEs present → DENY\n\
+        - score < 4.0 AND no critical findings → ALLOW\n\
+        - 4.0–7.0: use judgment based on exploitability and context\n\n\
+        The final vulnerability_score should reflect your synthesis, not a simple average.",
+    );
+
+    let mut user = format!("Image: {}\n\nWorker vulnerability assessments:\n\n", image);
+
+    for (i, analysis) in analyses.iter().enumerate() {
+        if analysis.status == "ok" {
+            user.push_str(&format!(
+                "Worker {} ({}):\n  Score: {:.1}/10  Confidence: {:.2}\n  Reasoning: {}\n\n",
+                i + 1,
+                analysis.model,
+                analysis.vulnerability_score.unwrap_or(0.0),
+                analysis.confidence.unwrap_or(0.0),
+                analysis.reasoning.as_deref().unwrap_or("(none)")
+            ));
+        } else {
+            user.push_str(&format!(
+                "Worker {} ({}): FAILED — result not available\n\n",
+                i + 1,
+                analysis.model
+            ));
+        }
+    }
+
+    user.push_str(
+        "Synthesize the assessments above and call make_final_verdict with the final verdict.",
+    );
+
+    vec![system, ChatMessage::user(user)]
+}
+
+// ============================================================
+// Prompts phase 3b — alternatives (second tour, uniquement si DENY)
+// ============================================================
+
+/// Construit le prompt envoyé aux workers pour suggérer des alternatives.
+///
+/// Appelé uniquement si le verdict est DENY. Les workers suggèrent des images
+/// de remplacement en se basant sur le type de l'image refusée et les raisons du refus.
+/// Pas de system message — même règle critique qu'en phase 1.
+pub fn build_worker_alternatives_prompt(verdict: &Verdict, image: &str) -> Vec<ChatMessage> {
+    let content = format!(
+        "A Docker image has been denied due to security vulnerabilities. \
+        Your task is to suggest safer alternative images that could replace it. \
+        Call suggest_alternatives — you MUST call this tool, do not respond in plain text.\n\n\
+        Denied image: {}\n\
+        Vulnerability score: {:.1}/10\n\
+        Reason for denial: {}\n\n\
+        GUIDELINES:\n\
+        - Suggest 1-3 alternatives compatible with the same workload\n\
+        - Only suggest images you are confident exist (well-known registries: \
+          docker.io, gcr.io, cgr.dev/chainguard, ghcr.io)\n\
+        - Prefer hardened variants: Chainguard, distroless, slim, rootless\n\
+        - Explain concretely why each alternative addresses the denial reasons\n\
+        - Set confidence based on how certain you are the image exists and is compatible",
+        image,
+        verdict.vulnerability_score,
+        sanitize(&verdict.rationale, 500)
+    );
+
+    vec![ChatMessage::user(content)]
+}
+
+/// Construit le prompt envoyé à l'arbitre pour sélectionner les meilleures alternatives.
+///
+/// L'arbitre reçoit toutes les suggestions des workers et sélectionne celles
+/// dont le raisonnement est le plus solide et spécifique.
+pub fn build_arbiter_alternatives_prompt(
+    worker_suggestions: &[(String, Vec<(String, String, f64)>)],
+    image: &str,
+    verdict: &Verdict,
+) -> Vec<ChatMessage> {
+    let system = ChatMessage::system(
+        "You are a senior security arbitrator. Three analysts have suggested alternative \
+        Docker images to replace a denied image. Your task is to select the best alternatives \
+        by calling finalize_alternatives. You MUST call this tool — do not respond in plain text.\n\n\
+        SELECTION RULES:\n\
+        - Evaluate suggestion QUALITY: prefer specific, well-argued alternatives\n\
+        - Prefer alternatives cited by multiple workers (convergence signal)\n\
+        - Only select images that appear in the worker suggestions — do not add new ones\n\
+        - Remove duplicates, keep the best-reasoned version\n\
+        - Final list: 1-3 alternatives maximum",
+    );
+
+    let mut user = format!(
+        "Denied image: {}\nVulnerability score: {:.1}/10\n\nWorker suggestions:\n\n",
+        image, verdict.vulnerability_score
+    );
+
+    for (model, suggestions) in worker_suggestions {
+        if suggestions.is_empty() {
+            user.push_str(&format!("Worker ({model}): no suggestions provided\n\n"));
+        } else {
+            user.push_str(&format!("Worker ({model}):\n"));
+            for (img, reason, confidence) in suggestions {
+                user.push_str(&format!(
+                    "  - {img} (confidence: {confidence:.2})\n    Reason: {reason}\n"
+                ));
+            }
+            user.push('\n');
+        }
+    }
+
+    user.push_str(
+        "Select the best alternatives from the suggestions above and call finalize_alternatives.",
+    );
+
+    vec![system, ChatMessage::user(user)]
+}
+
+// ============================================================
+// Helpers de formatage des résultats de scans pour les prompts
+// ============================================================
+
+fn format_static_scan(result: &serde_json::Value, out: &mut String) {
+    if result.get("status").and_then(|v| v.as_str()) == Some("ERROR") {
+        out.push_str("Status: ERROR\n");
+        if let Some(err) = result.get("error").and_then(|v| v.as_str()) {
+            out.push_str(&format!("Error: {}\n", sanitize(err, 200)));
+        }
+        return;
+    }
+
+    if let Some(summary) = result.get("summary") {
+        let total = summary
+            .get("vulnerabilities_total")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let counts = summary.get("severity_count");
+        let critical = counts
+            .and_then(|c| c.get("critical"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let high = counts
+            .and_then(|c| c.get("high"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let medium = counts
+            .and_then(|c| c.get("medium"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let low = counts
+            .and_then(|c| c.get("low"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        out.push_str(&format!(
+            "Total: {} | Critical: {} | High: {} | Medium: {} | Low: {}\n",
+            total, critical, high, medium, low
+        ));
+    }
+
+    if let Some(findings) = result.get("findings").and_then(|v| v.as_array()) {
+        let important: Vec<_> = findings
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.get("severity").and_then(|v| v.as_str()),
+                    Some("CRITICAL") | Some("HIGH")
+                )
+            })
+            .take(15)
+            .collect();
+
+        if !important.is_empty() {
+            out.push_str("Critical/High findings:\n");
+            for f in important {
+                let cve = f.get("cve_id").and_then(|v| v.as_str()).unwrap_or("?");
+                let pkg = f.get("package").and_then(|v| v.as_str()).unwrap_or("?");
+                let ver = f
+                    .get("installed_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let fixed = f
+                    .get("fixed_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("none");
+                let sev = f.get("severity").and_then(|v| v.as_str()).unwrap_or("?");
+                let cvss = f
+                    .get("cvss_score")
+                    .and_then(|v| v.as_f64())
+                    .map(|s| format!("{s:.1}"))
+                    .unwrap_or_else(|| "?".to_string());
+                out.push_str(&format!(
+                    "  [{sev}] {cve} in {pkg} {ver} (fix: {fixed}, CVSS: {cvss})\n"
+                ));
+            }
+        }
+    }
+}
+
+fn format_compliance_scan(result: &serde_json::Value, out: &mut String) {
+    let status = result
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    out.push_str(&format!("Status: {status}\n"));
+
+    if status == "ERROR" {
+        return;
+    }
+
+    if let Some(summary) = result.get("summary") {
+        let pass = summary.get("pass").and_then(|v| v.as_u64()).unwrap_or(0);
+        let fail = summary.get("fail").and_then(|v| v.as_u64()).unwrap_or(0);
+        let warn = summary.get("warn").and_then(|v| v.as_u64()).unwrap_or(0);
+        out.push_str(&format!("Pass: {pass} | Fail: {fail} | Warn: {warn}\n"));
+    }
+
+    if let Some(findings) = result.get("findings").and_then(|v| v.as_array()) {
+        let failed: Vec<_> = findings
+            .iter()
+            .filter(|f| f.get("status").and_then(|v| v.as_str()) == Some("FAIL"))
+            .take(10)
+            .collect();
+
+        if !failed.is_empty() {
+            out.push_str("Failed rules:\n");
+            for f in failed {
+                let rule = f.get("rule_id").and_then(|v| v.as_str()).unwrap_or("?");
+                let msg = f.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                out.push_str(&format!("  [FAIL] {rule}: {msg}\n"));
+            }
+        }
+    }
 }
 
 // ============================================================

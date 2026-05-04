@@ -6,11 +6,11 @@ mod prompt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{extract::{DefaultBodyLimit, State}, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
 use serde_json::Value;
 use tracing::{error, info};
 
-use llm_common::{Config, OllamaBackend, PullContext};
+use llm_common::{Config, Digest, OpenAiBackend, PullContext};
 use mcp_client::{McpClient, image_is_clean_schema, mcp_to_openai_schema};
 
 // ============================================================
@@ -18,13 +18,151 @@ use mcp_client::{McpClient, image_is_clean_schema, mcp_to_openai_schema};
 // ============================================================
 
 struct AppState {
-    backend: OllamaBackend,
+    backend: OpenAiBackend,
     config: Config,
     /// Client MCP pour appeler les tools de scan après décision.
     mcp_client: Arc<McpClient>,
     /// Schémas bruts MCP des tools disponibles (chargés une fois au démarrage).
     /// Convertis en format OpenAI à chaque requête avec le bon quarantine_path.
     mcp_tools: Vec<Value>,
+}
+
+// ============================================================
+// Validation du PullContext
+// ============================================================
+
+const MAX_COMPONENT_LEN: usize = 255;
+const MAX_TAG_LEN: usize = 128;
+const MAX_IP_LEN: usize = 45; // IPv6 max
+const MAX_DIGESTS: usize = 50;
+
+fn validate_digest(d: &Digest) -> bool {
+    if d.algorithm == "sha256" {
+        d.value.len() == 64 && d.value.chars().all(|c| c.is_ascii_hexdigit())
+    } else {
+        // Autre algo : on exige juste que la valeur soit non vide et sans null bytes
+        !d.value.is_empty() && !d.value.bytes().any(|b| b == 0)
+    }
+}
+
+fn validate_pull_context(ctx: &PullContext) -> Result<(), &'static str> {
+    if ctx.registry.is_empty() || ctx.registry.len() > MAX_COMPONENT_LEN {
+        return Err("registry : longueur invalide (1–255)");
+    }
+    if ctx.repository.is_empty() || ctx.repository.len() > MAX_COMPONENT_LEN {
+        return Err("repository : longueur invalide (1–255)");
+    }
+    if ctx.tag.is_empty() || ctx.tag.len() > MAX_TAG_LEN {
+        return Err("tag : longueur invalide (1–128)");
+    }
+    if ctx.ip_client.len() > MAX_IP_LEN {
+        return Err("ip_client : longueur invalide");
+    }
+    for field in [&ctx.registry, &ctx.repository, &ctx.tag] {
+        if field.contains("..") || field.bytes().any(|b| b == 0) {
+            return Err("champ invalide : séquence interdite ou caractère nul");
+        }
+    }
+    let total_digests = ctx.manifest_digests.len()
+        + ctx.blob_digests.len()
+        + ctx.referrers_digests.len();
+    if total_digests > MAX_DIGESTS * 3 {
+        return Err("trop de digests dans le PullContext");
+    }
+    for digests in [&ctx.manifest_digests, &ctx.blob_digests, &ctx.referrers_digests] {
+        if digests.len() > MAX_DIGESTS {
+            return Err("trop de digests dans une liste");
+        }
+        for d in digests {
+            if !validate_digest(d) {
+                return Err("digest invalide : format non reconnu");
+            }
+        }
+    }
+    Ok(())
+}
+
+// ============================================================
+// Tests unitaires de la validation
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llm_common::Digest;
+
+    fn valid_digest(value: &str) -> Digest {
+        Digest { algorithm: "sha256".to_string(), value: value.to_string() }
+    }
+
+    fn base_ctx() -> PullContext {
+        PullContext {
+            uuid: uuid::Uuid::new_v4(),
+            ip_client: "127.0.0.1".to_string(),
+            registry: "ghcr.io".to_string(),
+            repository: "library/alpine".to_string(),
+            tag: "3.18".to_string(),
+            manifest_digests: vec![valid_digest(&"a".repeat(64))],
+            blob_digests: vec![],
+            referrers_digests: vec![],
+            manifest_racine_digest: None,
+            digests_possible: vec![],
+            digests_expected: vec![],
+            os: "linux".to_string(),
+            arch: "amd64".to_string(),
+            pull_completed: true,
+        }
+    }
+
+    #[test]
+    fn test_ctx_valide() {
+        assert!(validate_pull_context(&base_ctx()).is_ok());
+    }
+
+    #[test]
+    fn test_registry_vide() {
+        let mut ctx = base_ctx();
+        ctx.registry = "".to_string();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_traversal_dans_registry() {
+        let mut ctx = base_ctx();
+        ctx.registry = "../../../etc".to_string();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_traversal_dans_tag() {
+        let mut ctx = base_ctx();
+        ctx.tag = "../../passwd".to_string();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_trop_de_digests() {
+        let mut ctx = base_ctx();
+        ctx.manifest_digests = (0..51).map(|i| valid_digest(&format!("{:0>64}", i))).collect();
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_digest_sha256_invalide() {
+        let mut ctx = base_ctx();
+        ctx.manifest_digests = vec![Digest {
+            algorithm: "sha256".to_string(),
+            value: "pas_un_sha256".to_string(),
+        }];
+        assert!(validate_pull_context(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_tag_trop_long() {
+        let mut ctx = base_ctx();
+        ctx.tag = "a".repeat(129);
+        assert!(validate_pull_context(&ctx).is_err());
+    }
 }
 
 // ============================================================
@@ -46,6 +184,10 @@ async fn decide(
     State(state): State<Arc<AppState>>,
     Json(ctx): Json<PullContext>,
 ) -> impl IntoResponse {
+    if let Err(reason) = validate_pull_context(&ctx) {
+        return (StatusCode::BAD_REQUEST, format!("Requête invalide : {reason}")).into_response();
+    }
+
     info!(
         "Requête reçue pour {}/{}:{} (uuid={})",
         ctx.registry, ctx.repository, ctx.tag, ctx.uuid
@@ -84,6 +226,8 @@ async fn decide(
             .map(|t| mcp_to_openai_schema(t, &quarantine_path)),
     );
 
+    let image = format!("{}/{}:{}", ctx.registry, ctx.repository, ctx.tag);
+
     match decision::run_decision(
         &bundle,
         &state.backend,
@@ -94,7 +238,41 @@ async fn decide(
     )
     .await
     {
-        Ok(scan_decision) => (StatusCode::OK, Json(scan_decision)).into_response(),
+        Ok(scan_decision) => {
+            match decision::run_analysis(
+                scan_decision,
+                &bundle,
+                &state.backend,
+                &state.config,
+                &image,
+            )
+            .await
+            {
+                Ok(report) => (StatusCode::OK, Json(report)).into_response(),
+                Err(e) => {
+                    error!("Pipeline phase 3 dégradé : {}", e);
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({
+                            "error": "pipeline_failed",
+                            "reason": e.to_string()
+                        })),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        Err(llm_common::LlmError::PipelineFailed(reason)) => {
+            error!("Pipeline phase 1 dégradé : {}", reason);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "pipeline_failed",
+                    "reason": reason
+                })),
+            )
+                .into_response()
+        }
         Err(e) => {
             error!("Erreur pipeline décision : {}", e);
             (
@@ -120,17 +298,12 @@ async fn main() {
         .init();
 
     let config = Config::from_env();
-    let backend = OllamaBackend::new(config.ollama_base_url.clone(), config.llm_timeout_secs);
+    let backend = OpenAiBackend::new(config.llm_base_url.clone(), config.llm_timeout_secs, config.api_key.clone());
 
     info!("llm-decision démarrage sur le port {}", config.decision_port);
-    info!("Ollama URL : {}", config.ollama_base_url);
+    info!("LLM backend URL : {}", config.llm_base_url);
     info!("Quarantaine : {:?}", config.quarantine_path);
     info!("MCP server : {}", config.mcp_server_url);
-
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .expect("Impossible de créer le client HTTP");
 
     // Attendre que llm-manager soit prêt avant d'accepter des requêtes
     const MAX_RETRIES: u32 = 24; // 24 × 5s = 2 minutes max
@@ -138,7 +311,7 @@ async fn main() {
     info!("Attente de llm-manager sur {}...", manager_health);
     let mut manager_ready = false;
     for attempt in 1..=MAX_RETRIES {
-        match http.get(&manager_health).send().await {
+        match backend.http_client().get(&manager_health).send().await {
             Ok(r) if r.status().is_success() => {
                 info!("llm-manager prêt");
                 manager_ready = true;
@@ -159,7 +332,7 @@ async fn main() {
     }
 
     // Charger les tool schemas depuis le serveur MCP (une seule fois au démarrage)
-    let mcp_client = Arc::new(McpClient::new(config.mcp_server_url.clone()));
+    let mcp_client = Arc::new(McpClient::new(config.mcp_server_url.clone(), config.mcp_timeout_secs));
     let mut mcp_tools_opt: Option<Vec<Value>> = None;
     for attempt in 1..=MAX_RETRIES {
         match mcp_client.list_tools().await {
@@ -203,6 +376,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/decision", post(decide))
+        .layer(DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB max
         .with_state(state);
 
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse().expect("Adresse invalide");

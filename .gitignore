@@ -1,4 +1,8 @@
 CLAUDE.md
 llm-module/target/
+llm-module/.venv/
 quarantaine/
 mcp-tools-server/
+orchestrator/
+.env
+llm-module/.env
