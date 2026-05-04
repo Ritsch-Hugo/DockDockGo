@@ -13,11 +13,7 @@ RUN cargo build --release -p mcp-tools-server
 # ============================================================
 # Étape 2 — Image finale
 # ============================================================
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/cc-debian12
 
 COPY --from=builder /build/target/release/mcp-tools-server /usr/local/bin/mcp-tools-server
 
