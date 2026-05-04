@@ -1,4 +1,6 @@
-use llm_common::{ArtifactBundle, ArtifactContent, ChatMessage, LlmVote, ScanDecision, Verdict, WorkerAnalysis};
+use llm_common::{
+    ArtifactBundle, ArtifactContent, ChatMessage, LlmVote, ScanDecision, Verdict, WorkerAnalysis,
+};
 
 /// Taille maximale d'un artefact inséré dans un prompt (en caractères).
 /// Protège contre les prompts trop longs qui feraient échouer le LLM.
@@ -160,11 +162,27 @@ pub fn build_arbiter_prompt(votes: &[LlmVote], image: &str) -> Vec<ChatMessage> 
             i + 1,
             vote.model_id,
             if vote.run_static_scan { "YES" } else { "NO" },
-            if vote.run_static_scan { "(called run_static_scan)" } else { "(did not call)" },
-            if vote.run_compliance_scan { "YES" } else { "NO" },
-            if vote.run_compliance_scan { "(called run_compliance_scan)" } else { "(did not call)" },
+            if vote.run_static_scan {
+                "(called run_static_scan)"
+            } else {
+                "(did not call)"
+            },
+            if vote.run_compliance_scan {
+                "YES"
+            } else {
+                "NO"
+            },
+            if vote.run_compliance_scan {
+                "(called run_compliance_scan)"
+            } else {
+                "(did not call)"
+            },
             if vote.run_dynamic_scan { "YES" } else { "NO" },
-            if vote.run_dynamic_scan { "(called run_dynamic_scan)" } else { "(did not call)" },
+            if vote.run_dynamic_scan {
+                "(called run_dynamic_scan)"
+            } else {
+                "(did not call)"
+            },
             vote.confidence,
             vote.reasoning
         ));
@@ -209,9 +227,7 @@ pub fn build_worker_analysis_prompt(
         Score strictly based on what the scan results show. Do not speculate beyond the data.\n\n\
         Image: {}\n\
         OS: {}, Architecture: {}\n\n",
-        image,
-        ctx.os,
-        ctx.arch
+        image, ctx.os, ctx.arch
     );
 
     if scan_decision.run_static_scan {
@@ -333,6 +349,7 @@ pub fn build_worker_alternatives_prompt(verdict: &Verdict, image: &str) -> Vec<C
 ///
 /// L'arbitre reçoit toutes les suggestions des workers et sélectionne celles
 /// dont le raisonnement est le plus solide et spécifique.
+#[allow(clippy::type_complexity)]
 pub fn build_arbiter_alternatives_prompt(
     worker_suggestions: &[(String, Vec<(String, String, f64)>)],
     image: &str,
@@ -457,10 +474,7 @@ fn format_static_scan(result: &serde_json::Value, out: &mut String) {
 }
 
 fn format_compliance_scan(result: &serde_json::Value, out: &mut String) {
-    let status = result
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+    let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("?");
     out.push_str(&format!("Status: {status}\n"));
 
     if status == "ERROR" {

@@ -1,9 +1,7 @@
 use sha2::{Digest as Sha2Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
 
-use llm_common::{
-    ArtifactBundle, ArtifactContent, ArtifactFile, Digest, LlmError, PullContext,
-};
+use llm_common::{ArtifactBundle, ArtifactContent, ArtifactFile, Digest, LlmError, PullContext};
 
 /// Taille maximale d'un artefact lu en mémoire.
 /// Au-delà, le fichier est traité comme binaire sans être chargé (et le digest n'est pas vérifié).
@@ -36,7 +34,9 @@ fn normalize_path(path: &Path) -> PathBuf {
     let mut parts: Vec<Component> = Vec::new();
     for component in path.components() {
         match component {
-            Component::ParentDir => { parts.pop(); }
+            Component::ParentDir => {
+                parts.pop();
+            }
             Component::CurDir => {}
             c => parts.push(c),
         }
@@ -72,7 +72,10 @@ fn image_root(quarantine_path: &Path, ctx: &PullContext) -> Result<PathBuf, LlmE
 ///
 /// Les fichiers dépassant MAX_ARTIFACT_SIZE_BYTES ne sont pas chargés en mémoire :
 /// ils sont traités comme binaires et la validation du digest est ignorée avec un avertissement.
-async fn read_artifact(path: &Path, expected: Option<&Digest>) -> Result<ArtifactContent, LlmError> {
+async fn read_artifact(
+    path: &Path,
+    expected: Option<&Digest>,
+) -> Result<ArtifactContent, LlmError> {
     let metadata = tokio::fs::metadata(path)
         .await
         .map_err(|e| LlmError::ArtifactNotFound(format!("{} : {}", path.display(), e)))?;
@@ -83,7 +86,10 @@ async fn read_artifact(path: &Path, expected: Option<&Digest>) -> Result<Artifac
         if let Some(d) = expected {
             tracing::warn!(
                 "Fichier {} ({} bytes) dépasse la limite de {}B — digest {} non vérifié",
-                path.display(), size_bytes, MAX_ARTIFACT_SIZE_BYTES, d.full()
+                path.display(),
+                size_bytes,
+                MAX_ARTIFACT_SIZE_BYTES,
+                d.full()
             );
         }
         return Ok(ArtifactContent::Binary { size_bytes });
@@ -100,7 +106,9 @@ async fn read_artifact(path: &Path, expected: Option<&Digest>) -> Result<Artifac
             if computed != digest.value {
                 return Err(LlmError::InvalidInput(format!(
                     "Digest invalide pour {} : annoncé sha256:{}, calculé sha256:{}",
-                    path.display(), digest.value, computed
+                    path.display(),
+                    digest.value,
+                    computed
                 )));
             }
         }
@@ -214,7 +222,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("layer");
         // Magic number gzip = 0x1f 0x8b
-        tokio::fs::write(&path, &[0x1f, 0x8b, 0x00, 0x00]).await.unwrap();
+        tokio::fs::write(&path, &[0x1f, 0x8b, 0x00, 0x00])
+            .await
+            .unwrap();
 
         let result = read_artifact(&path, None).await.unwrap();
         assert!(matches!(result, ArtifactContent::Binary { .. }));
@@ -224,7 +234,9 @@ mod tests {
     async fn test_read_artifact_json_invalide_traite_comme_binaire() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("blob");
-        tokio::fs::write(&path, b"pas du json valide {{{").await.unwrap();
+        tokio::fs::write(&path, b"pas du json valide {{{")
+            .await
+            .unwrap();
 
         let result = read_artifact(&path, None).await.unwrap();
         assert!(matches!(result, ArtifactContent::Binary { .. }));
@@ -246,7 +258,10 @@ mod tests {
         // Calculer le vrai digest du contenu
         use sha2::{Digest as Sha2Digest, Sha256};
         let hash = format!("{:x}", Sha256::digest(content));
-        let digest = llm_common::Digest { algorithm: "sha256".to_string(), value: hash };
+        let digest = llm_common::Digest {
+            algorithm: "sha256".to_string(),
+            value: hash,
+        };
 
         let result = read_artifact(&path, Some(&digest)).await;
         assert!(result.is_ok());
@@ -256,7 +271,9 @@ mod tests {
     async fn test_read_artifact_digest_invalide() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("manifest.json");
-        tokio::fs::write(&path, br#"{"schemaVersion":2}"#).await.unwrap();
+        tokio::fs::write(&path, br#"{"schemaVersion":2}"#)
+            .await
+            .unwrap();
 
         let mauvais_digest = llm_common::Digest {
             algorithm: "sha256".to_string(),
@@ -280,7 +297,9 @@ pub async fn load_artifacts(
     // --- Manifests ---
     let mut manifests = Vec::new();
     for digest in &ctx.manifest_digests {
-        let path = root.join("manifests").join(format!("{}.json", digest.filename()));
+        let path = root
+            .join("manifests")
+            .join(format!("{}.json", digest.filename()));
         match read_artifact(&path, Some(digest)).await {
             Ok(content) => manifests.push(ArtifactFile {
                 digest: digest.full(),
@@ -314,7 +333,9 @@ pub async fn load_artifacts(
     // --- Referrers ---
     let mut referrers = Vec::new();
     for digest in &ctx.referrers_digests {
-        let path = root.join("referrers").join(format!("{}.json", digest.filename()));
+        let path = root
+            .join("referrers")
+            .join(format!("{}.json", digest.filename()));
         match read_artifact(&path, Some(digest)).await {
             Ok(content) => referrers.push(ArtifactFile {
                 digest: digest.full(),

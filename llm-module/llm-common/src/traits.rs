@@ -31,18 +31,13 @@ pub trait LlmBackend: Send + Sync {
     /// Implémentation par défaut : appelle `chat_with_tools` avec tools vide
     /// et extrait le texte. À utiliser pour les prompts simples (ex: arbitre,
     /// ou appels qui n'ont pas besoin de tool calling).
-    async fn chat(
-        &self,
-        model: &str,
-        messages: Vec<ChatMessage>,
-    ) -> Result<String, LlmError> {
+    async fn chat(&self, model: &str, messages: Vec<ChatMessage>) -> Result<String, LlmError> {
         match self.chat_with_tools(model, messages, vec![]).await? {
             LlmResponse::Text(t) => Ok(t),
             LlmResponse::ToolCalls(calls) => {
                 // Sans tools déclarés, le LLM ne devrait pas émettre de tool calls.
                 // Si ça arrive quand même, on sérialise pour garder l'info.
-                Ok(serde_json::to_string(&calls)
-                    .unwrap_or_else(|_| "[]".to_string()))
+                Ok(serde_json::to_string(&calls).unwrap_or_else(|_| "[]".to_string()))
             }
         }
     }

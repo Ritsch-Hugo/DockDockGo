@@ -95,7 +95,12 @@ impl OpenAiBackend {
             .build()
             .expect("Impossible de créer le client HTTP");
 
-        Self { client, base_url, timeout_secs, api_key }
+        Self {
+            client,
+            base_url,
+            timeout_secs,
+            api_key,
+        }
     }
 
     pub fn http_client(&self) -> &Client {
@@ -122,8 +127,10 @@ impl OpenAiBackend {
             )));
         }
 
-        let list: ModelsListResponse =
-            resp.json().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let list: ModelsListResponse = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
 
         Ok(list.data)
     }
@@ -181,7 +188,11 @@ impl LlmBackend for OpenAiBackend {
 
         // "required" force le modèle à faire un tool call plutôt que répondre en texte.
         // Sans ça, les modèles tendent à ignorer les tools et répondre en texte libre.
-        let tool_choice = if tools.is_empty() { None } else { Some("required") };
+        let tool_choice = if tools.is_empty() {
+            None
+        } else {
+            Some("required")
+        };
 
         let body = OpenAiRequest {
             model,
@@ -237,8 +248,8 @@ impl LlmBackend for OpenAiBackend {
                     .into_iter()
                     .map(|tc| {
                         // Les arguments arrivent comme string JSON — on les parse
-                        let arguments =
-                            serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| {
+                        let arguments = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or_else(|_| {
                                 serde_json::Value::String(tc.function.arguments.clone())
                             });
                         ToolCall {

@@ -16,7 +16,7 @@ pub struct Config {
     /// None pour les backends locaux (vLLM, Ollama).
     pub api_key: Option<String>,
 
-/// Chemin absolu vers le dossier quarantaine partagé.
+    /// Chemin absolu vers le dossier quarantaine partagé.
     /// En Kubernetes : chemin vers le PersistentVolume monté.
     pub quarantine_path: PathBuf,
 
@@ -61,8 +61,7 @@ impl Config {
             api_key: std::env::var("OPENROUTER_API_KEY").ok(),
 
             quarantine_path: PathBuf::from(
-                std::env::var("QUARANTINE_PATH")
-                    .unwrap_or_else(|_| "../quarantaine".to_string()),
+                std::env::var("QUARANTINE_PATH").unwrap_or_else(|_| "../quarantaine".to_string()),
             ),
 
             worker_models: [
@@ -92,8 +91,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3003),
 
-            manager_host: std::env::var("MANAGER_HOST")
-                .unwrap_or_else(|_| "localhost".to_string()),
+            manager_host: std::env::var("MANAGER_HOST").unwrap_or_else(|_| "localhost".to_string()),
 
             mcp_server_url: std::env::var("MCP_SERVER_URL")
                 .unwrap_or_else(|_| "http://localhost:3004/mcp".to_string()),

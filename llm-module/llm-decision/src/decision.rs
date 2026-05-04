@@ -1,18 +1,18 @@
-use serde::Deserialize;
-use serde_json::{Value, json};
-use tracing::{error, info, warn};
 use llm_common::{
     Alternative, ArbiterAnalysis, ArtifactBundle, Config, DecisionArbiterMeta, DecisionMetadata,
     DecisionWorkerMeta, FinalReport, LlmBackend, LlmError, LlmResponse, LlmVote, ScanAnalysis,
     ScanDecision, ScanReasoning, ScanResult, ToolCall, Verdict, WorkerAnalysis,
 };
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tracing::{error, info, warn};
 
 use crate::mcp_client::{
-    McpClient, finalize_alternatives_schema, make_final_verdict_schema,
-    make_security_decision_schema, submit_vulnerability_analysis_schema, suggest_alternatives_schema,
+    finalize_alternatives_schema, make_final_verdict_schema, make_security_decision_schema,
+    submit_vulnerability_analysis_schema, suggest_alternatives_schema, McpClient,
 };
 use crate::prompt::{
-    build_arbiter_analysis_prompt, build_arbiter_alternatives_prompt, build_arbiter_prompt,
+    build_arbiter_alternatives_prompt, build_arbiter_analysis_prompt, build_arbiter_prompt,
     build_worker_alternatives_prompt, build_worker_analysis_prompt, build_worker_prompt,
 };
 
@@ -83,13 +83,15 @@ fn extract_vote_from_tool_calls(model: &str, calls: Vec<ToolCall>) -> LlmVote {
     let mut confidences: Vec<f64> = Vec::new();
 
     for tc in &calls {
-        let reasoning = tc.arguments
+        let reasoning = tc
+            .arguments
             .get("reasoning")
             .and_then(|v| v.as_str())
             .unwrap_or("No reasoning provided")
             .to_string();
 
-        let confidence = tc.arguments
+        let confidence = tc
+            .arguments
             .get("confidence")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.7)
@@ -154,11 +156,7 @@ fn extract_vote_from_tool_calls(model: &str, calls: Vec<ToolCall>) -> LlmVote {
 ///
 /// Pour chaque scan activé, appelle le tool MCP correspondant et stocke
 /// le résultat JSON dans le ScanDecision pour l'orchestrateur.
-async fn execute_scans(
-    decision: &mut ScanDecision,
-    mcp_client: &McpClient,
-    quarantine_path: &str,
-) {
+async fn execute_scans(decision: &mut ScanDecision, mcp_client: &McpClient, quarantine_path: &str) {
     let args = json!({ "quarantine_path": quarantine_path });
     let run_static = decision.run_static_scan;
     let run_compliance = decision.run_compliance_scan;
@@ -176,7 +174,11 @@ async fn execute_scans(
     let compliance_fut = async {
         if run_compliance {
             info!("Exécution scan compliance via MCP...");
-            Some(mcp_client.call_tool("run_compliance_scan", args.clone()).await)
+            Some(
+                mcp_client
+                    .call_tool("run_compliance_scan", args.clone())
+                    .await,
+            )
         } else {
             None
         }
@@ -195,20 +197,38 @@ async fn execute_scans(
 
     if let Some(r) = static_res {
         decision.static_scan_result = Some(match r {
-            Ok(text) => { info!("Scan statique terminé"); serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text)) }
-            Err(e)   => { error!("Scan statique échoué : {}", e); json!({"error": e.to_string(), "status": "ERROR"}) }
+            Ok(text) => {
+                info!("Scan statique terminé");
+                serde_json::from_str(&text).unwrap_or(Value::String(text))
+            }
+            Err(e) => {
+                error!("Scan statique échoué : {}", e);
+                json!({"error": e.to_string(), "status": "ERROR"})
+            }
         });
     }
     if let Some(r) = compliance_res {
         decision.compliance_scan_result = Some(match r {
-            Ok(text) => { info!("Scan compliance terminé"); serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text)) }
-            Err(e)   => { error!("Scan compliance échoué : {}", e); json!({"error": e.to_string(), "status": "ERROR"}) }
+            Ok(text) => {
+                info!("Scan compliance terminé");
+                serde_json::from_str(&text).unwrap_or(Value::String(text))
+            }
+            Err(e) => {
+                error!("Scan compliance échoué : {}", e);
+                json!({"error": e.to_string(), "status": "ERROR"})
+            }
         });
     }
     if let Some(r) = dynamic_res {
         decision.dynamic_scan_result = Some(match r {
-            Ok(text) => { info!("Scan dynamique terminé (stub)"); serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text)) }
-            Err(e)   => { error!("Scan dynamique échoué : {}", e); json!({"error": e.to_string(), "status": "ERROR"}) }
+            Ok(text) => {
+                info!("Scan dynamique terminé (stub)");
+                serde_json::from_str(&text).unwrap_or(Value::String(text))
+            }
+            Err(e) => {
+                error!("Scan dynamique échoué : {}", e);
+                json!({"error": e.to_string(), "status": "ERROR"})
+            }
         });
     }
 }
@@ -247,7 +267,10 @@ pub async fn run_decision(
     let worker_messages = build_worker_prompt(bundle, quarantine_path);
 
     // --- Phase 1a : Workers en parallèle ---
-    info!("Lancement des {} workers en parallèle...", config.worker_models.len());
+    info!(
+        "Lancement des {} workers en parallèle...",
+        config.worker_models.len()
+    );
     let [m0, m1, m2] = &config.worker_models;
     let (r0, r1, r2) = tokio::join!(
         backend.chat_with_tools(m0, worker_messages.clone(), tool_schemas.clone()),
@@ -262,8 +285,11 @@ pub async fn run_decision(
                 let vote = parse_worker_vote(model, response);
                 info!(
                     "Worker {} → static={} compliance={} dynamic={} confidence={:.2}",
-                    model, vote.run_static_scan, vote.run_compliance_scan,
-                    vote.run_dynamic_scan, vote.confidence,
+                    model,
+                    vote.run_static_scan,
+                    vote.run_compliance_scan,
+                    vote.run_dynamic_scan,
+                    vote.confidence,
                 );
                 info!("Worker {} raisonnement : {}", model, vote.reasoning);
                 votes.push(vote);
@@ -292,17 +318,18 @@ pub async fn run_decision(
     // --- Règle consensus : si tous les workers s'accordent unanimement, on suit sans consulter l'arbitre ---
     if votes.len() == config.worker_models.len() {
         let first = &votes[0];
-        if votes.iter().all(|v|
+        if votes.iter().all(|v| {
             v.run_static_scan == first.run_static_scan
                 && v.run_compliance_scan == first.run_compliance_scan
                 && v.run_dynamic_scan == first.run_dynamic_scan
-        ) {
+        }) {
             info!(
                 "Consensus unanime {}/{} workers : static={} compliance={} dynamic={} — arbitre non consulté",
                 votes.len(), config.worker_models.len(),
                 first.run_static_scan, first.run_compliance_scan, first.run_dynamic_scan
             );
-            let avg_confidence = votes.iter().map(|v| v.confidence).sum::<f64>() / votes.len() as f64;
+            let avg_confidence =
+                votes.iter().map(|v| v.confidence).sum::<f64>() / votes.len() as f64;
             let mut decision = ScanDecision {
                 pull_id: ctx.uuid,
                 run_static_scan: first.run_static_scan,
@@ -319,7 +346,8 @@ pub async fn run_decision(
                 compliance_scan_result: None,
                 dynamic_scan_result: None,
             };
-            if decision.run_static_scan || decision.run_compliance_scan || decision.run_dynamic_scan {
+            if decision.run_static_scan || decision.run_compliance_scan || decision.run_dynamic_scan
+            {
                 execute_scans(&mut decision, mcp_client, quarantine_path).await;
             } else {
                 info!("Aucun scan requis pour {} (consensus)", image);
@@ -347,11 +375,17 @@ pub async fn run_decision(
     // L'arbitre doit appeler make_security_decision (tool call obligatoire)
     let arbiter = match arbiter_response {
         LlmResponse::ToolCalls(calls) => {
-            match calls.into_iter().find(|tc| tc.name == "make_security_decision") {
+            match calls
+                .into_iter()
+                .find(|tc| tc.name == "make_security_decision")
+            {
                 Some(tc) => match serde_json::from_value::<ArbiterResponse>(tc.arguments) {
                     Ok(r) => r,
                     Err(e) => {
-                        let reason = format!("Arbitre : arguments make_security_decision invalides : {}", e);
+                        let reason = format!(
+                            "Arbitre : arguments make_security_decision invalides : {}",
+                            e
+                        );
                         error!("{}", reason);
                         return Err(LlmError::PipelineFailed(reason));
                     }
@@ -535,13 +569,19 @@ pub async fn run_analysis(
     config: &Config,
     image: &str,
 ) -> Result<FinalReport, LlmError> {
-    info!("Début phase 3 — analyse LLM des résultats de scans pour {}", image);
+    info!(
+        "Début phase 3 — analyse LLM des résultats de scans pour {}",
+        image
+    );
 
     let analysis_schema = submit_vulnerability_analysis_schema();
     let worker_messages = build_worker_analysis_prompt(&scan_decision, bundle);
 
     // --- Phase 3a : Workers analyse en parallèle ---
-    info!("Lancement des {} workers phase 3a en parallèle...", config.worker_models.len());
+    info!(
+        "Lancement des {} workers phase 3a en parallèle...",
+        config.worker_models.len()
+    );
     let [m0, m1, m2] = &config.worker_models;
     let (ra0, ra1, ra2) = tokio::join!(
         backend.chat_with_tools(m0, worker_messages.clone(), vec![analysis_schema.clone()]),
@@ -598,10 +638,7 @@ pub async fn run_analysis(
         .await
     {
         Ok(LlmResponse::ToolCalls(calls)) => {
-            match calls
-                .into_iter()
-                .find(|tc| tc.name == "make_final_verdict")
-            {
+            match calls.into_iter().find(|tc| tc.name == "make_final_verdict") {
                 Some(tc) => match serde_json::from_value::<ArbiterVerdictArgs>(tc.arguments) {
                     Ok(args) => {
                         info!(
@@ -624,7 +661,10 @@ pub async fn run_analysis(
                         (verdict, arbiter)
                     }
                     Err(e) => {
-                        let reason = format!("Arbitre phase 3 : arguments make_final_verdict invalides : {}", e);
+                        let reason = format!(
+                            "Arbitre phase 3 : arguments make_final_verdict invalides : {}",
+                            e
+                        );
                         error!("{}", reason);
                         return Err(LlmError::PipelineFailed(reason));
                     }
@@ -673,26 +713,28 @@ pub async fn run_analysis(
     let decision_workers: Vec<DecisionWorkerMeta> = config
         .worker_models
         .iter()
-        .map(|model| match scan_decision.votes.iter().find(|v| &v.model_id == model) {
-            Some(vote) => DecisionWorkerMeta {
-                model: model.clone(),
-                status: "ok".to_string(),
-                run_static_scan: Some(vote.run_static_scan),
-                run_compliance_scan: Some(vote.run_compliance_scan),
-                run_dynamic_scan: Some(vote.run_dynamic_scan),
-                confidence: Some(vote.confidence as f64),
-                reasoning: Some(vote.reasoning.clone()),
+        .map(
+            |model| match scan_decision.votes.iter().find(|v| &v.model_id == model) {
+                Some(vote) => DecisionWorkerMeta {
+                    model: model.clone(),
+                    status: "ok".to_string(),
+                    run_static_scan: Some(vote.run_static_scan),
+                    run_compliance_scan: Some(vote.run_compliance_scan),
+                    run_dynamic_scan: Some(vote.run_dynamic_scan),
+                    confidence: Some(vote.confidence),
+                    reasoning: Some(vote.reasoning.clone()),
+                },
+                None => DecisionWorkerMeta {
+                    model: model.clone(),
+                    status: "failed".to_string(),
+                    run_static_scan: None,
+                    run_compliance_scan: None,
+                    run_dynamic_scan: None,
+                    confidence: None,
+                    reasoning: None,
+                },
             },
-            None => DecisionWorkerMeta {
-                model: model.clone(),
-                status: "failed".to_string(),
-                run_static_scan: None,
-                run_compliance_scan: None,
-                run_dynamic_scan: None,
-                confidence: None,
-                reasoning: None,
-            },
-        })
+        )
         .collect();
 
     let analysed_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -735,19 +777,26 @@ pub async fn run_analysis(
 }
 
 /// Phase 3c + 3d : workers suggèrent des alternatives, arbitre sélectionne.
+#[allow(clippy::type_complexity)]
 async fn run_alternatives_phase(
     backend: &dyn LlmBackend,
     config: &Config,
     verdict: &Verdict,
     image: &str,
 ) -> Vec<Alternative> {
-    info!("Phase alternatives — {} est DENY, recherche d'alternatives...", image);
+    info!(
+        "Phase alternatives — {} est DENY, recherche d'alternatives...",
+        image
+    );
 
     let alt_schema = suggest_alternatives_schema();
     let worker_messages = build_worker_alternatives_prompt(verdict, image);
 
     // Phase 3c : workers suggèrent des alternatives en parallèle
-    info!("Lancement des {} workers alternatives en parallèle...", config.worker_models.len());
+    info!(
+        "Lancement des {} workers alternatives en parallèle...",
+        config.worker_models.len()
+    );
     let [m0, m1, m2] = &config.worker_models;
     let (rb0, rb1, rb2) = tokio::join!(
         backend.chat_with_tools(m0, worker_messages.clone(), vec![alt_schema.clone()]),
@@ -758,22 +807,35 @@ async fn run_alternatives_phase(
     let mut worker_suggestions: Vec<(String, Vec<(String, String, f64)>)> = Vec::new();
     for (result, model) in [rb0, rb1, rb2].into_iter().zip(config.worker_models.iter()) {
         let suggestions = match result {
-            Ok(LlmResponse::ToolCalls(calls)) => {
-                calls.into_iter()
-                    .find(|tc| tc.name == "suggest_alternatives")
-                    .and_then(|tc| serde_json::from_value::<SuggestAlternativesArgs>(tc.arguments).ok())
-                    .map(|args| args.alternatives.into_iter()
+            Ok(LlmResponse::ToolCalls(calls)) => calls
+                .into_iter()
+                .find(|tc| tc.name == "suggest_alternatives")
+                .and_then(|tc| serde_json::from_value::<SuggestAlternativesArgs>(tc.arguments).ok())
+                .map(|args| {
+                    args.alternatives
+                        .into_iter()
                         .map(|a| (a.image, a.reason, a.confidence.clamp(0.0, 1.0)))
-                        .collect::<Vec<_>>())
-                    .unwrap_or_default()
-            }
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
             Ok(LlmResponse::Text(text)) => {
-                warn!("Worker {} alternatives : réponse texte (\"{}...\")", model, text.chars().take(80).collect::<String>());
+                warn!(
+                    "Worker {} alternatives : réponse texte (\"{}...\")",
+                    model,
+                    text.chars().take(80).collect::<String>()
+                );
                 vec![]
             }
-            Err(e) => { warn!("Worker {} alternatives échoué : {}", model, e); vec![] }
+            Err(e) => {
+                warn!("Worker {} alternatives échoué : {}", model, e);
+                vec![]
+            }
         };
-        info!("Worker {} suggestions : {} alternatives", model, suggestions.len());
+        info!(
+            "Worker {} suggestions : {} alternatives",
+            model,
+            suggestions.len()
+        );
         for (img, reason, conf) in &suggestions {
             info!("  → {} (confidence={:.2}) : {}", img, conf, reason);
         }
@@ -781,8 +843,7 @@ async fn run_alternatives_phase(
     }
 
     // Phase 3d : arbitre sélectionne les meilleures alternatives
-    let arbiter_messages =
-        build_arbiter_alternatives_prompt(&worker_suggestions, image, verdict);
+    let arbiter_messages = build_arbiter_alternatives_prompt(&worker_suggestions, image, verdict);
     let finalize_schema = finalize_alternatives_schema();
 
     match backend

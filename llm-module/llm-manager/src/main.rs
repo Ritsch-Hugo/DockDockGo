@@ -58,11 +58,17 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         error!("Backend LLM injoignable : {}", e);
         let statuses = required
             .iter()
-            .map(|m| ModelStatus { name: m.to_string(), available: false })
+            .map(|m| ModelStatus {
+                name: m.to_string(),
+                available: false,
+            })
             .collect();
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(HealthResponse { status: "unavailable", models: statuses }),
+            Json(HealthResponse {
+                status: "unavailable",
+                models: statuses,
+            }),
         );
     }
 
@@ -72,11 +78,17 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             error!("Impossible de lister les modèles : {}", e);
             let statuses = required
                 .iter()
-                .map(|m| ModelStatus { name: m.to_string(), available: false })
+                .map(|m| ModelStatus {
+                    name: m.to_string(),
+                    available: false,
+                })
                 .collect();
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(HealthResponse { status: "unavailable", models: statuses }),
+                Json(HealthResponse {
+                    status: "unavailable",
+                    models: statuses,
+                }),
             );
         }
     };
@@ -97,13 +109,26 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             warn!("Modèle {} manquant dans le backend LLM", model);
             all_ok = false;
         }
-        statuses.push(ModelStatus { name: model.to_string(), available });
+        statuses.push(ModelStatus {
+            name: model.to_string(),
+            available,
+        });
     }
 
     let status = if all_ok { "ok" } else { "degraded" };
-    let http_code = if all_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let http_code = if all_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
 
-    (http_code, Json(HealthResponse { status, models: statuses }))
+    (
+        http_code,
+        Json(HealthResponse {
+            status,
+            models: statuses,
+        }),
+    )
 }
 
 /// GET /models — retourne la liste de tous les modèles disponibles dans le backend LLM.
@@ -139,7 +164,11 @@ async fn main() {
         .init();
 
     let config = Config::from_env();
-    let backend = OpenAiBackend::new(config.llm_base_url.clone(), config.llm_timeout_secs, config.api_key.clone());
+    let backend = OpenAiBackend::new(
+        config.llm_base_url.clone(),
+        config.llm_timeout_secs,
+        config.api_key.clone(),
+    );
 
     info!("llm-manager démarrage sur le port {}", config.manager_port);
     info!("LLM backend URL : {}", config.llm_base_url);

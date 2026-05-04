@@ -7,12 +7,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use axum::{extract::{DefaultBodyLimit, State}, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use serde_json::Value;
 use tracing::{error, info};
 
 use llm_common::{Config, Digest, OpenAiBackend, PullContext};
-use mcp_client::{McpClient, image_is_clean_schema, mcp_to_openai_schema};
+use mcp_client::{image_is_clean_schema, mcp_to_openai_schema, McpClient};
 
 // ============================================================
 // État partagé
@@ -64,13 +70,16 @@ fn validate_pull_context(ctx: &PullContext) -> Result<(), &'static str> {
             return Err("champ invalide : séquence interdite ou caractère nul");
         }
     }
-    let total_digests = ctx.manifest_digests.len()
-        + ctx.blob_digests.len()
-        + ctx.referrers_digests.len();
+    let total_digests =
+        ctx.manifest_digests.len() + ctx.blob_digests.len() + ctx.referrers_digests.len();
     if total_digests > MAX_DIGESTS * 3 {
         return Err("trop de digests dans le PullContext");
     }
-    for digests in [&ctx.manifest_digests, &ctx.blob_digests, &ctx.referrers_digests] {
+    for digests in [
+        &ctx.manifest_digests,
+        &ctx.blob_digests,
+        &ctx.referrers_digests,
+    ] {
         if digests.len() > MAX_DIGESTS {
             return Err("trop de digests dans une liste");
         }
@@ -93,7 +102,10 @@ mod tests {
     use llm_common::Digest;
 
     fn valid_digest(value: &str) -> Digest {
-        Digest { algorithm: "sha256".to_string(), value: value.to_string() }
+        Digest {
+            algorithm: "sha256".to_string(),
+            value: value.to_string(),
+        }
     }
 
     fn base_ctx() -> PullContext {
@@ -144,7 +156,9 @@ mod tests {
     #[test]
     fn test_trop_de_digests() {
         let mut ctx = base_ctx();
-        ctx.manifest_digests = (0..51).map(|i| valid_digest(&format!("{:0>64}", i))).collect();
+        ctx.manifest_digests = (0..51)
+            .map(|i| valid_digest(&format!("{:0>64}", i)))
+            .collect();
         assert!(validate_pull_context(&ctx).is_err());
     }
 
@@ -186,7 +200,11 @@ async fn decide(
     Json(ctx): Json<PullContext>,
 ) -> impl IntoResponse {
     if let Err(reason) = validate_pull_context(&ctx) {
-        return (StatusCode::BAD_REQUEST, format!("Requête invalide : {reason}")).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Requête invalide : {reason}"),
+        )
+            .into_response();
     }
 
     // Acquérir un slot de concurrence — retourne 429 si tous les slots sont occupés
@@ -311,9 +329,16 @@ async fn main() {
         .init();
 
     let config = Config::from_env();
-    let backend = OpenAiBackend::new(config.llm_base_url.clone(), config.llm_timeout_secs, config.api_key.clone());
+    let backend = OpenAiBackend::new(
+        config.llm_base_url.clone(),
+        config.llm_timeout_secs,
+        config.api_key.clone(),
+    );
 
-    info!("llm-decision démarrage sur le port {}", config.decision_port);
+    info!(
+        "llm-decision démarrage sur le port {}",
+        config.decision_port
+    );
     info!("LLM backend URL : {}", config.llm_base_url);
     info!("Quarantaine : {:?}", config.quarantine_path);
     info!("MCP server : {}", config.mcp_server_url);
@@ -333,19 +358,26 @@ async fn main() {
             _ => {
                 tracing::warn!(
                     "llm-manager pas encore prêt ({}/{}), nouvelle tentative dans 5s...",
-                    attempt, MAX_RETRIES
+                    attempt,
+                    MAX_RETRIES
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         }
     }
     if !manager_ready {
-        error!("llm-manager injoignable après {} tentatives, abandon.", MAX_RETRIES);
+        error!(
+            "llm-manager injoignable après {} tentatives, abandon.",
+            MAX_RETRIES
+        );
         std::process::exit(1);
     }
 
     // Charger les tool schemas depuis le serveur MCP (une seule fois au démarrage)
-    let mcp_client = Arc::new(McpClient::new(config.mcp_server_url.clone(), config.mcp_timeout_secs));
+    let mcp_client = Arc::new(McpClient::new(
+        config.mcp_server_url.clone(),
+        config.mcp_timeout_secs,
+    ));
     let mut mcp_tools_opt: Option<Vec<Value>> = None;
     for attempt in 1..=MAX_RETRIES {
         match mcp_client.list_tools().await {
@@ -357,14 +389,17 @@ async fn main() {
             Ok(_) => {
                 tracing::warn!(
                     "MCP server accessible mais aucun tool disponible ({}/{}), retry dans 5s...",
-                    attempt, MAX_RETRIES
+                    attempt,
+                    MAX_RETRIES
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
             Err(e) => {
                 tracing::warn!(
                     "MCP server pas encore prêt ({}/{}) : {}, retry dans 5s...",
-                    attempt, MAX_RETRIES, e
+                    attempt,
+                    MAX_RETRIES,
+                    e
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
@@ -373,7 +408,10 @@ async fn main() {
     let mcp_tools = match mcp_tools_opt {
         Some(tools) => tools,
         None => {
-            error!("MCP server injoignable après {} tentatives, abandon.", MAX_RETRIES);
+            error!(
+                "MCP server injoignable après {} tentatives, abandon.",
+                MAX_RETRIES
+            );
             std::process::exit(1);
         }
     };
@@ -397,7 +435,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/decision", post(decide))
-        .layer(DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB max
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB max
         .with_state(state);
 
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse().expect("Adresse invalide");

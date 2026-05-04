@@ -1,5 +1,5 @@
 use reqwest::Client;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
@@ -125,7 +125,6 @@ impl McpClient {
 
         Ok(text)
     }
-
 }
 
 // ============================================================
