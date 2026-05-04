@@ -1,4 +1,5 @@
 use anyhow::Result;
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::IntoResponse};
 use rmcp::schemars;
 use rmcp::schemars::JsonSchema;
 use rmcp::{
@@ -10,7 +11,9 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::fs;
+use tokio::sync::Semaphore;
 use tracing::info;
 
 // ============================================================
@@ -18,6 +21,9 @@ use tracing::info;
 // ============================================================
 
 const DEFAULT_STATIC_URL: &str = "http://localhost:3002";
+/// Taille maximale d'un blob envoyé au scanner statique (500 MB).
+/// Les layers gzip dépassant cette limite sont ignorés pour éviter un OOM sur les grandes images.
+const MAX_BLOB_SIZE_BYTES: u64 = 500 * 1024 * 1024;
 const DEFAULT_COMPLIANCE_URL: &str = "http://localhost:3001";
 
 // ============================================================
@@ -193,6 +199,17 @@ impl DocDockGoTools {
 
                 // Valider que le nom est un digest sha256 (64 hex chars)
                 if filename.len() != 64 || !filename.chars().all(|c| c.is_ascii_hexdigit()) {
+                    continue;
+                }
+
+                let size = fs::metadata(&path).await?.len();
+                if size > MAX_BLOB_SIZE_BYTES {
+                    info!(
+                        "skip large blob: {} ({} MB > {} MB limit)",
+                        filename,
+                        size / 1024 / 1024,
+                        MAX_BLOB_SIZE_BYTES / 1024 / 1024
+                    );
                     continue;
                 }
 
@@ -374,7 +391,32 @@ async fn main() -> Result<()> {
                 .with_json_response(true),
         );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let max_concurrent = std::env::var("MAX_CONCURRENT_SCANS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(10);
+    info!("Concurrence max : {} scans simultanés", max_concurrent);
+    let semaphore = Arc::new(Semaphore::new(max_concurrent));
+
+    let router = axum::Router::new()
+        .nest_service("/mcp", service)
+        .layer(axum::middleware::from_fn({
+            let sem = Arc::clone(&semaphore);
+            move |req: Request, next: Next| {
+                let sem = Arc::clone(&sem);
+                async move {
+                    match sem.try_acquire() {
+                        Ok(_permit) => next.run(req).await,
+                        Err(_) => (
+                            StatusCode::TOO_MANY_REQUESTS,
+                            "Too many concurrent scan requests — retry later",
+                        )
+                            .into_response(),
+                    }
+                }
+            }
+        }))
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)); // 1 MB max
 
     let addr: std::net::SocketAddr = format!("0.0.0.0:{port}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
