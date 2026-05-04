@@ -202,9 +202,6 @@ struct HighLevelResult {
     reasoning_lines: Vec<String>,
     raw_text: String,
     score: f64,
-    dynamic_scan: bool,
-    compliance_scan: bool,
-    static_scan: bool,
 }
 
 #[tokio::main]
@@ -639,90 +636,24 @@ async fn handle_initial_phase(
 
     info!("HighLevelResult: {:#?}", high);
 
-    let existing = sqlx::query(
+    sqlx::query(
         r#"
-        SELECT id
-        FROM ia_decisions
-        WHERE pull_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1
+        INSERT INTO scan_events (id, pull_id, ia_decision_id, scanner_type, response_scanner, executed, llm_summary, created_at)
+        VALUES ($1, $2, NULL, 'high-level', $3, true, NULL, NOW())
         "#,
     )
+    .bind(Uuid::new_v4())
     .bind(pullcontext.pull_id)
-    .fetch_optional(pool)
+    .bind(json!({
+        "decision":  high.state,
+        "score":     high.score,
+        "reasoning": high.reasoning_lines,
+        "raw_text":  high.raw_text,
+    }))
+    .execute(pool)
     .await?;
 
-    match existing {
-        Some(row) => {
-            let id: Uuid = row.try_get("id")?;
-
-            info!("ia_decision existante trouvée: id={}", id);
-
-            sqlx::query(
-                r#"
-                UPDATE ia_decisions
-                SET
-                    decision           = $2,
-                    vulnerability_score = $3,
-                    confidence         = $4,
-                    rationale          = $5,
-                    scan_reasoning     = $6,
-                    dynamic_scan       = $7,
-                    compliance_scan    = $8,
-                    static_scan        = $9,
-                    created_at         = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(id)
-            .bind(&high.state)
-            .bind(high.score)
-            .bind(high.score / 100.0)
-            .bind(&high.raw_text)
-            .bind(json!(high.reasoning_lines))
-            .bind(high.dynamic_scan)
-            .bind(high.compliance_scan)
-            .bind(high.static_scan)
-            .execute(pool)
-            .await?;
-
-            info!("DB update ia_decisions OK: id={}", id);
-        }
-        None => {
-            info!("Aucune ia_decision existante, insertion");
-
-            sqlx::query(
-                r#"
-                INSERT INTO ia_decisions (
-                    id, pull_id, created_at,
-                    decision,
-                    vulnerability_score,
-                    confidence,
-                    rationale,
-                    scan_reasoning,
-                    dynamic_scan,
-                    compliance_scan,
-                    static_scan
-                )
-                VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8, $9, $10)
-                "#,
-            )
-            .bind(Uuid::new_v4())
-            .bind(pullcontext.pull_id)
-            .bind(&high.state)
-            .bind(high.score)
-            .bind(high.score / 100.0)
-            .bind(&high.raw_text)
-            .bind(json!(high.reasoning_lines))
-            .bind(high.dynamic_scan)
-            .bind(high.compliance_scan)
-            .bind(high.static_scan)
-            .execute(pool)
-            .await?;
-
-            info!("DB insert ia_decisions OK: pull_id={}", pullcontext.pull_id);
-        }
-    }
+    info!("DB insert scan_events high-level OK: pull_id={}", pullcontext.pull_id);
 
     let scan_completed = high.state != "PENDING";
 
@@ -792,9 +723,6 @@ async fn high_level_decision(
             reasoning_lines: vec!["Image présente en blacklist".to_string()],
             raw_text: "Image présente en blacklist.\nResultat : 0".to_string(),
             score: 0.0,
-            dynamic_scan: false,
-            compliance_scan: false,
-            static_scan: false,
         });
     }
 
@@ -843,9 +771,6 @@ async fn high_level_decision(
                 reasoning_lines: vec![format!("HL scanner erreur: {}", e.message)],
                 raw_text: format!("Erreur HL scanner.\nResultat : 50"),
                 score: 50.0,
-                dynamic_scan: false,
-                compliance_scan: false,
-                static_scan: false,
             });
         }
         Err(_elapsed) => {
@@ -858,9 +783,6 @@ async fn high_level_decision(
                 reasoning_lines: vec!["HL scanner timeout".to_string()],
                 raw_text: "Timeout HL scanner.\nResultat : 50".to_string(),
                 score: 50.0,
-                dynamic_scan: false,
-                compliance_scan: false,
-                static_scan: false,
             });
         }
     };
@@ -871,32 +793,19 @@ async fn high_level_decision(
     let score = extract_score_from_text(&text).unwrap_or(50.0);
     let state = decision_from_high_level_score(score);
 
-    let registry = pullcontext.registry.to_lowercase();
-    let repo = pullcontext.repository.to_lowercase();
-
-    let compliance_scan = registry.contains("docker.io") || registry.contains("ghcr.io");
-    let dynamic_scan = repo.contains("api") || repo.contains("web") || repo.contains("service");
-    let static_scan = true;
-
     let mut reasoning_lines = split_reasoning_lines(&text);
 
     if reasoning_lines.is_empty() {
         reasoning_lines.push(format!("Analyse haut niveau reçue. Score={score}"));
     }
 
-    info!(
-        "Décision high-level calculée: score={}, state={}, static_scan={}, dynamic_scan={}, compliance_scan={}",
-        score, state, static_scan, dynamic_scan, compliance_scan
-    );
+    info!("Décision high-level calculée: score={}, state={}", score, state);
 
     Ok(HighLevelResult {
         state,
         reasoning_lines,
         raw_text: text,
         score,
-        dynamic_scan,
-        compliance_scan,
-        static_scan,
     })
 }
 
@@ -1035,30 +944,21 @@ async fn handle_final_phase(
         pullcontext.pull_id, decision
     );
 
-    // Enregistrement dans scan_events
-    let ia_decision_id = latest_ia_decision_id(pool, pullcontext.pull_id).await?;
-
+    // Enregistrement dans ia_decisions
     sqlx::query(
         r#"
-        INSERT INTO scan_events (id, pull_id, ia_decision_id, scanner_type, response_scanner, created_at)
-        VALUES ($1, $2, $3, $4, $5, NOW())
+        INSERT INTO ia_decisions (id, pull_id, created_at, decision)
+        VALUES ($1, $2, NOW(), $3)
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(Uuid::new_v4())
     .bind(pullcontext.pull_id)
-    .bind(ia_decision_id)
-    .bind("llm-decision")
-    .bind(json!({
-        "decision": decision,
-        "attachment_count": attachments.len(),
-        "attachments": attachments.iter().map(|a| json!({
-            "field_name": a.field_name,
-            "file_name": a.file_name,
-            "size_bytes": a.bytes.len()
-        })).collect::<Vec<_>>()
-    }))
+    .bind(&decision)
     .execute(pool)
     .await?;
+
+    info!("DB insert ia_decisions llm-decision OK: pull_id={}", pullcontext.pull_id);
 
     // Mise à jour de la décision finale dans pulls
     let scan_completed = decision != "PENDING";

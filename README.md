@@ -1,105 +1,131 @@
-📦 DocDockGo — Format de la requête Scan Final (Proxy → Orchestrateur → LLM-Decision)
+# Orchestrateur DockDockGo
 
-Ce document décrit précisément le format de la deuxième requête envoyée par le proxy Docker MITM vers l’orchestrateur (/v1/decision) lors du scan final.
+Service central qui reçoit les requêtes du proxy MITM, orchestre les scans et retourne une décision ALLOW / DENY / PENDING.
 
-👉 Ces données sont ensuite normalisées par l’orchestrateur et retransmises au module llm-decision pour analyse complète.
+Port : **3000**
 
-🧠 Vue d’ensemble
-Docker Client
-      ↓
+---
+
+## Flux général
+
+```
 Proxy (MITM)
-      ↓
-POST /v1/decision (multipart)
-      ↓
-Orchestrateur
-      ↓
-Transformation en PullContext
-      ↓
-LLM-Decision (analyse)
-📦 Structure de la requête Proxy → Orchestrateur
-POST /v1/decision
-Content-Type: multipart/form-data
-Contenu :
-multipart/form-data
-│
-├── context (JSON string)
-├── manifests (0..N fichiers JSON)
-├── blobs (0..N fichiers binaires)
-└── referrers (0..N fichiers JSON)
-🟦 1. Champ JSON : context
+    │
+    ├── Phase INITIAL (HEAD) ──► POST /v1/decision (context seul)
+    │                                   │
+    │                            Scan haut niveau (Gemini)
+    │                                   │
+    │                         score < 30 → DENY
+    │                         score ≥ 30 → PENDING
+    │
+    └── Phase FINAL (GET) ───► POST /v1/decision (context + fichiers)
+                                        │
+                                 Forward multipart → LLM-Decision
+                                        │
+                               ALLOW / DENY / PENDING
+```
 
-Contient le ProxyPullContext.
+---
 
-Exemple :
+## Endpoint principal
+
+### `POST /v1/decision`
+
+Accepte un `multipart/form-data` avec :
+
+| Champ | Type | Obligatoire | Description |
+|---|---|---|---|
+| `context` | JSON string | oui | `ProxyPullContext` sérialisé |
+| `manifests` | fichier(s) | Phase FINAL | Manifests OCI (JSON) |
+| `blobs` | fichier(s) | Phase FINAL | Layers Docker (binaire) |
+| `referrers` | fichier(s) | optionnel | SBOM / signatures |
+
+La phase est déterminée automatiquement via `scan_final_done` dans le contexte :
+- `scan_final_done: false` → **Phase INITIAL**
+- `scan_final_done: true` → **Phase FINAL**
+
+#### Réponse (format legacy proxy)
+
+```json
 {
-  "uuid": "5cd20ed8-1367-587e-9321-5294f051c4f8",
-  "ip_client": "192.168.1.249",
-  "registry": "registry-1.docker.io",
-  "repository": "library/alpine",
-  "tag": "3.23.3",
-  "manifest_digests": [...],
-  "blob_digests": [...],
-  "referrers_digests": [],
-  "manifest_racine_digest": {...},
-  "os": "linux",
-  "arch": "amd64",
-  "pull_completed": true,
-  "scan_final_done": true,
-  "scan_status": "PENDING",
-  "client_type": "docker"
+  "pull_id": "9aea0f96-72cd-5bf2-b1ba-635e4934e86a",
+  "state": "PENDING"
 }
-📁 2. Fichiers envoyés
-🟨 manifests
-JSON OCI (index ou manifest)
-🟧 blobs
-Layers Docker (binaire, tar.gz)
-🟪 referrers
-SBOM / signatures / metadata (optionnel)
-🔄 Transformation dans l’orchestrateur
+```
 
-L’orchestrateur :
+---
 
-Parse le multipart
-Convertit ProxyPullContext → PullContext interne
-Stocke en base (pulls, digests, scan_events)
-Déclenche la logique de décision
-🧠 Format transmis au llm-decision
+## Phase INITIAL — Scan haut niveau
 
-⚠️ Le LLM ne reçoit PAS directement le multipart.
+1. Vérifie la blacklist en base — DENY immédiat si présente
+2. Appelle le service HL scanner (`HIGH_LEVEL_URL`, défaut `http://127.0.0.1:4000/v1/high-level`) avec le `ProxyPullContext`
+3. Parse la réponse Gemini : extrait le score sur la dernière ligne `Resultat : NN`
+4. Décision : score < 30 → **DENY**, score ≥ 30 → **PENDING**
+5. Timeout interne : 25s (le proxy a un timeout de 30s)
 
-Il reçoit une version normalisée et enrichie :
+### Écritures BDD
 
+| Table | Action | Contenu |
+|---|---|---|
+| `pulls` | UPSERT puis UPDATE | décision, scan_completed |
+| `pull_digests` | INSERT | un enregistrement par digest reçu |
+| `scan_events` | INSERT | `scanner_type='high-level'`, `executed=true`, `ia_decision_id=NULL`, `response_scanner` = score + texte Gemini |
+
+Exemple `scan_events.response_scanner` pour un scan haut niveau :
+```json
 {
-  "pull_id": "...",
-  "registry": "registry-1.docker.io",
-  "repository": "library/alpine",
-  "tag": "3.23.3",
-  "os": "linux",
-  "arch": "amd64",
-  "digests": [...],
-  "metadata": {
-    "source": "proxy_context",
-    "scan_final_done": true
-  }
+  "decision": "DENY",
+  "score": 15.0,
+  "reasoning": ["Le tag 3.1 est très ancien...", "Risque ÉLEVÉ..."],
+  "raw_text": "Voici l'analyse DevSecOps...\nResultat : 15"
 }
+```
 
-👉 + accès indirect aux fichiers via :
+---
 
-filesystem (quarantaine)
-ou services MCP (mcp-tools-server)
-🔗 Rôle du LLM dans le scan final
+## Phase FINAL — Décision LLM
 
-Le llm-decision :
+1. Reconstruit un multipart avec le contexte brut + tous les fichiers reçus
+2. Forward vers le service LLM-Decision (`LLM_DECISION_URL`, défaut `http://127.0.0.1:5000/v1/decision`)
+3. Parse la réponse : champ `decision` (ALLOW/DENY/PENDING) ou champ `score` (≥ 50 = ALLOW)
+4. Si le service est injoignable → **PENDING** (fail-open)
 
-analyse le contexte (registry, repo, tag, OS, etc.)
-déclenche des scans via MCP :
-run_static_scan
-run_compliance_scan
-run_dynamic_scan
-agrège les résultats
-retourne :
-{
-  "decision": "ALLOW | DENY | PENDING",
-  "score": 0-100,
-  "reasoning": [...]
-}
+### Écritures BDD
+
+| Table | Action | Contenu |
+|---|---|---|
+| `pulls` | UPDATE | décision finale, scan_completed |
+| `pull_digests` | INSERT | tous les digests complets (manifests + blobs) |
+| `ia_decisions` | INSERT | décision retournée par le LLM |
+
+---
+
+## Autres endpoints
+
+| Route | Méthode | Description |
+|---|---|---|
+| `/health` | GET | Healthcheck (DB ping) |
+| `/v1/decision/:pull_id` | GET | Consulter l'état d'une décision |
+| `/v1/scanners/:type/callback` | POST | Callback pour les scanners async |
+
+---
+
+## Variables d'environnement
+
+| Variable | Défaut | Description |
+|---|---|---|
+| `DATABASE_URL` | `postgres://docdockgo_admin:docdockgo@127.0.0.1:5432/docdockgo` | URL PostgreSQL |
+| `BIND_ADDR` | `0.0.0.0:3000` | Adresse d'écoute |
+| `HIGH_LEVEL_URL` | `http://127.0.0.1:4000/v1/high-level` | Service HL scanner (Gemini) |
+| `LLM_DECISION_URL` | `http://127.0.0.1:5000/v1/decision` | Service LLM décision finale |
+| `RUST_LOG` | `info` | Niveau de log |
+
+---
+
+## Schema BDD utilisé
+
+- `pulls` — un enregistrement par pull, décision finale
+- `pull_digests` — tous les digests vus (manifests, blobs, referrers)
+- `scan_events` — résultats des scanners (high-level, static, compliance, dynamic)
+- `ia_decisions` — décisions retournées par le LLM de décision finale
+- `blacklist` / `whitelist` — listes persistantes par (registry, repository, tag)
