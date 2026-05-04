@@ -315,6 +315,104 @@ async fn find_first_json(dir: &PathBuf) -> Result<Option<PathBuf>> {
 }
 
 // ============================================================
+// Tests unitaires
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- validate_quarantine_path ---
+
+    #[test]
+    fn test_quarantine_path_valide() {
+        assert!(validate_quarantine_path("/quarantaine/library/alpine/3.18").is_ok());
+    }
+
+    #[test]
+    fn test_quarantine_path_vide() {
+        assert!(validate_quarantine_path("").is_err());
+    }
+
+    #[test]
+    fn test_quarantine_path_relatif() {
+        assert!(validate_quarantine_path("../quarantaine/alpine").is_err());
+    }
+
+    #[test]
+    fn test_quarantine_path_traversal() {
+        assert!(validate_quarantine_path("/quarantaine/../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_quarantine_path_null_byte() {
+        assert!(validate_quarantine_path("/quarantaine/alpi\x00ne").is_err());
+    }
+
+    #[test]
+    fn test_quarantine_path_trop_long() {
+        let long = format!("/{}", "a".repeat(4096));
+        assert!(validate_quarantine_path(&long).is_err());
+    }
+
+    // --- is_gzip ---
+
+    #[test]
+    fn test_is_gzip_magic_number() {
+        assert!(is_gzip(&[0x1f, 0x8b, 0x00]));
+    }
+
+    #[test]
+    fn test_is_gzip_json() {
+        assert!(!is_gzip(b"{\"key\": \"value\"}"));
+    }
+
+    #[test]
+    fn test_is_gzip_trop_court() {
+        assert!(!is_gzip(&[0x1f]));
+        assert!(!is_gzip(&[]));
+    }
+
+    // --- find_image_manifest ---
+
+    #[tokio::test]
+    async fn test_find_image_manifest_avec_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+            "layers": [{"digest": "sha256:abc"}]
+        });
+        let path = dir.path().join("manifest.json");
+        std::fs::write(&path, manifest.to_string()).unwrap();
+
+        let result = find_image_manifest(&dir.path().to_path_buf()).await.unwrap();
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_find_image_manifest_index_ignore() {
+        let dir = tempfile::tempdir().unwrap();
+        // Manifest index (champ "manifests" au lieu de "layers") — doit être ignoré
+        let index = serde_json::json!({
+            "schemaVersion": 2,
+            "manifests": [{"digest": "sha256:abc"}]
+        });
+        std::fs::write(dir.path().join("index.json"), index.to_string()).unwrap();
+
+        let result = find_image_manifest(&dir.path().to_path_buf()).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_image_manifest_dossier_vide() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = find_image_manifest(&dir.path().to_path_buf()).await.unwrap();
+        assert!(result.is_none());
+    }
+}
+
+// ============================================================
 // Point d'entrée
 // ============================================================
 
