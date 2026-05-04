@@ -18,15 +18,10 @@ RUN cargo build --release -p llm-manager
 
 # ============================================================
 # Étape 2 — Image finale
-# Image minimale Debian sans Rust ni les sources.
-# On copie uniquement le binaire compilé.
+# Image distroless : uniquement glibc + ca-certificates.
+# Aucun shell, aucun package système inutile — surface d'attaque minimale.
 # ============================================================
-FROM debian:bookworm-slim
-
-# Certificats TLS nécessaires pour les appels HTTPS vers Ollama
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/cc-debian12
 
 COPY --from=builder /build/target/release/llm-manager /usr/local/bin/llm-manager
 

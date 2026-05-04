@@ -17,11 +17,7 @@ RUN cargo build --release -p llm-decision
 # ============================================================
 # Étape 2 — Image finale
 # ============================================================
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/cc-debian12
 
 COPY --from=builder /build/target/release/llm-decision /usr/local/bin/llm-decision
 
