@@ -115,13 +115,21 @@ cd mcp-tools-server && cargo test
 ## Docker
 
 ```bash
-# Build
+# Pull depuis ghcr.io
+docker pull ghcr.io/ritsch-hugo/mcp-tools-server:latest
+
+# Build local (alternatif)
 docker build -t mcp-tools-server .
 
 # Run
-docker run -p 3004:3004 \
+# Les conteneurs scanner-cve et scanner-compliance doivent être sur le même réseau.
+# Le réseau "docdockgo" doit être créé au préalable : docker network create docdockgo
+QUARANTINE=/chemin/absolu/vers/quarantaine
+
+docker run -d --name mcp-tools-server --network docdockgo \
   -e STATIC_SCANNER_URL=http://scanner-cve:3002 \
   -e COMPLIANCE_SCANNER_URL=http://scanner-compliance:3001 \
-  -v /quarantaine:/quarantaine \
-  mcp-tools-server
+  -v "$QUARANTINE":/quarantaine \
+  -p 3004:3004 \
+  ghcr.io/ritsch-hugo/mcp-tools-server:latest
 ```
