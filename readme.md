@@ -1,4 +1,4 @@
-# 🚀 Scanner CVE - DockDockGo
+# 🚀 Scanner CVE - DocDockGo
 
 Scanner de vulnérabilités basé sur Trivy, conçu pour analyser des images OCI à partir de leurs artefacts (manifest, config, layers) **sans utiliser Docker daemon**.
 
