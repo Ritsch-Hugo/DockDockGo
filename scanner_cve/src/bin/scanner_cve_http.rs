@@ -1,11 +1,12 @@
 use axum::{
-    extract::{DefaultBodyLimit, Multipart},
+    extract::{DefaultBodyLimit, Multipart, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -13,9 +14,13 @@ use std::{
     collections::HashSet,
     fs,
     net::SocketAddr,
+    num::NonZeroU32,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Instant,
 };
+
+use tokio::sync::Semaphore;
 
 use tokio::io::AsyncWriteExt;
 use tokio::signal;
@@ -31,6 +36,12 @@ const MAX_CONFIG_SIZE: usize = 5 * 1024 * 1024; // 5 MB
 const MAX_PULL_CONTEXT_SIZE: usize = 2 * 1024 * 1024; // 2 MB
 const MAX_BLOB_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2 GB
 const MAX_BLOBS: usize = 128;
+
+#[derive(Clone)]
+struct AppState {
+    rate_limiter: Arc<DefaultDirectRateLimiter>,
+    scan_semaphore: Arc<Semaphore>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -49,10 +60,30 @@ async fn main() {
         .parse()
         .expect("PORT must be a valid port number");
 
+    let rps: u32 = std::env::var("RATE_LIMIT_RPS")
+        .unwrap_or_else(|_| "10".to_string())
+        .parse()
+        .expect("RATE_LIMIT_RPS must be a valid positive integer");
+
+    let max_concurrent: usize = std::env::var("MAX_CONCURRENT_SCANS")
+        .unwrap_or_else(|_| "4".to_string())
+        .parse()
+        .expect("MAX_CONCURRENT_SCANS must be a valid positive integer");
+
+    let state = AppState {
+        rate_limiter: Arc::new(RateLimiter::direct(Quota::per_second(
+            NonZeroU32::new(rps).expect("RATE_LIMIT_RPS must be non-zero"),
+        ))),
+        scan_semaphore: Arc::new(Semaphore::new(max_concurrent)),
+    };
+
+    info!(rps, max_concurrent, "rate limiting configured");
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/scan-upload", post(scan_upload))
-        .layer(DefaultBodyLimit::max(MAX_BODY_SIZE));
+        .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
+        .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!(address = %addr, "CVE scanner listening");
@@ -91,9 +122,34 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn scan_upload(mut multipart: Multipart) -> Response {
+async fn scan_upload(State(state): State<AppState>, mut multipart: Multipart) -> Response {
     let request_id = Uuid::new_v4().to_string();
     let start = Instant::now();
+
+    if state.rate_limiter.check().is_err() {
+        warn!(request_id = %request_id, reason = "rate limit exceeded", "request rejected");
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(error_response(Some(request_id), "rate limit exceeded")),
+        )
+            .into_response();
+    }
+
+    let _permit = match state.scan_semaphore.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            warn!(request_id = %request_id, reason = "too many concurrent scans", "request rejected");
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(error_response(
+                    Some(request_id),
+                    "too many concurrent scans",
+                )),
+            )
+                .into_response();
+        }
+    };
+
     let base = PathBuf::from(format!("/tmp/dockdockgo-cve-{}", request_id));
     let blobs_dir = base.join("blobs").join("sha256");
 

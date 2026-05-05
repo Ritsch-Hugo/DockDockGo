@@ -13,7 +13,7 @@ Ce scanner permet :
 * d’exécuter Trivy en mode filesystem
 * de produire un rapport JSON structuré (CVE, sévérité, CVSS)
 
-Il est conçu pour être intégré dans l’écosystème **DockDockGo** via un orchestrateur.
+Il est conçu pour être intégré dans l’écosystème **DocDockGo** via un orchestrateur.
 
 ---
 
@@ -48,8 +48,22 @@ docker build -t scanner-cve .
 ### 2. Lancer le service
 
 ```bash
-docker run -p 3002:3002 scanner-cve
+docker run -p 3002:3002 --env-file scanner_cve/.env scanner-cve
 ```
+
+---
+
+## ⚙️ Configuration
+
+Les variables sont lues depuis `scanner_cve/.env` (dev local) ou injectées via l'environnement du pod (production) :
+
+| Variable | Défaut | Description |
+|---|---|---|
+| `PORT` | `3002` | Port HTTP |
+| `RUST_LOG` | `info` | Niveau de log |
+| `RATE_LIMIT_RPS` | `10` | Max requêtes/seconde (token bucket) |
+| `MAX_CONCURRENT_SCANS` | `4` | Max scans Trivy simultanés |
+| `TRIVY_TIMEOUT_SECS` | `300` | Timeout Trivy en secondes |
 
 ---
 
