@@ -42,9 +42,9 @@ use utils::{
     check_blob_authorized, check_blob_size, check_manifest_in_list, check_timout,
     cleanup_tmp_for_uuid, copy_ctx_from_quarantine_to_cache, dec_active,
     get_response_from_upstream, is_registry_allowed, manifest_list_has_linux_amd64,
-    prefetch_expected_to_quarantine, remove_ctx_digests_from_quarantine, save_to_cache,
-    serve_from_quarantine, store_digest, try_serve_from_cache, validate_manifest_list,
-    verify_content_digest,
+    prefetch_expected_to_quarantine, quarantine_base, remove_ctx_digests_from_quarantine,
+    save_to_cache, serve_from_quarantine, store_digest, try_serve_from_cache,
+    validate_manifest_list, verify_content_digest,
 };
 
 async fn handle(
@@ -867,12 +867,12 @@ async fn handle(
                         for d in ctx.digests_expected.clone() {
                             // On détermine le type via la présence du fichier en quarantaine
                             let q_manifest = format!(
-                                "quarantaine/{}/{}/manifests/sha256/{}.json",
-                                ctx.registry, ctx.repository, d.value
+                                "{}/{}/{}/manifests/sha256/{}.json",
+                                quarantine_base(), ctx.registry, ctx.repository, d.value
                             );
                             let q_blob = format!(
-                                "quarantaine/{}/{}/blobs/sha256/{}",
-                                ctx.registry, ctx.repository, d.value
+                                "{}/{}/{}/blobs/sha256/{}",
+                                quarantine_base(), ctx.registry, ctx.repository, d.value
                             );
                             if Path::new(&q_manifest).exists() {
                                 if !ctx.manifest_digests.contains(&d) {

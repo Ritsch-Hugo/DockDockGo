@@ -27,5 +27,3 @@ dotenvy = "0.15"
 url = "2"
 
 rustls-webpki = { version = "0.103.12", default-features = false }
-
-

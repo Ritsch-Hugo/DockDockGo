@@ -66,8 +66,10 @@ async fn handle(req: Request<Body>, state: AppState) -> Result<Response<Body>, I
             let color = if is_allowed { "green" } else { "red" };
 
             // --- construction du tableau Cache / Quarantaine ---
-            let cache_files = list_files_in("cache");
-            let quarantine_files = list_files_in("quarantaine");
+            let cache_base = std::env::var("CACHE_BASE").unwrap_or_else(|_| "cache".to_string());
+            let quarantine_base = std::env::var("QUARANTINE_BASE").unwrap_or_else(|_| "quarantaine".to_string());
+            let cache_files = list_files_in(&cache_base);
+            let quarantine_files = list_files_in(&quarantine_base);
 
             let mut table_rows = String::new();
             let max_len = cache_files.len().max(quarantine_files.len());

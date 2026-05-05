@@ -1,5 +1,5 @@
 use crate::models::{PullContext, PullContextList, ScanDecision};
-use crate::utils::is_safe_digest_component;
+use crate::utils::{is_safe_digest_component, quarantine_base};
 use reqwest::multipart;
 use std::time::Duration;
 use uuid::Uuid;
@@ -115,7 +115,7 @@ pub async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result
         }
     }
 
-    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
+    let base_dir = format!("{}/{}/{}", quarantine_base(), ctx.registry, ctx.repository);
 
     // =====================================================================
     // SCAN FINAL → envoyer TOUS les digests de l'image

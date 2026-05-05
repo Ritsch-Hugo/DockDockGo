@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::fs::create_dir_all;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 // ===== Tokio =====
@@ -37,6 +37,22 @@ use std::sync::atomic::Ordering;
 use crate::{Digest, PullContext, PullContextList};
 
 use crate::digest_process_for_head;
+
+static QUARANTINE_BASE: OnceLock<String> = OnceLock::new();
+static CACHE_BASE: OnceLock<String> = OnceLock::new();
+
+pub fn quarantine_base() -> &'static str {
+    QUARANTINE_BASE.get_or_init(|| {
+        std::env::var("QUARANTINE_BASE").unwrap_or_else(|_| "quarantaine".to_string())
+    })
+}
+
+pub fn cache_base() -> &'static str {
+    CACHE_BASE.get_or_init(|| {
+        std::env::var("CACHE_BASE").unwrap_or_else(|_| "cache".to_string())
+    })
+}
+
 /// 🔑 SHA256 réel (Docker compliant)
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -56,7 +72,7 @@ pub fn save_to_quarantine(
         return false;
     }
 
-    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
+    let base_dir = format!("{}/{}/{}", quarantine_base(), ctx.registry, ctx.repository);
 
     fn write_digest(
         base_dir: &str,
@@ -217,7 +233,7 @@ pub fn save_to_cache(path: &str, bytes: &[u8], ctx: &PullContext, pool: &sqlx::P
         return false;
     }
 
-    let base_dir = format!("cache/{}/{}", ctx.registry, ctx.repository);
+    let base_dir = format!("{}/{}/{}", cache_base(), ctx.registry, ctx.repository);
 
     // Helper pour écrire un digest
     fn write_digest(
@@ -423,7 +439,7 @@ pub fn try_serve_from_cache(req: &Request<Body>, ctx: &PullContext) -> Option<Re
     }
 
     // Base dir conforme à l'arborescence
-    let base_dir = format!("cache/{}/{}", ctx.registry, ctx.repository);
+    let base_dir = format!("{}/{}/{}", cache_base(), ctx.registry, ctx.repository);
 
     if req.method() != Method::GET {
         return None;
@@ -934,7 +950,7 @@ pub fn remove_ctx_digests_from_quarantine(ctx: &PullContext, pool: &sqlx::PgPool
     all.extend(ctx.referrers_digests.iter());
 
     for digest in all {
-        let base = format!("quarantaine/{}/{}/", registry, repo);
+        let base = format!("{}/{}/{}/", quarantine_base(), registry, repo);
 
         let manifest = format!("{}manifests/sha256/{}.json", base, digest.value);
 
@@ -1052,8 +1068,8 @@ pub fn copy_ctx_from_quarantine_to_cache(ctx: &PullContext, pool: &sqlx::PgPool)
     let registry = &ctx.registry;
     let repo = &ctx.repository;
 
-    let base_q = format!("quarantaine/{}/{}/", registry, repo);
-    let base_c = format!("cache/{}/{}/", registry, repo);
+    let base_q = format!("{}/{}/{}/", quarantine_base(), registry, repo);
+    let base_c = format!("{}/{}/{}/", cache_base(), registry, repo);
 
     // -------- MANIFESTS --------
     for digest in &ctx.manifest_digests {
@@ -1309,8 +1325,8 @@ pub async fn prefetch_expected_to_quarantine(
         // --- Manifests : déjà téléchargés dans tmp/<uuid>/<value>.json par predict_digests ---
         let tmp_manifest = format!("tmp/{}/{}.json", ctx.uuid, digest.value);
         let q_manifest = format!(
-            "quarantaine/{}/{}/manifests/sha256/{}.json",
-            ctx.registry, ctx.repository, digest.value
+            "{}/{}/{}/manifests/sha256/{}.json",
+            quarantine_base(), ctx.registry, ctx.repository, digest.value
         );
 
         if Path::new(&tmp_manifest).exists() && !Path::new(&q_manifest).exists() {
@@ -1338,8 +1354,8 @@ pub async fn prefetch_expected_to_quarantine(
 
         // --- Blobs : téléchargement upstream ---
         let q_blob = format!(
-            "quarantaine/{}/{}/blobs/sha256/{}",
-            ctx.registry, ctx.repository, digest.value
+            "{}/{}/{}/blobs/sha256/{}",
+            quarantine_base(), ctx.registry, ctx.repository, digest.value
         );
 
         if Path::new(&q_blob).exists() {
@@ -1406,7 +1422,7 @@ pub fn serve_from_quarantine(path: &str, ctx: &PullContext) -> Option<Response<B
         return None;
     }
 
-    let base_dir = format!("quarantaine/{}/{}", ctx.registry, ctx.repository);
+    let base_dir = format!("{}/{}/{}", quarantine_base(), ctx.registry, ctx.repository);
 
     // MANIFEST par digest
     if parts[2] == "manifests" && parts[3].starts_with("sha256:") {
@@ -1536,7 +1552,7 @@ pub fn all_expected_in_cache(ctx: &PullContext) -> bool {
         return false;
     }
 
-    let base = format!("cache/{}/{}", ctx.registry, ctx.repository);
+    let base = format!("{}/{}/{}", cache_base(), ctx.registry, ctx.repository);
 
     for digest in &ctx.digests_expected {
         let manifest_path = format!("{}/manifests/sha256/{}.json", base, digest.value);
@@ -1678,18 +1694,18 @@ pub fn canonicalize_path_components(
 
     // Vérification finale : le chemin construit ne doit pas remonter
     // au-dessus de la racine, même après jointure
-    let probe_quarantine = std::path::Path::new("quarantaine")
+    let probe_quarantine = std::path::Path::new(quarantine_base())
         .join(&registry)
         .join(&repository);
 
-    let probe_cache = std::path::Path::new("cache")
+    let probe_cache = std::path::Path::new(cache_base())
         .join(&registry)
         .join(&repository);
 
     for probe in [&probe_quarantine, &probe_cache] {
         let normalized = normalize_path(probe);
         // Le chemin normalisé doit commencer par le bon répertoire racine
-        if !normalized.starts_with("quarantaine") && !normalized.starts_with("cache") {
+        if !normalized.starts_with(quarantine_base()) && !normalized.starts_with(cache_base()) {
             return Err(format!(
                 "Path traversal détecté après normalisation: {}",
                 normalized.display()
