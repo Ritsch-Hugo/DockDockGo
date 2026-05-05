@@ -43,6 +43,12 @@ Le score est extrait de la dernière occurrence de `Resultat : NN` dans le texte
 
 ---
 
+## Arrêt gracieux
+
+Le service intercepte `SIGTERM` (signal Docker `docker stop`) et `SIGINT` (Ctrl-C). À réception, axum attend la fin des requêtes en cours avant de fermer le listener.
+
+---
+
 ## Docker
 
 ```bash
@@ -50,7 +56,6 @@ docker run -d --name docdockgo-hl-scanner \
   --network host \
   -u 10001:10001 \
   --env-file .env \
-  -p 4000:4000 \
   ghcr.io/ritsch-hugo/docdockgo-hl-scanner:latest
 ```
 
