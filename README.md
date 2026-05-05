@@ -54,15 +54,29 @@ docker build -t scanner-compliance .
 docker run -p 3001:3001 scanner-compliance
 ```
 
+Les variables d'environnement sont toutes optionnelles (valeurs par défaut indiquées) :
+
+| Variable | Défaut | Description |
+|---|---|---|
+| `PORT` | `3001` | Port d'écoute |
+| `RATE_LIMIT_PER_SECOND` | `1` | 1 requête toutes les N secondes |
+| `RATE_LIMIT_BURST` | `10` | Burst maximum autorisé |
+
+Avec un fichier `.env` :
+
+```bash
+docker run -p 3001:3001 --env-file .env scanner-compliance
+```
+
 ---
 
 ## ❤️ Test du service
 
 ```bash
-curl http://localhost:3001/v1/scan
+curl http://localhost:3001/health
 ```
 
-👉 doit répondre une erreur → serveur OK
+👉 doit répondre `ok` → serveur OK
 
 ---
 
