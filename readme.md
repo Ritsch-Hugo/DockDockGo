@@ -186,7 +186,7 @@ README.md
 
 ## 🚀 Intégration
 
-Ce scanner est conçu pour être appelé par un orchestrateur DockDockGo via une requête HTTP multipart contenant :
+Ce scanner est conçu pour être appelé par un orchestrateur DocDockGo via une requête HTTP multipart contenant :
 
 * manifest
 * blobs
@@ -196,4 +196,4 @@ Ce scanner est conçu pour être appelé par un orchestrateur DockDockGo via une
 
 ## 👨‍💻 Auteur
 
-Projet développé dans le cadre de DockDockGo (DevSecOps / Container Security).
+Projet développé dans le cadre de DocDockGo (DevSecOps / Container Security).
