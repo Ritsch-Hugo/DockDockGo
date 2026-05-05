@@ -59,6 +59,10 @@ docker run -d \
 > `172.17.0.1` correspond à l'IP de l'hôte pour la base de donnée
 > `registry_whitelist.json` doit etre ajouté a la racine du projet et doit contenir le json qui indique les registres autorisés
 
+ ### Redirection de port a faire manuellement
+
+`sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443`
+
 ---
 
   ### Exemple de réponse `/health`
