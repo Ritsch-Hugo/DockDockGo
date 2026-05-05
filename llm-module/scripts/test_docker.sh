@@ -183,14 +183,23 @@ docker run -d --name llm-decision --network "$NETWORK" \
     -p 3005:3005 \
     ghcr.io/ritsch-hugo/llm-decision:latest
 
+sleep 1
+docker logs -f llm-decision 2>&1 | sed "s/^/  [llm-decision] /" &
+LOG_PID=$!
+
 log "Attente de llm-decision (/health)..."
-for i in $(seq 1 60); do
+for i in $(seq 1 90); do
     if curl -sf http://localhost:3005/health > /dev/null 2>&1; then
         log "llm-decision prêt."
         break
     fi
     sleep 2
-    [ "$i" -eq 60 ] && error "llm-decision n'a pas répondu. Logs : docker logs llm-decision"
+    if [ "$i" -eq 90 ]; then
+        echo ""
+        warn "llm-decision n'a pas répondu. Derniers logs :"
+        docker logs --tail 30 llm-decision 2>&1 | sed 's/^/  /'
+        error "llm-decision n'a pas démarré."
+    fi
 done
 
 # ============================================================

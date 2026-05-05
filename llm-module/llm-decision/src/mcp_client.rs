@@ -58,6 +58,7 @@ impl McpClient {
             .post(&self.base_url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", "2025-03-26")
             .json(&body)
             .send()
             .await
