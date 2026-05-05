@@ -1006,6 +1006,15 @@ async fn process_llm_decision_async(task: PendingDecisionTask) {
         }
     };
 
+    // Créer les symlinks relatifs pour que llm-decision trouve les artefacts
+    let llm_tag_dir = create_llm_symlinks(
+        &task.quarantine_base,
+        &task.registry,
+        &task.repository,
+        &task.tag,
+        &task.digests,
+    );
+
     let llm_body: Option<Value> = match task.http.post(&task.llm_url).json(&context_json).send().await {
         Err(e) => {
             warn!("LLM-decision unreachable pull_id={}: {}", task.pull_id, e);
@@ -1030,6 +1039,9 @@ async fn process_llm_decision_async(task: PendingDecisionTask) {
             }
         }
     };
+
+    // Supprimer les symlinks maintenant que llm-decision a fini de lire les fichiers
+    cleanup_llm_symlinks(&llm_tag_dir);
 
     let decision = llm_body
         .as_ref()
@@ -1648,6 +1660,56 @@ async fn upsert_pull(pool: &PgPool, pullcontext: &PullContext) -> Result<(), App
 
 fn normalize_digest(value: &str) -> &str {
     value.strip_prefix("sha256:").unwrap_or(value)
+}
+
+// Le llm-decision cherche les artefacts à {base}/{reg}/{repo}/{tag}/manifests/{hash}.json
+// alors que le proxy stocke à {base}/{reg}/{repo}/manifests/sha256/{hash}.json.
+// On crée des symlinks relatifs dans la structure attendue, valables quel que soit
+// le point de montage du volume (orchestrateur /app/quarantaine, llm-decision /quarantaine).
+fn create_llm_symlinks(
+    quarantine_base: &str,
+    registry: &str,
+    repository: &str,
+    tag: &str,
+    digests: &[DigestInput],
+) -> String {
+    let tag_dir = format!("{}/{}/{}/{}", quarantine_base, registry, repository, tag);
+
+    for digest in digests {
+        let hex = normalize_digest(&digest.digest_value);
+        match digest.digest_type.as_deref().unwrap_or("manifests") {
+            "blobs" => {
+                let link_dir = format!("{}/blobs/sha256", tag_dir);
+                let _ = std::fs::create_dir_all(&link_dir);
+                let link = format!("{}/{}", link_dir, hex);
+                if !std::path::Path::new(&link).exists() {
+                    // ../../../blobs/sha256/{hex} remonte de {tag}/blobs/sha256/ à {repo}/
+                    let _ = std::os::unix::fs::symlink(
+                        format!("../../../blobs/sha256/{}", hex),
+                        &link,
+                    );
+                }
+            }
+            _ => {
+                let link_dir = format!("{}/manifests", tag_dir);
+                let _ = std::fs::create_dir_all(&link_dir);
+                let link = format!("{}/{}.json", link_dir, hex);
+                if !std::path::Path::new(&link).exists() {
+                    // ../../manifests/sha256/{hex}.json remonte de {tag}/manifests/ à {repo}/
+                    let _ = std::os::unix::fs::symlink(
+                        format!("../../manifests/sha256/{}.json", hex),
+                        &link,
+                    );
+                }
+            }
+        }
+    }
+
+    tag_dir
+}
+
+fn cleanup_llm_symlinks(tag_dir: &str) {
+    let _ = std::fs::remove_dir_all(tag_dir);
 }
 
 async fn insert_missing_digests(pool: &PgPool, pullcontext: &PullContext) -> Result<(), AppError> {
