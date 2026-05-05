@@ -50,10 +50,6 @@ docker build -t scanner-compliance .
 
 ### 2. Lancer le service
 
-```bash
-docker run -p 3001:3001 scanner-compliance
-```
-
 Les variables d'environnement sont toutes optionnelles (valeurs par défaut indiquées) :
 
 | Variable | Défaut | Description |
