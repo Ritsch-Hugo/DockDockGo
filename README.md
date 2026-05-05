@@ -170,21 +170,14 @@ Accepte un `multipart/form-data` avec :
 docker run -d --name docdockgo-orchestrateur \
   --network host \
   -u 10001:10001 \
-  -e DATABASE_URL="postgres://docdockgo_admin:docdockgo@127.0.0.1:5432/docdockgo" \
-  -e BIND_ADDR="0.0.0.0:3000" \
-  -e HIGH_LEVEL_URL="http://127.0.0.1:4000/v1/high-level" \
-  -e LLM_DECISION_URL="http://127.0.0.1:5000/v1/decision" \
-  -e LLM_DECISION_TIMEOUT_SECS="25" \
-  -e QUARANTINE_BASE="/data/quarantaine" \
-  -e CACHE_BASE="/data/cache" \
-  -e RUST_LOG="info,tower_http=info" \
+  --env-file .env \
   -v /path/to/proxy/quarantaine:/data/quarantaine \
   -v /path/to/proxy/cache:/data/cache \
   -p 3000:3000 \
   ghcr.io/ritsch-hugo/docdockgo-orchestrateur:latest
 ```
 
-> **Note** : `--network host` permet d'atteindre PostgreSQL et les autres services sur `127.0.0.1`. Les volumes `-v` doivent pointer vers les mêmes répertoires que le proxy pour les opérations quarantaine → cache.
+> **Note** : `--network host` permet d'atteindre PostgreSQL et les autres services sur `127.0.0.1`. Les volumes `-v` doivent pointer vers les mêmes répertoires que le proxy pour les opérations quarantaine → cache. Adapter `QUARANTINE_BASE` et `CACHE_BASE` dans le `.env` en conséquence (`/data/quarantaine` et `/data/cache`).
 
 ---
 
