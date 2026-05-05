@@ -1,0 +1,4 @@
+[advisories]
+# rand 0.9.x unsound avec custom logger — dépendance transitive de quinn-proto via reqwest.
+# Pas de fix upstream disponible ; on nutilise pas de custom logger.
+ignore = ["RUSTSEC-2026-0097"]
