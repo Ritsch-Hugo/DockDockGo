@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::oneshot;
+use tokio::{signal, sync::oneshot};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -184,13 +184,6 @@ struct ScannerCallbackPayload {
     response_scanner: Value,
 }
 
-#[derive(Debug, Clone)]
-struct AttachmentData {
-    field_name: String,
-    file_name: Option<String>,
-    content_type: Option<String>,
-    bytes: Bytes,
-}
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +202,6 @@ struct PendingDecisionTask {
     tag: String,
     digests: Vec<DigestInput>,
     raw_context_bytes: Bytes,
-    attachments: Vec<AttachmentData>,
     llm_url: String,
     quarantine_base: String,
     cache_base: String,
@@ -267,9 +259,34 @@ async fn main() -> anyhow::Result<()> {
 
     info!("✅ Orchestrateur en écoute sur http://{}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    info!("Signal reçu, arrêt gracieux en cours...");
 }
 
 fn init_tracing() {
@@ -340,7 +357,7 @@ async fn handle_multipart_decision(
     let mut modern_pullcontext: Option<PullContext> = None;
     let mut legacy_context: Option<ProxyPullContext> = None;
     let mut raw_context_bytes: Option<Bytes> = None;
-    let mut attachments: Vec<AttachmentData> = Vec::new();
+    let mut attachment_count: usize = 0;
 
     while let Some(field) = multipart
         .next_field()
@@ -396,17 +413,13 @@ async fn handle_multipart_decision(
                     bytes.len()
                 );
 
-                attachments.push(AttachmentData {
-                    field_name: name,
-                    file_name,
-                    content_type,
-                    bytes,
-                });
+                attachment_count += 1;
+                drop(bytes);
             }
         }
     }
 
-    info!("Nombre de pièces jointes: {}", attachments.len());
+    info!("Nombre de pièces jointes: {}", attachment_count);
 
     let (pullcontext, input_mode) = if let Some(pc) = modern_pullcontext {
         (pc, InputMode::Modern)
@@ -436,7 +449,7 @@ async fn handle_multipart_decision(
             info!("Phase FINAL pour pull_id={}", pullcontext.pull_id);
             handle_final_phase(
                 &state.pool, &state.http, &pullcontext,
-                &raw_context_bytes, &attachments,
+                &raw_context_bytes,
                 &state.quarantine_base, &state.cache_base,
             ).await?
         }
@@ -893,7 +906,6 @@ async fn handle_final_phase(
     http: &Client,
     pullcontext: &PullContext,
     raw_context_bytes: &Bytes,
-    attachments: &[AttachmentData],
     quarantine_base: &str,
     cache_base: &str,
 ) -> Result<String, AppError> {
@@ -937,7 +949,6 @@ async fn handle_final_phase(
         tag: pullcontext.tag.clone().unwrap_or_default(),
         digests: pullcontext.digests.clone(),
         raw_context_bytes: raw_context_bytes.clone(),
-        attachments: attachments.to_vec(),
         llm_url,
         quarantine_base: quarantine_base.to_string(),
         cache_base: cache_base.to_string(),
@@ -978,29 +989,6 @@ async fn handle_final_phase(
     Ok(decision)
 }
 
-fn build_llm_form(
-    raw_context_bytes: &Bytes,
-    attachments: &[AttachmentData],
-) -> Result<reqwest::multipart::Form, AppError> {
-    let mut form = reqwest::multipart::Form::new().part(
-        "context",
-        reqwest::multipart::Part::bytes(raw_context_bytes.to_vec())
-            .file_name("context.json")
-            .mime_str("application/json")
-            .map_err(|e| AppError::internal(format!("mime context: {e}")))?,
-    );
-
-    for att in attachments {
-        let mime = att.content_type.as_deref().unwrap_or("application/octet-stream");
-        let part = reqwest::multipart::Part::bytes(att.bytes.to_vec())
-            .file_name(att.file_name.clone().unwrap_or_else(|| att.field_name.clone()))
-            .mime_str(mime)
-            .map_err(|e| AppError::internal(format!("mime {}: {e}", att.field_name)))?;
-        form = form.part(att.field_name.clone(), part);
-    }
-
-    Ok(form)
-}
 
 async fn process_llm_decision_async(task: PendingDecisionTask) {
     info!(
@@ -1008,17 +996,17 @@ async fn process_llm_decision_async(task: PendingDecisionTask) {
         task.pull_id
     );
 
-    // 1. Construire et envoyer le formulaire au LLM
-    let form = match build_llm_form(&task.raw_context_bytes, &task.attachments) {
-        Ok(f) => f,
+    // 1. Envoyer le contexte JSON au LLM (qui lit lui-même les artefacts depuis la quarantaine)
+    let context_json: Value = match serde_json::from_slice(&task.raw_context_bytes) {
+        Ok(v) => v,
         Err(e) => {
-            warn!("Erreur construction form LLM: {} → PENDING", e.message);
+            warn!("Erreur parse context LLM: {} → PENDING", e);
             let _ = task.tx.send("PENDING".to_string());
             return;
         }
     };
 
-    let llm_body: Option<Value> = match task.http.post(&task.llm_url).multipart(form).send().await {
+    let llm_body: Option<Value> = match task.http.post(&task.llm_url).json(&context_json).send().await {
         Err(e) => {
             warn!("LLM-decision unreachable pull_id={}: {}", task.pull_id, e);
             None

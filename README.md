@@ -99,7 +99,7 @@ Accepte un `multipart/form-data` avec :
 ## Phase FINAL — Décision LLM
 
 1. INSERT immédiat dans `ia_decisions` avec `decision='PENDING'` (satisfait la FK avant la réponse)
-2. Spawn d'une tâche background qui forward le multipart au service LLM-Decision
+2. Spawn d'une tâche background qui envoie le contexte (`ProxyPullContext`) en JSON (`Content-Type: application/json`) au service LLM-Decision — le service lit lui-même les artefacts depuis la quarantaine filesystem
 3. Attente pendant `LLM_DECISION_TIMEOUT_SECS` secondes :
    - Réponse dans les temps → retourne la décision au proxy + background task met à jour la BDD
    - Timeout → retourne **PENDING** au proxy, la tâche background continue et met à jour la BDD à la réception
@@ -190,11 +190,17 @@ Chargées automatiquement depuis `.env` (via `dotenvy`).
 | `DATABASE_URL` | `postgres://docdockgo_admin:docdockgo@127.0.0.1:5432/docdockgo` | URL PostgreSQL |
 | `BIND_ADDR` | `0.0.0.0:3000` | Adresse d'écoute |
 | `HIGH_LEVEL_URL` | `http://127.0.0.1:4000/v1/high-level` | Service HL scanner (Gemini) |
-| `LLM_DECISION_URL` | `http://127.0.0.1:5000/v1/decision` | Service LLM décision finale |
+| `LLM_DECISION_URL` | `http://127.0.0.1:3005/v1/decision` | Service LLM décision finale |
 | `LLM_DECISION_TIMEOUT_SECS` | `30` | Timeout avant retour PENDING au proxy |
 | `QUARANTINE_BASE` | `./quarantaine` | Chemin de base de la quarantaine |
 | `CACHE_BASE` | `./cache` | Chemin de base du cache |
 | `RUST_LOG` | `info` | Niveau de log |
+
+---
+
+## Arrêt gracieux
+
+L'orchestrateur intercepte `SIGTERM` (signal Docker `docker stop`) et `SIGINT` (Ctrl-C). À réception, axum attend la fin des requêtes en cours avant de fermer le listener, puis le processus se termine proprement.
 
 ---
 
