@@ -77,23 +77,13 @@ docker network create docdockgo
 
 # 4. Démarrer llm-manager
 docker run -d --name llm-manager --network docdockgo \
-  -e LLM_BASE_URL=https://openrouter.ai/api \
-  -e OPENROUTER_API_KEY=sk-or-v1-... \
-  -e LLM_WORKER_1=minimax/minimax-m2.7 \
-  -e LLM_WORKER_2=qwen/qwen3.5-35b-a3b \
-  -e LLM_WORKER_3=google/gemma-4-31b-it \
-  -e LLM_ARBITER=mistralai/mistral-small-2603 \
+  --env-file llm-module/llm-manager/.env \
   -p 3003:3003 \
   ghcr.io/ritsch-hugo/llm-manager:latest
 
 # 5. Démarrer llm-decision
 docker run -d --name llm-decision --network docdockgo \
-  -e LLM_BASE_URL=https://openrouter.ai/api \
-  -e OPENROUTER_API_KEY=sk-or-v1-... \
-  -e LLM_WORKER_1=minimax/minimax-m2.7 \
-  -e LLM_WORKER_2=qwen/qwen3.5-35b-a3b \
-  -e LLM_WORKER_3=google/gemma-4-31b-it \
-  -e LLM_ARBITER=mistralai/mistral-small-2603 \
+  --env-file llm-module/llm-decision/.env \
   -e MANAGER_HOST=llm-manager \
   -e MCP_SERVER_URL=http://mcp-tools-server:3004/mcp \
   -e QUARANTINE_PATH=/quarantaine \

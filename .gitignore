@@ -6,3 +6,5 @@ mcp-tools-server/
 orchestrator/
 .env
 llm-module/.env
+llm-module/llm-manager/.env
+llm-module/llm-decision/.env
