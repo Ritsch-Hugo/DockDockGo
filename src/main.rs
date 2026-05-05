@@ -11,7 +11,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
+use tokio::sync::oneshot;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -20,6 +21,8 @@ use uuid::Uuid;
 struct AppState {
     pool: PgPool,
     http: Client,
+    quarantine_base: String,
+    cache_base: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -181,7 +184,7 @@ struct ScannerCallbackPayload {
     response_scanner: Value,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct AttachmentData {
     field_name: String,
     file_name: Option<String>,
@@ -196,6 +199,23 @@ enum InputMode {
     LegacyProxy,
 }
 
+struct PendingDecisionTask {
+    pool: PgPool,
+    http: Client,
+    pull_id: Uuid,
+    ia_id: Uuid,
+    registry: String,
+    repository: String,
+    tag: String,
+    digests: Vec<DigestInput>,
+    raw_context_bytes: Bytes,
+    attachments: Vec<AttachmentData>,
+    llm_url: String,
+    quarantine_base: String,
+    cache_base: String,
+    tx: oneshot::Sender<String>,
+}
+
 #[derive(Debug)]
 struct HighLevelResult {
     state: String,
@@ -206,6 +226,7 @@ struct HighLevelResult {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     init_tracing();
 
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -213,9 +234,13 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+    let quarantine_base = env::var("QUARANTINE_BASE").unwrap_or_else(|_| "./quarantaine".to_string());
+    let cache_base = env::var("CACHE_BASE").unwrap_or_else(|_| "./cache".to_string());
 
     info!("========== Démarrage orchestrateur DockDockGo ==========");
     info!("BIND_ADDR={}", bind_addr);
+    info!("QUARANTINE_BASE={}", quarantine_base);
+    info!("CACHE_BASE={}", cache_base);
     info!("DATABASE_URL={}", mask_database_url(&database_url));
 
     let pool = PgPoolOptions::new()
@@ -226,7 +251,7 @@ async fn main() -> anyhow::Result<()> {
     info!("[DB] Connexion PostgreSQL OK");
 
     let http = Client::builder().build()?;
-    let state = Arc::new(AppState { pool, http });
+    let state = Arc::new(AppState { pool, http, quarantine_base, cache_base });
 
     let app = Router::new()
         .route("/health", get(health))
@@ -409,7 +434,11 @@ async fn handle_multipart_decision(
         }
         Phase::Final => {
             info!("Phase FINAL pour pull_id={}", pullcontext.pull_id);
-            handle_final_phase(&state.pool, &state.http, &pullcontext, &raw_context_bytes, &attachments).await?
+            handle_final_phase(
+                &state.pool, &state.http, &pullcontext,
+                &raw_context_bytes, &attachments,
+                &state.quarantine_base, &state.cache_base,
+            ).await?
         }
     };
 
@@ -865,24 +894,94 @@ async fn handle_final_phase(
     pullcontext: &PullContext,
     raw_context_bytes: &Bytes,
     attachments: &[AttachmentData],
+    quarantine_base: &str,
+    cache_base: &str,
 ) -> Result<String, AppError> {
     info!("Début handle_final_phase: pull_id={}", pullcontext.pull_id);
-    info!(
-        "Attachments: count={} {}",
-        attachments.len(),
-        attachments
-            .iter()
-            .map(|a| format!("{}({}B)", a.field_name, a.bytes.len()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
 
     let llm_url = env::var("LLM_DECISION_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:5000/v1/decision".to_string());
+    let timeout_secs: u64 = env::var("LLM_DECISION_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
 
-    info!("Forwarding vers LLM-decision: {}", llm_url);
+    info!(
+        "LLM-decision URL={}, timeout={}s, pull_id={}",
+        llm_url, timeout_secs, pullcontext.pull_id
+    );
 
-    // Construction du multipart : context + tous les fichiers
+    let ia_id = Uuid::new_v4();
+    let (tx, rx) = oneshot::channel::<String>();
+
+    // INSERT PENDING immédiat avec les infos du proxy — le proxy n'a pas encore répondu
+    sqlx::query(
+        r#"INSERT INTO ia_decisions (id, pull_id, created_at, decision, static_scan, compliance_scan, dynamic_scan)
+           VALUES ($1, $2, NOW(), 'PENDING', false, false, false)
+           ON CONFLICT DO NOTHING"#,
+    )
+    .bind(ia_id)
+    .bind(pullcontext.pull_id)
+    .execute(pool)
+    .await?;
+
+    info!("DB insert ia_decisions PENDING: pull_id={}, ia_id={}", pullcontext.pull_id, ia_id);
+
+    let task = PendingDecisionTask {
+        pool: pool.clone(),
+        http: http.clone(),
+        pull_id: pullcontext.pull_id,
+        ia_id,
+        registry: pullcontext.registry.clone(),
+        repository: pullcontext.repository.clone(),
+        tag: pullcontext.tag.clone().unwrap_or_default(),
+        digests: pullcontext.digests.clone(),
+        raw_context_bytes: raw_context_bytes.clone(),
+        attachments: attachments.to_vec(),
+        llm_url,
+        quarantine_base: quarantine_base.to_string(),
+        cache_base: cache_base.to_string(),
+        tx,
+    };
+
+    tokio::spawn(process_llm_decision_async(task));
+
+    let decision = match tokio::time::timeout(Duration::from_secs(timeout_secs), rx).await {
+        Ok(Ok(d)) => {
+            info!(
+                "LLM-decision répondu dans les {}s: pull_id={}, decision={}",
+                timeout_secs, pullcontext.pull_id, d
+            );
+            d
+        }
+        Ok(Err(_)) => {
+            warn!(
+                "Canal LLM-decision fermé sans résultat: pull_id={} → PENDING",
+                pullcontext.pull_id
+            );
+            "PENDING".to_string()
+        }
+        Err(_) => {
+            warn!(
+                "LLM-decision timeout (>{}s): pull_id={} → PENDING (traitement async en cours)",
+                timeout_secs, pullcontext.pull_id
+            );
+            "PENDING".to_string()
+        }
+    };
+
+    info!(
+        "handle_final_phase retourne: pull_id={}, decision={}",
+        pullcontext.pull_id, decision
+    );
+
+    Ok(decision)
+}
+
+fn build_llm_form(
+    raw_context_bytes: &Bytes,
+    attachments: &[AttachmentData],
+) -> Result<reqwest::multipart::Form, AppError> {
     let mut form = reqwest::multipart::Form::new().part(
         "context",
         reqwest::multipart::Part::bytes(raw_context_bytes.to_vec())
@@ -892,43 +991,51 @@ async fn handle_final_phase(
     );
 
     for att in attachments {
-        let mime = att
-            .content_type
-            .as_deref()
-            .unwrap_or("application/octet-stream");
-
+        let mime = att.content_type.as_deref().unwrap_or("application/octet-stream");
         let part = reqwest::multipart::Part::bytes(att.bytes.to_vec())
             .file_name(att.file_name.clone().unwrap_or_else(|| att.field_name.clone()))
             .mime_str(mime)
             .map_err(|e| AppError::internal(format!("mime {}: {e}", att.field_name)))?;
-
         form = form.part(att.field_name.clone(), part);
     }
 
-    let llm_body: Option<Value> = match http.post(&llm_url).multipart(form).send().await {
+    Ok(form)
+}
+
+async fn process_llm_decision_async(task: PendingDecisionTask) {
+    info!(
+        "========== process_llm_decision_async: pull_id={} ==========",
+        task.pull_id
+    );
+
+    // 1. Construire et envoyer le formulaire au LLM
+    let form = match build_llm_form(&task.raw_context_bytes, &task.attachments) {
+        Ok(f) => f,
         Err(e) => {
-            warn!(
-                "LLM-decision unreachable pour pull_id={}: {} → PENDING",
-                pullcontext.pull_id, e
-            );
+            warn!("Erreur construction form LLM: {} → PENDING", e.message);
+            let _ = task.tx.send("PENDING".to_string());
+            return;
+        }
+    };
+
+    let llm_body: Option<Value> = match task.http.post(&task.llm_url).multipart(form).send().await {
+        Err(e) => {
+            warn!("LLM-decision unreachable pull_id={}: {}", task.pull_id, e);
             None
         }
         Ok(resp) => {
             let status = resp.status();
             if !status.is_success() {
-                warn!(
-                    "LLM-decision HTTP {} pour pull_id={} → PENDING",
-                    status, pullcontext.pull_id
-                );
+                warn!("LLM-decision HTTP {} pull_id={}", status, task.pull_id);
                 None
             } else {
                 let body: Value = resp.json().await.unwrap_or_else(|e| {
-                    warn!("LLM-decision réponse non-JSON pull_id={}: {}", pullcontext.pull_id, e);
+                    warn!("LLM-decision réponse non-JSON pull_id={}: {}", task.pull_id, e);
                     json!({})
                 });
                 info!(
                     "Réponse LLM-decision pull_id={}:\n{}",
-                    pullcontext.pull_id,
+                    task.pull_id,
                     serde_json::to_string_pretty(&body).unwrap_or_default()
                 );
                 Some(body)
@@ -941,111 +1048,279 @@ async fn handle_final_phase(
         .map(|b| decision_from_llm_response(b))
         .unwrap_or_else(|| "PENDING".to_string());
 
-    info!(
-        "Décision finale LLM: pull_id={}, decision={}",
-        pullcontext.pull_id, decision
-    );
+    info!("Décision LLM: pull_id={}, decision={}", task.pull_id, decision);
 
-    // Enregistrement dans ia_decisions uniquement si le LLM a répondu
-    if let Some(ref body) = llm_body {
-        let verdict = body.get("verdict");
+    // 2. Signaler la décision au handle_final_phase (pour le chemin timeout)
+    let _ = task.tx.send(decision.clone());
 
-        let vuln_score = verdict
-            .and_then(|v| v.get("vulnerability_score"))
-            .and_then(|v| v.as_f64());
-        let confidence = verdict
-            .and_then(|v| v.get("confidence"))
-            .and_then(|v| v.as_f64());
-        let rationale = verdict
-            .and_then(|v| v.get("rationale"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+    // 3. Sans réponse LLM, rien à écrire en DB
+    let Some(ref body) = llm_body else {
+        warn!("Pas de réponse LLM, aucune écriture DB: pull_id={}", task.pull_id);
+        return;
+    };
 
-        let scan_reasoning = body.get("scan_reasoning").cloned();
-        let decision_metadata = body.get("decision_metadata").cloned();
-        let alternatives = body.get("alternatives").cloned();
+    // 4. Mise à jour ia_decisions (ligne créée par le proxy, on l'update via pull_id)
+    let verdict = body.get("verdict");
+    let vuln_score = verdict.and_then(|v| v.get("vulnerability_score")).and_then(|v| v.as_f64());
+    let confidence = verdict.and_then(|v| v.get("confidence")).and_then(|v| v.as_f64());
+    let rationale = verdict.and_then(|v| v.get("rationale")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let scan_reasoning = body.get("scan_reasoning").cloned();
+    let decision_metadata = body.get("decision_metadata").cloned();
+    let alternatives = body.get("alternatives").cloned();
 
-        let ia_id = Uuid::new_v4();
+    let scan_analysis = body.get("scan_analysis");
+    let static_scan = scan_analysis.and_then(|s| s.get("static")).and_then(|s| s.get("executed")).and_then(|v| v.as_bool()).unwrap_or(false);
+    let compliance_scan = scan_analysis.and_then(|s| s.get("compliance")).and_then(|s| s.get("executed")).and_then(|v| v.as_bool()).unwrap_or(false);
+    let dynamic_scan = scan_analysis.and_then(|s| s.get("dynamic")).and_then(|s| s.get("executed")).and_then(|v| v.as_bool()).unwrap_or(false);
 
-        sqlx::query(
-            r#"
-            INSERT INTO ia_decisions (
-                id, pull_id, created_at,
-                decision,
-                vulnerability_score,
-                confidence,
-                rationale,
-                scan_reasoning,
-                decision_metadata,
-                alternatives
+    info!("Scans exécutés: static={}, compliance={}, dynamic={}", static_scan, compliance_scan, dynamic_scan);
+
+    let ia_id = task.ia_id;
+
+    match sqlx::query(
+        r#"
+        UPDATE ia_decisions SET
+            decision            = $2,
+            vulnerability_score = $3,
+            confidence          = $4,
+            rationale           = $5,
+            scan_reasoning      = $6,
+            decision_metadata   = $7,
+            alternatives        = $8,
+            static_scan         = $9,
+            compliance_scan     = $10,
+            dynamic_scan        = $11,
+            created_at          = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(ia_id).bind(&decision)
+    .bind(vuln_score).bind(confidence).bind(rationale)
+    .bind(scan_reasoning).bind(decision_metadata).bind(alternatives)
+    .bind(static_scan).bind(compliance_scan).bind(dynamic_scan)
+    .execute(&task.pool)
+    .await
+    {
+        Ok(r) => info!("DB update ia_decisions OK: pull_id={}, ia_id={}, rows={}", task.pull_id, ia_id, r.rows_affected()),
+        Err(e) => warn!("DB update ia_decisions ERREUR: {}", e),
+    }
+
+    // 5. Écriture scan_events
+    if let Some(analysis) = body.get("scan_analysis").and_then(|v| v.as_object()) {
+        for (scanner_type, scan_data) in analysis {
+            let executed = scan_data.get("executed").and_then(|v| v.as_bool()).unwrap_or(false);
+            let llm_summary = scan_data.get("llm_summary").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let raw_result = scan_data.get("raw_result").cloned().unwrap_or(json!(null));
+
+            if let Err(e) = sqlx::query(
+                r#"INSERT INTO scan_events (id, pull_id, ia_decision_id, scanner_type, response_scanner, executed, llm_summary, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())"#,
             )
-            VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8, $9)
-            "#,
-        )
-        .bind(ia_id)
-        .bind(pullcontext.pull_id)
-        .bind(&decision)
-        .bind(vuln_score)
-        .bind(confidence)
-        .bind(rationale)
-        .bind(scan_reasoning)
-        .bind(decision_metadata)
-        .bind(alternatives)
-        .execute(pool)
-        .await?;
-
-        info!("DB insert ia_decisions OK: pull_id={}, id={}", pullcontext.pull_id, ia_id);
-
-        // Enregistrement des scans exécutés dans scan_events
-        if let Some(scan_analysis) = body.get("scan_analysis").and_then(|v| v.as_object()) {
-            for (scanner_type, scan_data) in scan_analysis {
-                let executed = scan_data.get("executed").and_then(|v| v.as_bool()).unwrap_or(false);
-                let llm_summary = scan_data.get("llm_summary").and_then(|v| v.as_str()).map(|s| s.to_string());
-                let raw_result = scan_data.get("raw_result").cloned().unwrap_or(json!(null));
-
-                sqlx::query(
-                    r#"
-                    INSERT INTO scan_events (id, pull_id, ia_decision_id, scanner_type, response_scanner, executed, llm_summary, created_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-                    "#,
-                )
-                .bind(Uuid::new_v4())
-                .bind(pullcontext.pull_id)
-                .bind(ia_id)
-                .bind(scanner_type)
-                .bind(raw_result)
-                .bind(executed)
-                .bind(llm_summary)
-                .execute(pool)
-                .await?;
-
-                info!("DB insert scan_events OK: scanner_type={}, executed={}", scanner_type, executed);
+            .bind(Uuid::new_v4()).bind(task.pull_id).bind(ia_id)
+            .bind(scanner_type.as_str()).bind(raw_result).bind(executed).bind(llm_summary)
+            .execute(&task.pool)
+            .await
+            {
+                warn!("DB insert scan_events ERREUR ({}): {}", scanner_type, e);
+            } else {
+                info!("DB insert scan_events OK: scanner_type={}", scanner_type);
             }
         }
     }
 
-    // Mise à jour de la décision finale dans pulls
+    // 6. Whitelist / blacklist + opérations fichiers
+    match decision.as_str() {
+        "ALLOW" => {
+            if let Err(e) = sqlx::query(
+                "INSERT INTO whitelist (id, registry, repository, tag) VALUES ($1::uuid, $2, $3, $4) ON CONFLICT DO NOTHING",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(&task.registry).bind(&task.repository).bind(&task.tag)
+            .execute(&task.pool)
+            .await
+            {
+                warn!("DB insert whitelist ERREUR: {}", e);
+            } else {
+                info!("Whitelist ajouté: {}/{}/{}", task.registry, task.repository, task.tag);
+            }
+
+            move_digests_to_cache(
+                &task.pool, &task.registry, &task.repository,
+                &task.digests, &task.quarantine_base, &task.cache_base,
+            ).await;
+        }
+        "DENY" => {
+            if let Err(e) = sqlx::query(
+                "INSERT INTO blacklist (id, registry, repository, tag) VALUES ($1::uuid, $2, $3, $4) ON CONFLICT DO NOTHING",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(&task.registry).bind(&task.repository).bind(&task.tag)
+            .execute(&task.pool)
+            .await
+            {
+                warn!("DB insert blacklist ERREUR: {}", e);
+            } else {
+                info!("Blacklist ajouté: {}/{}/{}", task.registry, task.repository, task.tag);
+            }
+
+            delete_digests_from_quarantine(
+                &task.pool, &task.registry, &task.repository,
+                &task.digests, &task.quarantine_base,
+            ).await;
+        }
+        _ => {}
+    }
+
+    // 7. Mise à jour decision_final dans pulls
     let scan_completed = decision != "PENDING";
-
-    sqlx::query(
-        r#"
-        UPDATE pulls
-        SET scan_completed = $2, decision_final = $3, last_activity = NOW()
-        WHERE uuid = $1
-        "#,
+    match sqlx::query(
+        "UPDATE pulls SET scan_completed=$2, decision_final=$3, last_activity=NOW() WHERE uuid=$1",
     )
-    .bind(pullcontext.pull_id)
-    .bind(scan_completed)
-    .bind(&decision)
-    .execute(pool)
-    .await?;
+    .bind(task.pull_id).bind(scan_completed).bind(&decision)
+    .execute(&task.pool)
+    .await
+    {
+        Ok(r) => info!(
+            "DB update pulls final: pull_id={}, decision={}, rows={}",
+            task.pull_id, decision, r.rows_affected()
+        ),
+        Err(e) => warn!("DB update pulls ERREUR pull_id={}: {}", task.pull_id, e),
+    }
+}
 
-    info!(
-        "DB pulls mis à jour: pull_id={}, scan_completed={}, decision={}",
-        pullcontext.pull_id, scan_completed, decision
-    );
+async fn move_digests_to_cache(
+    pool: &PgPool,
+    registry: &str,
+    repository: &str,
+    digests: &[DigestInput],
+    quarantine_base: &str,
+    cache_base: &str,
+) {
+    for digest in digests {
+        let hex = normalize_digest(&digest.digest_value);
+        let dtype = digest.digest_type.as_deref().unwrap_or("manifests");
 
-    Ok(decision)
+        let (q_path, c_path, db_type) = match dtype {
+            "blobs" => (
+                format!("{}/{}/{}/blobs/sha256/{}", quarantine_base, registry, repository, hex),
+                format!("{}/{}/{}/blobs/sha256/{}", cache_base, registry, repository, hex),
+                "blob",
+            ),
+            "referrers" => (
+                format!("{}/{}/{}/referrers/sha256/{}.json", quarantine_base, registry, repository, hex),
+                format!("{}/{}/{}/referrers/sha256/{}.json", cache_base, registry, repository, hex),
+                "referrer",
+            ),
+            _ => (
+                format!("{}/{}/{}/manifests/sha256/{}.json", quarantine_base, registry, repository, hex),
+                format!("{}/{}/{}/manifests/sha256/{}.json", cache_base, registry, repository, hex),
+                "manifest",
+            ),
+        };
+
+        match tokio::fs::try_exists(&q_path).await {
+            Ok(false) | Err(_) => {
+                debug!("Fichier quarantine inexistant, skip: {}", q_path);
+                continue;
+            }
+            Ok(true) => {}
+        }
+
+        if let Some(parent) = std::path::Path::new(&c_path).parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                warn!("Impossible de créer le répertoire cache {}: {}", parent.display(), e);
+                continue;
+            }
+        }
+
+        let size = match tokio::fs::copy(&q_path, &c_path).await {
+            Ok(bytes) => bytes as i64,
+            Err(e) => {
+                warn!("Erreur copie {} → {}: {}", q_path, c_path, e);
+                continue;
+            }
+        };
+
+        info!("Copié quarantine→cache: {}", hex);
+
+        let digest_with_prefix = format!("sha256:{}", hex);
+
+        if let Err(e) = sqlx::query(
+            r#"INSERT INTO cache (id, registry, repository, digest, type, digest_algo, file_path, size_bytes, added_at)
+               VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, NOW())
+               ON CONFLICT (registry, repository, digest, type)
+               DO UPDATE SET file_path=EXCLUDED.file_path, size_bytes=EXCLUDED.size_bytes, added_at=NOW()"#,
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(registry).bind(repository).bind(&digest_with_prefix)
+        .bind(db_type).bind("sha256").bind(&c_path).bind(size)
+        .execute(pool)
+        .await
+        {
+            warn!("DB upsert cache ERREUR ({}): {}", hex, e);
+        }
+
+        if let Err(e) = tokio::fs::remove_file(&q_path).await {
+            warn!("Erreur suppression quarantine {}: {}", q_path, e);
+        }
+
+        if let Err(e) = sqlx::query(
+            "DELETE FROM quarantine WHERE registry=$1 AND repository=$2 AND digest=$3 AND type=$4",
+        )
+        .bind(registry).bind(repository).bind(&digest_with_prefix).bind(db_type)
+        .execute(pool)
+        .await
+        {
+            warn!("DB delete quarantine ERREUR ({}): {}", hex, e);
+        }
+    }
+}
+
+async fn delete_digests_from_quarantine(
+    pool: &PgPool,
+    registry: &str,
+    repository: &str,
+    digests: &[DigestInput],
+    quarantine_base: &str,
+) {
+    for digest in digests {
+        let hex = normalize_digest(&digest.digest_value);
+        let dtype = digest.digest_type.as_deref().unwrap_or("manifests");
+
+        let (q_path, db_type) = match dtype {
+            "blobs" => (
+                format!("{}/{}/{}/blobs/sha256/{}", quarantine_base, registry, repository, hex),
+                "blob",
+            ),
+            "referrers" => (
+                format!("{}/{}/{}/referrers/sha256/{}.json", quarantine_base, registry, repository, hex),
+                "referrer",
+            ),
+            _ => (
+                format!("{}/{}/{}/manifests/sha256/{}.json", quarantine_base, registry, repository, hex),
+                "manifest",
+            ),
+        };
+
+        if tokio::fs::try_exists(&q_path).await.unwrap_or(false) {
+            match tokio::fs::remove_file(&q_path).await {
+                Ok(_) => info!("Supprimé quarantine: {}", q_path),
+                Err(e) => warn!("Erreur suppression quarantine {}: {}", q_path, e),
+            }
+        }
+
+        let digest_with_prefix = format!("sha256:{}", hex);
+
+        if let Err(e) = sqlx::query(
+            "DELETE FROM quarantine WHERE registry=$1 AND repository=$2 AND digest=$3 AND type=$4",
+        )
+        .bind(registry).bind(repository).bind(&digest_with_prefix).bind(db_type)
+        .execute(pool)
+        .await
+        {
+            warn!("DB delete quarantine ERREUR ({}): {}", hex, e);
+        }
+    }
 }
 
 fn decision_from_llm_response(body: &Value) -> String {

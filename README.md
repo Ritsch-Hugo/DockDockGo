@@ -20,18 +20,30 @@ Proxy (MITM)
     │
     └── Phase FINAL (GET) ───► POST /v1/decision (context + fichiers)
                                         │
-                                 Forward multipart → LLM-Decision
+                                INSERT ia_decisions (PENDING)
                                         │
-                            ┌───────────┴────────────┐
-                            │   Réponse LLM-Decision  │
-                            │  - decision_metadata    │  → ia_decisions
-                            │  - scan_analysis        │  → scan_events (1 ligne/scanner)
-                            │  - scan_reasoning       │  → ia_decisions
-                            │  - verdict              │  → ia_decisions + pulls
-                            │  - alternatives         │  → ia_decisions
-                            └─────────────────────────┘
+                               spawn tâche background
                                         │
-                               ALLOW / DENY / PENDING ──► proxy
+                         ┌──────────────┴──────────────┐
+                         │  Attente réponse LLM-Decision │
+                         │  (timeout = LLM_DECISION_     │
+                         │   TIMEOUT_SECS)               │
+                         └──────────────┬────────────────┘
+                                        │
+                              timeout écoulé ?
+                              ├── OUI → retourne PENDING au proxy
+                              │         (background task continue)
+                              └── NON → retourne ALLOW/DENY au proxy
+                                        │
+                                (background task)
+                                        │
+                            UPDATE ia_decisions (décision réelle)
+                            INSERT scan_events (1 ligne/scanner)
+                            UPDATE pulls (decision_final)
+                            ALLOW → copie quarantaine → cache
+                                  → INSERT whitelist
+                            DENY  → supprime fichiers quarantaine
+                                  → INSERT blacklist
 ```
 
 ---
@@ -72,7 +84,7 @@ Accepte un `multipart/form-data` avec :
 2. Appelle le service HL scanner (`HIGH_LEVEL_URL`) avec le `ProxyPullContext`
 3. Parse la réponse Gemini : extrait le score sur la dernière ligne `Resultat : NN`
 4. score < 30 → **DENY** / score ≥ 30 → **PENDING**
-5. Timeout interne : 25s (le proxy a un timeout de 30s)
+5. Timeout interne : 25 s
 
 ### Écritures BDD
 
@@ -82,33 +94,26 @@ Accepte un `multipart/form-data` avec :
 | `pull_digests` | INSERT | un enregistrement par digest reçu |
 | `scan_events` | INSERT | `scanner_type='high-level'`, `executed=true`, `ia_decision_id=NULL`, `response_scanner` = score + texte Gemini |
 
-Exemple `scan_events.response_scanner` :
-```json
-{
-  "decision": "DENY",
-  "score": 15.0,
-  "reasoning": ["Le tag 3.1 est très ancien...", "Risque ÉLEVÉ..."],
-  "raw_text": "Voici l'analyse DevSecOps...\nResultat : 15"
-}
-```
-
 ---
 
 ## Phase FINAL — Décision LLM
 
-1. Reconstruit le multipart reçu (context + tous les fichiers) et le forward tel quel au service LLM-Decision (`LLM_DECISION_URL`)
-2. Parse la réponse structurée du LLM
-3. Si le service est injoignable → **PENDING** (fail-open, rien écrit en DB)
+1. INSERT immédiat dans `ia_decisions` avec `decision='PENDING'` (satisfait la FK avant la réponse)
+2. Spawn d'une tâche background qui forward le multipart au service LLM-Decision
+3. Attente pendant `LLM_DECISION_TIMEOUT_SECS` secondes :
+   - Réponse dans les temps → retourne la décision au proxy + background task met à jour la BDD
+   - Timeout → retourne **PENDING** au proxy, la tâche background continue et met à jour la BDD à la réception
+4. Si le service est injoignable → **PENDING**, `ia_decisions` reste à PENDING
 
 ### Format de réponse attendu du LLM-Decision
 
 ```json
 {
   "verdict": {
-    "decision": "DENY",
-    "vulnerability_score": 7.5,
-    "confidence": 0.93,
-    "rationale": "2 CVEs critiques + 3 règles compliance échouées..."
+    "decision": "ALLOW",
+    "vulnerability_score": 1.5,
+    "confidence": 0.91,
+    "rationale": "..."
   },
   "scan_analysis": {
     "static":     { "executed": true,  "llm_summary": "...", "raw_result": {...} },
@@ -117,7 +122,7 @@ Exemple `scan_events.response_scanner` :
   },
   "scan_reasoning": {
     "workers": [...],
-    "arbiter": { "model": "...", "vulnerability_score": 7.5, "confidence": 0.93, "reasoning": "..." }
+    "arbiter": { "model": "...", "vulnerability_score": 1.5, "confidence": 0.91, "reasoning": "..." }
   },
   "decision_metadata": {
     "workers": [...],
@@ -129,14 +134,23 @@ Exemple `scan_events.response_scanner` :
 }
 ```
 
-### Écritures BDD
+### Écritures BDD (tâche background)
 
 | Table | Action | Contenu |
 |---|---|---|
 | `pulls` | UPDATE | `decision_final`, `scan_completed` |
 | `pull_digests` | INSERT | tous les digests complets (manifests + blobs) |
-| `ia_decisions` | INSERT | verdict complet : decision, vulnerability_score, confidence, rationale, scan_reasoning, decision_metadata, alternatives |
-| `scan_events` | INSERT × N | une ligne par scanner dans `scan_analysis` : scanner_type, executed, llm_summary, response_scanner (raw_result), ia_decision_id |
+| `ia_decisions` | UPDATE | verdict complet : decision, vulnerability_score, confidence, rationale, scan_reasoning, decision_metadata, alternatives, static_scan, compliance_scan, dynamic_scan |
+| `scan_events` | INSERT × N | une ligne par scanner dans `scan_analysis` |
+| `whitelist` | INSERT | si ALLOW — (registry, repository, tag) |
+| `blacklist` | INSERT | si DENY — (registry, repository, tag) |
+
+### Opérations fichiers (tâche background)
+
+| Décision | Action |
+|---|---|
+| ALLOW | Copie `quarantaine/` → `cache/` pour chaque digest + upsert table `cache` + supprime de `quarantaine` |
+| DENY | Supprime les fichiers de `quarantaine/` + supprime de la table `quarantine` |
 
 ---
 
@@ -152,12 +166,17 @@ Exemple `scan_events.response_scanner` :
 
 ## Variables d'environnement
 
+Chargées automatiquement depuis `.env` (via `dotenvy`).
+
 | Variable | Défaut | Description |
 |---|---|---|
 | `DATABASE_URL` | `postgres://docdockgo_admin:docdockgo@127.0.0.1:5432/docdockgo` | URL PostgreSQL |
 | `BIND_ADDR` | `0.0.0.0:3000` | Adresse d'écoute |
 | `HIGH_LEVEL_URL` | `http://127.0.0.1:4000/v1/high-level` | Service HL scanner (Gemini) |
 | `LLM_DECISION_URL` | `http://127.0.0.1:5000/v1/decision` | Service LLM décision finale |
+| `LLM_DECISION_TIMEOUT_SECS` | `30` | Timeout avant retour PENDING au proxy |
+| `QUARANTINE_BASE` | `./quarantaine` | Chemin de base de la quarantaine |
+| `CACHE_BASE` | `./cache` | Chemin de base du cache |
 | `RUST_LOG` | `info` | Niveau de log |
 
 ---
@@ -169,5 +188,6 @@ Exemple `scan_events.response_scanner` :
 | `pulls` | Un enregistrement par pull, décision finale |
 | `pull_digests` | Tous les digests vus (manifests, blobs, referrers) |
 | `scan_events` | Résultats des scanners : `high-level` (Phase INITIAL) + `static/compliance/dynamic` (Phase FINAL) |
-| `ia_decisions` | Décision complète retournée par le LLM de décision finale |
+| `ia_decisions` | Décision LLM : inséré en PENDING au démarrage du scan, mis à jour avec le verdict réel |
 | `blacklist` / `whitelist` | Listes persistantes par (registry, repository, tag) |
+| `quarantine` / `cache` | Index des fichiers sur disque |
