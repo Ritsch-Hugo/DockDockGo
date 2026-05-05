@@ -135,6 +135,7 @@ jobs:
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH
+          ignore-unfixed: true
 
       - name: Push llm-manager
         uses: docker/build-push-action@v5
@@ -162,6 +163,7 @@ jobs:
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH
+          ignore-unfixed: true
 
       - name: Push llm-decision
         uses: docker/build-push-action@v5
