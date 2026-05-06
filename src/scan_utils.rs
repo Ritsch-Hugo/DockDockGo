@@ -278,7 +278,7 @@ pub async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result
     let client = reqwest::Client::new();
 
     let state: Result<String, String> = match tokio::time::timeout(
-        Duration::from_secs(30),
+        Duration::from_secs(std::env::var("ORCH_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(120)),
         client.post(orch_url).multipart(form).send(),
     )
     .await
