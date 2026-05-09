@@ -1,0 +1,19 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    {
+      "names": [
+        "mount",
+        "umount2",
+        "ptrace",
+        "reboot",
+        "kexec_load",
+        "keyctl",
+        "setns",
+        "unshare"
+      ],
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}

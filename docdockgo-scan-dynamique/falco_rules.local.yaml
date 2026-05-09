@@ -1,0 +1,299 @@
+# ═══════════════════════════════════════════════════════════════
+# DockDockGo Falco Rules — Version enrichie
+# ═══════════════════════════════════════════════════════════════
+# Couverture MITRE ATT&CK : Discovery, Defense Evasion, Credential
+# Access, Persistence, Lateral Movement, Impact, Exfiltration
+# ═══════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 1 : ACCÈS AUX FICHIERS SENSIBLES
+# (T1552 — Unsecured Credentials)
+# ─────────────────────────────────────────────
+
+- rule: DDG Sensitive File Access
+  desc: Detect sensitive system file access inside container
+  condition: >
+    container and open_read and
+    fd.name in (/etc/shadow, /etc/passwd, /etc/sudoers, /etc/gshadow)
+  output: >
+    [DDG] Sensitive file accessed
+    (file=%fd.name command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [ddg, filesystem, T1552]
+
+- rule: DDG SSH Key Access
+  desc: Detect SSH key file access (private key theft attempt)
+  condition: >
+    container and open_read and
+    (fd.name endswith id_rsa or
+     fd.name endswith id_dsa or
+     fd.name endswith id_ecdsa or
+     fd.name endswith id_ed25519 or
+     fd.name endswith authorized_keys or
+     fd.name contains "/.ssh/")
+  output: >
+    [DDG] SSH key file accessed
+    (file=%fd.name command=%proc.cmdline container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, credentials, T1552.004]
+
+- rule: DDG Cloud Credentials Access
+  desc: Detect cloud provider credentials access
+  condition: >
+    container and open_read and
+    (fd.name contains ".aws/credentials" or
+     fd.name contains ".aws/config" or
+     fd.name contains "gcloud/credentials" or
+     fd.name contains ".docker/config.json" or
+     fd.name contains ".kube/config")
+  output: >
+    [DDG] Cloud credentials accessed
+    (file=%fd.name command=%proc.cmdline container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, credentials, T1552.001]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 2 : EXÉCUTION DE PROCESSUS
+# (T1059 — Command and Scripting Interpreter)
+# ─────────────────────────────────────────────
+
+- rule: DDG Shell Spawn
+  desc: Detect shell spawn inside container
+  condition: >
+    container and
+    evt.type in (execve, execveat) and
+    proc.name in (bash, sh, zsh, dash, ksh, ash)
+  output: >
+    [DDG] Shell spawned
+    (command=%proc.cmdline container=%container.name)
+  priority: NOTICE
+  tags: [ddg, execution, T1059.004]
+
+- rule: DDG Suspicious Interpreter
+  desc: Detect interpreter execution (potential downloader/dropper)
+  condition: >
+    container and
+    evt.type in (execve, execveat) and
+    proc.name in (python, python3, perl, ruby, php, node, lua) and
+    (proc.cmdline contains "-c " or
+     proc.cmdline contains "-e " or
+     proc.cmdline contains "exec(" or
+     proc.cmdline contains "eval(" or
+     proc.cmdline contains "base64")
+  output: >
+    [DDG] Suspicious interpreter execution
+    (command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [ddg, execution, T1059]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 3 : RÉSEAU
+# (T1071 — Application Layer Protocol, T1095 — Non-App Protocol)
+# ─────────────────────────────────────────────
+
+- rule: DDG Outbound Connection
+  desc: Detect outbound network connection from container
+  condition: >
+    container and
+    evt.type = connect and
+    fd.typechar = 4
+  output: >
+    [DDG] Outbound connection attempt
+    (command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [ddg, network, T1071]
+
+- rule: DDG Suspicious Network Tool
+  desc: Detect use of network reconnaissance/exploitation tools
+  condition: >
+    container and
+    evt.type in (execve, execveat) and
+    proc.name in (nc, ncat, netcat, nmap, socat, telnet, tcpdump, wireshark, tshark)
+  output: >
+    [DDG] Network tool executed
+    (command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [ddg, network, T1046]
+
+- rule: DDG Reverse Shell Pattern
+  desc: Detect classic reverse shell command patterns
+  condition: >
+    container and
+    evt.type in (execve, execveat) and
+    (proc.cmdline contains "bash -i" or
+     proc.cmdline contains "sh -i" or
+     (proc.name in (nc, ncat, netcat) and proc.cmdline contains "-e") or
+     proc.cmdline contains "/dev/tcp/" or
+     proc.cmdline contains "mkfifo")
+  output: >
+    [DDG] Possible reverse shell
+    (command=%proc.cmdline container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, network, T1059.004, reverse_shell]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 4 : ÉLÉVATION & ÉVASION
+# (T1611 — Escape to Host, T1068 — Privilege Escalation)
+# ─────────────────────────────────────────────
+
+- rule: DDG Mount Attempt
+  desc: Detect mount syscall from non-runtime process
+  condition: >
+    container and
+    evt.type = mount and
+    not proc.name in (runc, containerd-shim, containerd, docker)
+  output: >
+    [DDG] Mount attempt detected
+    (command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [ddg, privilege, T1611]
+
+- rule: DDG Setuid Setgid Operation
+  desc: Detect setuid/setgid syscall usage (privilege escalation)
+  condition: >
+    container and
+    evt.type in (setuid, setgid) and
+    not user.uid = 0
+  output: >
+    [DDG] Privilege change attempt
+    (uid=%user.uid command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [ddg, privilege, T1068]
+
+- rule: DDG Container Escape Attempt
+  desc: Detect classic container escape patterns
+  condition: >
+    container and
+    (proc.cmdline contains "/proc/self/exe" or
+     proc.cmdline contains "docker.sock" or
+     fd.name = "/proc/1/root" or
+     proc.cmdline contains "nsenter" or
+     proc.cmdline contains "chroot ")
+  output: >
+    [DDG] Container escape attempt
+    (command=%proc.cmdline file=%fd.name container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, privilege, T1611, escape]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 5 : PERSISTANCE
+# (T1136 — Create Account, T1543 — Service)
+# ─────────────────────────────────────────────
+
+- rule: DDG System File Modification
+  desc: Detect write to system account files
+  condition: >
+    container and
+    evt.type in (open, openat) and
+    evt.arg.flags contains O_WRONLY and
+    fd.name in (/etc/passwd, /etc/shadow, /etc/sudoers, /etc/gshadow)
+  output: >
+    [DDG] System file modification
+    (file=%fd.name command=%proc.cmdline container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, persistence, T1136, T1098]
+
+- rule: DDG Cron Modification
+  desc: Detect cron job creation/modification
+  condition: >
+    container and
+    evt.type in (open, openat) and
+    evt.arg.flags contains O_WRONLY and
+    (fd.name startswith /etc/cron or
+     fd.name startswith /var/spool/cron or
+     fd.name = /etc/crontab)
+  output: >
+    [DDG] Cron modification
+    (file=%fd.name command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [ddg, persistence, T1053.003]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 6 : ANTI-FORENSIC & DOS
+# (T1070 — Indicator Removal, T1499 — DoS)
+# ─────────────────────────────────────────────
+
+- rule: DDG Log Tampering
+  desc: Detect attempts to clear or modify system logs
+  condition: >
+    container and
+    evt.type in (open, openat, unlink, unlinkat) and
+    (fd.name in (/var/log/auth.log, /var/log/syslog, /var/log/messages, /var/log/wtmp) or
+     fd.name startswith /var/log/falco) and
+    evt.arg.flags contains O_TRUNC
+  output: >
+    [DDG] Log tampering detected
+    (file=%fd.name command=%proc.cmdline container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, defense_evasion, T1070]
+
+- rule: DDG Fork Bomb Detection
+  desc: Detect abnormal fork activity
+  condition: >
+    container and
+    spawned_process and
+    proc.nchilds > 20
+  output: >
+    [DDG] Possible fork anomaly
+    (children=%proc.nchilds command=%proc.cmdline container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, resource, T1499]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 7 : CRYPTOMINING
+# (T1496 — Resource Hijacking)
+# ─────────────────────────────────────────────
+
+- rule: DDG Cryptominer Pattern
+  desc: Detect crypto mining patterns
+  condition: >
+    container and
+    evt.type in (execve, execveat) and
+    (proc.name in (xmrig, minerd, cpuminer, ethminer, t-rex) or
+     proc.cmdline contains "stratum+tcp" or
+     proc.cmdline contains "--coin=" or
+     proc.cmdline contains "minexmr" or
+     proc.cmdline contains "nanopool")
+  output: >
+    [DDG] Cryptominer detected
+    (command=%proc.cmdline container=%container.name)
+  priority: CRITICAL
+  tags: [ddg, mining, T1496]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 8 : INSTALLATION DE PAQUETS
+# (T1059, T1105 — Ingress Tool Transfer)
+# ─────────────────────────────────────────────
+
+- rule: DDG Package Management
+  desc: Detect package installation in running container (suspicious)
+  condition: >
+    container and
+    evt.type in (execve, execveat) and
+    proc.name in (apt, apt-get, apk, yum, dnf, pip, pip3, npm, gem) and
+    (proc.cmdline contains "install" or
+     proc.cmdline contains "add ")
+  output: >
+    [DDG] Package installation in container
+    (command=%proc.cmdline container=%container.name)
+  priority: NOTICE
+  tags: [ddg, execution, T1105]
+
+# ─────────────────────────────────────────────
+# CATÉGORIE 9 : DÉCOUVERTE
+# (T1083 — File and Directory Discovery)
+# ─────────────────────────────────────────────
+
+- rule: DDG Discovery Commands
+  desc: Detect classic reconnaissance commands
+  condition: >
+    container and
+    evt.type in (execve, execveat) and
+    proc.name in (whoami, id, uname, hostname, ifconfig, ip, ps, w, last) and
+    not proc.pname in (sh, bash, dash) and
+    proc.tty = 0
+  output: >
+    [DDG] Discovery command
+    (command=%proc.cmdline container=%container.name)
+  priority: NOTICE
+  tags: [ddg, discovery, T1083]

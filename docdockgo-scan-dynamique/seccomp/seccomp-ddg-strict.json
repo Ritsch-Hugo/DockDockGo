@@ -1,0 +1,36 @@
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "archMap": [
+    {
+      "architecture": "SCMP_ARCH_X86_64",
+      "subArchitectures": []
+    }
+  ],
+  "syscalls": [
+    {
+      "names": [
+        "read",
+        "write",
+        "exit",
+        "exit_group",
+        "brk",
+        "mmap",
+        "mprotect",
+        "munmap",
+        "rt_sigaction",
+        "rt_sigprocmask",
+        "close",
+        "fstat",
+        "arch_prctl",
+        "set_tid_address",
+        "set_robust_list",
+        "clock_gettime",
+        "getpid",
+        "gettid",
+        "futex",
+        "nanosleep"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    }
+  ]
+}
