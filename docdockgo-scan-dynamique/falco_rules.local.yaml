@@ -11,15 +11,16 @@
 # ─────────────────────────────────────────────
 
 - rule: DDG Sensitive File Access
-  desc: Detect sensitive system file access inside container
+  desc: Detect sensitive file access (excluding legitimate runtime/daemon lookups)
   condition: >
     container and open_read and
-    fd.name in (/etc/shadow, /etc/passwd, /etc/sudoers, /etc/gshadow)
+    fd.name in (/etc/shadow, /etc/sudoers, /etc/gshadow,
+                /etc/passwd-, /etc/shadow-)
   output: >
     [DDG] Sensitive file accessed
     (file=%fd.name command=%proc.cmdline container=%container.name)
   priority: WARNING
-  tags: [ddg, filesystem, T1552]
+  tags: [ddg, T1552]
 
 - rule: DDG SSH Key Access
   desc: Detect SSH key file access (private key theft attempt)
@@ -137,16 +138,18 @@
 # ─────────────────────────────────────────────
 
 - rule: DDG Mount Attempt
-  desc: Detect mount syscall from non-runtime process
+  desc: Detect mount syscall from non-runtime processes
   condition: >
     container and
     evt.type = mount and
-    not proc.name in (runc, containerd-shim, containerd, docker)
+    not proc.name startswith "runc" and
+    not proc.name in (containerd-shim, containerd, docker, dockerd) and
+    not proc.pname in (runc, containerd-shim)
   output: >
     [DDG] Mount attempt detected
     (command=%proc.cmdline container=%container.name)
   priority: WARNING
-  tags: [ddg, privilege, T1611]
+  tags: [ddg, T1611]
 
 - rule: DDG Setuid Setgid Operation
   desc: Detect setuid/setgid syscall usage (privilege escalation)
@@ -297,3 +300,4 @@
     (command=%proc.cmdline container=%container.name)
   priority: NOTICE
   tags: [ddg, discovery, T1083]
+
