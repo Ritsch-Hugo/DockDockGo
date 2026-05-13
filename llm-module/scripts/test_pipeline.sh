@@ -10,7 +10,7 @@
 #    3005 llm-decision
 #    3000 orchestrateur
 #
-#  Backend LLM : OpenRouter (cloud) — configuré dans llm-module/.env
+#  Backend LLM : OpenRouter (cloud) — configuré dans llm-decision/.env et llm-manager/.env
 #
 #  Puis envoie un POST multipart à l'orchestrateur avec alpine/3.18
 #  et affiche la décision finale ALLOW / DENY.
@@ -24,19 +24,24 @@ QUARANTINE="$REPO_DIR/quarantaine"
 # Branche mcp-tools-server clonée séparément
 MCP_REPO_DIR="${MCP_REPO_DIR:-/home/scuti/temp/mcp/DocDockGo}"
 
-# ── Charger le .env ───────────────────────────────────────────────────────────
-if [ -f "$MODULE_DIR/.env" ]; then
-    set -a
-    source "$MODULE_DIR/.env"
-    set +a
-else
-    echo "[ERR] Fichier .env introuvable : $MODULE_DIR/.env"
-    echo "      Crée-le avec OPENROUTER_API_KEY=sk-or-v1-..."
-    exit 1
-fi
+# ── Charger les .env ──────────────────────────────────────────────────────────
+DECISION_ENV="$MODULE_DIR/llm-decision/.env"
+MANAGER_ENV="$MODULE_DIR/llm-manager/.env"
+
+for env_file in "$DECISION_ENV" "$MANAGER_ENV"; do
+    if [ -f "$env_file" ]; then
+        set -a
+        source "$env_file"
+        set +a
+    else
+        echo "[ERR] Fichier .env introuvable : $env_file"
+        echo "      Crée-le avec les variables de configuration (voir CLAUDE.md)"
+        exit 1
+    fi
+done
 
 if [ -z "$OPENROUTER_API_KEY" ]; then
-    echo "[ERR] OPENROUTER_API_KEY manquant dans le .env"
+    echo "[ERR] OPENROUTER_API_KEY manquant dans $DECISION_ENV"
     exit 1
 fi
 
@@ -77,7 +82,7 @@ sleep 1
 
 # ── 3. Scanner CVE (3002) ────────────────────────────────────────────────────
 log "Démarrage scanner CVE — image $CVE_IMAGE (port 3002)..."
-CID_CVE=$(docker run -d --rm -p 3002:3002 "$CVE_IMAGE" 2>/dev/null)
+CID_CVE=$(docker run -d --rm -p 3002:3002 -v trivy-cache:/root/.cache/trivy "$CVE_IMAGE" 2>/dev/null)
 if [ -z "$CID_CVE" ]; then
     err "Impossible de démarrer $CVE_IMAGE"
     err "Vérifie que l'image existe : docker images | grep $CVE_IMAGE"
