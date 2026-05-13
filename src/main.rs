@@ -890,7 +890,9 @@ fn split_reasoning_lines(text: &str) -> Vec<String> {
 }
 
 fn decision_from_high_level_score(score: f64) -> String {
-    let decision = if score < 30.0 {
+    let decision = if score >= 90.0 {
+        "ALLOW".to_string()
+    } else if score < 30.0 {
         "DENY".to_string()
     } else {
         "PENDING".to_string()
