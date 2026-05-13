@@ -65,6 +65,7 @@ pub enum ScanDecision {
     PENDING,
     ALLOW,
     DENY,
+    ERROR,
 }
 
 // Erreurs possibles lors de la récupération du contexte PullContext2

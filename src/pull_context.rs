@@ -193,6 +193,28 @@ pub async fn get_pull_context(
                     list.retain(|c| c.uuid != uuid);
                     return Err(PullContextError::BlockingFromTheScanner);
                 }
+                "ERROR" => 
+                {
+                    eprintln!("[ORCH ERROR] scan_haut_niveau a retourné ERROR | uuid={}", uuid);
+
+                    // Nettoyage propre sans blacklist ni whitelist
+                    cleanup_tmp_for_uuid(&ctx.uuid);
+                    // Pas de quarantaine à ce stade (scan haut niveau, avant prefetch)
+
+                    sqlx::query(
+                        "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false"
+                    )
+                    .bind(uuid.to_string())
+                    .execute(pool)
+                    .await
+                    .unwrap_or_else(|e| {
+                        eprintln!("[DB] Erreur DELETE pulls ERROR haut niveau: {}", e);
+                        Default::default()
+                    });
+
+                    list.retain(|c| c.uuid != uuid);
+                    return Err(PullContextError::ServerError);
+                }
                 _ => return Err(PullContextError::ServerError),
             },
         }
@@ -338,6 +360,27 @@ pub async fn get_pull_context(
                         cleanup_tmp_for_uuid(&ctx.uuid);
                         list.retain(|c| c.uuid != uuid);
                         return Err(PullContextError::BlockingFromTheScanner);
+                    }
+                    "ERROR" => {
+                        eprintln!("[ORCH ERROR] scan_haut_niveau a retourné ERROR | uuid={}", uuid);
+
+                        // Nettoyage propre sans blacklist ni whitelist
+                        cleanup_tmp_for_uuid(&ctx.uuid);
+                        // Pas de quarantaine à ce stade (scan haut niveau, avant prefetch)
+
+                        sqlx::query(
+                            "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false"
+                        )
+                        .bind(uuid.to_string())
+                        .execute(pool)
+                        .await
+                        .unwrap_or_else(|e| {
+                            eprintln!("[DB] Erreur DELETE pulls ERROR haut niveau: {}", e);
+                            Default::default()
+                        });
+
+                        list.retain(|c| c.uuid != uuid);
+                        return Err(PullContextError::ServerError);
                     }
                     _ => return Err(PullContextError::ServerError),
                 },

@@ -1010,53 +1010,6 @@ async fn handle(
                                 .body(Body::from("Image refused by security scan"))
                                 .unwrap();
                         }
-                        /*
-                        Some(ScanDecision::PENDING) => {
-                            println!("[SECURITY CHECK] Image conforme -> autorisation du pull");
-
-                            sqlx::query("UPDATE pulls SET decision_final = 'ALLOW', last_activity = NOW() WHERE uuid = $1::uuid")
-                            .bind(context_uuid.to_string())
-                            .execute(&pool)
-                            .await
-                            .unwrap_or_else(|e| { eprintln!("[DB] Erreur UPDATE pulls cache: {}", e); Default::default() });
-
-                            {
-                                let mut list = pull_contexts.lock().await;
-                                if let Some(ctx) = list.iter_mut().find(|c| c.uuid == context_uuid) {
-                                    ctx.scan_status = Some("ALLOW".to_string());
-                                    ctx.pull_completed = false;
-                                    ctx.check_if_verify_digest_completed = false;
-                                    //ctx.manifest_digests.clear();
-                                    ctx.blob_digests.clear();
-                                    ctx.referrers_digests.clear();
-                                }
-                            }
-
-
-                            //Ajouter a whitelist
-                            if let Err(e) = add_context_to_blacklist_or_whitelist(ctx_snapshot.clone(), "whitelist", &pool).await{
-                                eprintln!("[WHITELIST ERROR] {}", e);
-                            }
-
-                            // Servir le manifest courant arch-spécifique depuis la quarantaine
-                            let response = match serve_from_quarantine(&path, &ctx_snapshot)
-                            {
-                                Some(r) => r,
-                                None => {
-                                    eprintln!("[PREFETCH SCAN] serve_from_quarantine vide — fallback bytes upstream");
-                                    let mut resp = Response::builder().status(status);
-                                    for (k, v) in headers.iter() {
-                                        resp = resp.header(k, v);
-                                    }
-                                    resp.body(Body::from(bytes)).unwrap()
-                                }
-                            };
-                            copy_ctx_from_quarantine_to_cache(&ctx_snapshot, &pool);
-                            remove_ctx_digests_from_quarantine(&ctx_snapshot, &pool);
-                            cleanup_tmp_for_uuid(&ctx_snapshot.uuid);
-                            return response;
-
-                        }*/
                         Some(ScanDecision::PENDING) => {
                             cleanup_tmp_for_uuid(&ctx_snapshot.uuid);
 
@@ -1073,6 +1026,36 @@ async fn handle(
                             return Response::builder()
                                 .status(StatusCode::FORBIDDEN)
                                 .body(Body::from("Image en cours de scan"))
+                                .unwrap();
+                        }
+                        Some(ScanDecision::ERROR) => 
+                        {
+                            eprintln!("[SCAN FINAL] ERROR retourné par l'orchestrateur | uuid={}", context_uuid);
+
+                            // Nettoyage : quarantaine + tmp, sans blacklist ni whitelist
+                            cleanup_tmp_for_uuid(&ctx_snapshot.uuid);
+                            remove_ctx_digests_from_quarantine(&ctx_snapshot, &pool);
+
+                            // Suppression en BDD (pull non terminé, pas de decision_final définitive)
+                            sqlx::query(
+                                "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false"
+                            )
+                            .bind(context_uuid.to_string())
+                            .execute(&pool)
+                            .await
+                            .unwrap_or_else(|e| {
+                                eprintln!("[DB] Erreur DELETE pulls ERROR: {}", e);
+                                Default::default()
+                            });
+
+                            {
+                                let mut list = pull_contexts.lock().await;
+                                list.retain(|c| c.uuid != context_uuid);
+                            }
+
+                            return Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::from("Erreur interne du scanner, veuillez réessayer"))
                                 .unwrap();
                         }
 

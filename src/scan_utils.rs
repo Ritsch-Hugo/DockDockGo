@@ -45,13 +45,14 @@ pub async fn launch_final_scan(
     if state == "ALLOW" {
         return Some(ScanDecision::ALLOW);
     }
-
     if state == "PENDING" {
         return Some(ScanDecision::PENDING);
     }
-
     if state == "DENY" {
         return Some(ScanDecision::DENY);
+    }
+    if state == "ERROR" {
+        return Some(ScanDecision::ERROR);
     }
 
     println!("[SCAN FINAL] état inconnu");
@@ -336,6 +337,10 @@ pub async fn is_allowed(ctx: &mut PullContext, path: &str, flag: &str) -> Result
         "DENY" => {
             println!("Pull refusé par l'orchestrateur");
             ctx.scan_status = Some("DENY".to_string());
+        }
+        "ERROR" => {            
+            println!("Orchestrateur a retourné ERROR");
+            ctx.scan_status = Some("ERROR".to_string());
         }
         other => {
             println!("[WARNING] État inattendu reçu: {}", other);
