@@ -890,23 +890,34 @@ pub fn check_timout(pull_contexts: PullContextList, pool: &PgPool) {
             drop(list);
 
             for ctx in &expired_contexts {
-                // Suppression en cascade dans la BDD
-                // pulls → pull_digests, scan_events, ia_decisions supprimés par CASCADE
-                let _ = sqlx::query(
-                    "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false",
-                )
-                .bind(ctx.uuid.to_string())
-                .execute(&pool_clone)
-                .await
-                .unwrap_or_else(|e| {
-                    eprintln!("[DB] Erreur DELETE pulls timeout: {}", e);
-                    Default::default()
-                });
+                let is_pending = ctx.scan_status.as_deref() == Some("PENDING");
 
-                // Nettoyage fichiers seulement si le pull n'était pas terminé
-                // (si pull_completed = true, les fichiers sont déjà en cache)
-                if !ctx.pull_completed {
-                    remove_ctx_digests_from_quarantine(ctx, &pool_clone);
+                // Si le scan async est en cours (PENDING), ne pas supprimer la BDD ni
+                // la quarantaine : l'orchestrateur en a encore besoin pour terminer.
+                if !is_pending {
+                    // Suppression en cascade dans la BDD
+                    // pulls → pull_digests, scan_events, ia_decisions supprimés par CASCADE
+                    let _ = sqlx::query(
+                        "DELETE FROM pulls WHERE uuid = $1::uuid AND scan_completed = false",
+                    )
+                    .bind(ctx.uuid.to_string())
+                    .execute(&pool_clone)
+                    .await
+                    .unwrap_or_else(|e| {
+                        eprintln!("[DB] Erreur DELETE pulls timeout: {}", e);
+                        Default::default()
+                    });
+
+                    // Nettoyage fichiers seulement si le pull n'était pas terminé
+                    // (si pull_completed = true, les fichiers sont déjà en cache)
+                    if !ctx.pull_completed {
+                        remove_ctx_digests_from_quarantine(ctx, &pool_clone);
+                    }
+                } else {
+                    println!(
+                        "[Timeout-Reach] Scan PENDING en cours, quarantaine conservée | uuid={}",
+                        ctx.uuid
+                    );
                 }
                 cleanup_tmp_for_uuid(&ctx.uuid);
             }
