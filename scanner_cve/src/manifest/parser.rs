@@ -12,9 +12,19 @@ pub struct Manifest {
     pub layers: Vec<Descriptor>,
 }
 
+const TAR_MEDIA_TYPES: &[&str] = &[
+    "application/vnd.oci.image.layer.v1.tar+gzip",
+    "application/vnd.oci.image.layer.v1.tar+zstd",
+    "application/vnd.oci.image.layer.v1.tar",
+    "application/vnd.docker.image.rootfs.diff.tar.gzip",
+    "application/vnd.docker.image.rootfs.diff.tar",
+];
+
 #[derive(Debug, Deserialize)]
 pub struct Descriptor {
     pub digest: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: Option<String>,
 }
 
 #[derive(Debug)]
@@ -35,6 +45,12 @@ pub fn parse_manifest(path: &str) -> Result<ParsedManifest> {
         .layers
         .into_iter()
         .enumerate()
+        .filter(|(_, l)| {
+            l.media_type
+                .as_deref()
+                .map(|mt| TAR_MEDIA_TYPES.contains(&mt))
+                .unwrap_or(true) // si pas de mediaType, on tente quand même
+        })
         .map(|(i, l)| {
             validate_digest(&l.digest)
                 .with_context(|| format!("invalid digest for layer {}", i))?;
