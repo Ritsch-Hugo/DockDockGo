@@ -368,7 +368,9 @@ function searchImage() {
 
 // ── SSE — mise à jour temps réel ──────────────────────────────────────────────
 function badgeClass(decision) {
-  return decision === 'ALLOW' ? 'badge-green' : decision === 'DENY' ? 'badge-red' : 'badge-amber';
+  if (decision === 'ALLOW') return 'badge-green';
+  if (decision === 'DENY' || decision === 'ERROR') return 'badge-red';
+  return 'badge-amber';
 }
 
 // Rend une ligne de pull cliquable → /dashboard/pull/:uuid
@@ -508,6 +510,15 @@ function handlePullsUpdate(action, data) {
       const row = tb.querySelector(`tr[data-uuid="${uuid}"]`);
       if (row) row.remove();
     });
+    // Retirer l'alerte éventuelle
+    const alerts = document.getElementById('alerts-container');
+    if (alerts) {
+      const alertRow = alerts.querySelector(`.alert-row[data-uuid="${uuid}"]`);
+      if (alertRow) alertRow.remove();
+    }
+    updateMetricDelta('metric-pulls', -1);
+    updatePullsBadge();
+    // Pas d'ajout en historique pour ERROR : le pull est simplement effacé
     return;
   }
 

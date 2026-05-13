@@ -538,6 +538,7 @@ fn decision_badge(decision: &str) -> &'static str {
     match decision {
         "ALLOW" => "badge-green",
         "DENY"  => "badge-red",
+        "ERROR" => "badge-red",
         _       => "badge-amber",
     }
 }

@@ -280,6 +280,7 @@ function handlePullsUpdate(action, data) {
       const row = activeTbody.querySelector(`tr[data-uuid="${uuid}"]`);
       if (row) { row.remove(); updateActiveBadge(); }
     }
+    // ERROR : pas d'ajout en historique, le pull disparaît simplement
     return;
   }
 
