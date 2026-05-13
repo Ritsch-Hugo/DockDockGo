@@ -1107,10 +1107,14 @@ async fn process_llm_decision_async(task: PendingDecisionTask) {
         Err(e) => warn!("DB update ia_decisions ERREUR: {}", e),
     }
 
-    // 5. Écriture scan_events
+    // 5. Écriture scan_events (uniquement les scanners effectivement exécutés)
     if let Some(analysis) = body.get("scan_analysis").and_then(|v| v.as_object()) {
         for (scanner_type, scan_data) in analysis {
             let executed = scan_data.get("executed").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !executed {
+                info!("Scanner non exécuté, scan_event ignoré: scanner_type={}", scanner_type);
+                continue;
+            }
             let llm_summary = scan_data.get("llm_summary").and_then(|v| v.as_str()).map(|s| s.to_string());
             let raw_result = scan_data.get("raw_result").cloned().unwrap_or(json!(null));
 
