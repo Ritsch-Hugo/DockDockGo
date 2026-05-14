@@ -1,0 +1,58 @@
+version: '3.8'
+
+# ═══════════════════════════════════════════════════════════════
+# docker-compose.yml — DockDockGo Scanner
+#
+# Lance le scanner DockDockGo en container Docker.
+#
+# Deux modes disponibles via l'API HTTP :
+#   - mode "docker" : scan rapide sur l'hôte via Docker socket
+#   - mode "vm"     : scan isolé dans une microVM Firecracker
+#
+# Accès hôte REQUIS (justifiés ci-dessous) :
+#   - /dev/kvm           → Firecracker (virtualisation KVM)
+#   - /var/run/docker.sock → lancer les containers observés
+#   - /opt/firecracker    → kernel 5.15 BTF + rootfs Ubuntu VM
+#   - /var/log/falco.log  → alertes Falco (driver sur l'hôte)
+#   - network: host       → interface TAP ddg-tap0 (réseau VM)
+#   - privileged: true    → KVM + eBPF + iptables NAT
+#
+# Usage :
+#   docker-compose up -d
+#   curl -X POST http://localhost:8080/scan \
+#     -H "Content-Type: application/json" \
+#     -d '{"image": "nginx:alpine", "mode": "docker"}'
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  ddg-scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dockdockgo-scan-dynamique:1.0.0
+    container_name: ddg-scanner
+
+    # privileged requis pour KVM + eBPF + iptables NAT
+    privileged: true
+
+    # host requis pour accéder à l'interface TAP ddg-tap0
+    network_mode: host
+
+    devices:
+      - /dev/kvm:/dev/kvm
+
+    volumes:
+      # Socket Docker hôte : pour lancer les containers à observer
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Artefacts Firecracker (kernel + rootfs)
+      # RW requis : Firecracker ouvre le rootfs en O_RDWR
+      - /opt/firecracker:/opt/firecracker
+
+      # Log Falco hôte : alertes générées par Falco modern_ebpf
+      - /var/log/falco.log:/var/log/falco.log
+
+    restart: unless-stopped
+
+    environment:
+      - RUST_LOG=info

@@ -117,18 +117,43 @@ async fn run_scan_firecracker(image: &str) -> Result<ScanResponse> {
 }
 
 fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
-    for line in output.lines() {
+    // Strip ANSI codes et caractères non-ASCII
+    let clean: String = output
+        .lines()
+        .map(|line| {
+            // Retire les codes ANSI (\x1b[...m)
+            let mut result = String::new();
+            let mut chars = line.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    // Skip jusqu'à la fin du code ANSI
+                    while let Some(&nc) = chars.peek() {
+                        chars.next();
+                        if nc.is_ascii_alphabetic() { break; }
+                    }
+                } else {
+                    result.push(c);
+                }
+            }
+            result
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Cherche le JSON ligne par ligne
+    for line in clean.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with('{') {
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
             if let Ok(response) = serde_json::from_str::<ScanResponse>(trimmed) {
                 return Ok(response);
             }
         }
     }
 
-    if let Some(start) = output.find('{') {
-        if let Some(end) = output.rfind('}') {
-            let json_str = &output[start..=end];
+    // Fallback : cherche le JSON entre { et }
+    if let Some(start) = clean.find('{') {
+        if let Some(end) = clean.rfind('}') {
+            let json_str = &clean[start..=end];
             if let Ok(response) = serde_json::from_str::<ScanResponse>(json_str) {
                 return Ok(response);
             }
@@ -137,7 +162,7 @@ fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
 
     anyhow::bail!(
         "Impossible de parser le résultat VM.\nSortie reçue:\n{}",
-        output
+        &output[..output.len().min(500)]
     )
 }
 
