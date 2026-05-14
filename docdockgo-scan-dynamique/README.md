@@ -569,11 +569,3 @@ docdockgo-scan-dynamique/
 
 ---
 
-## Équipe
-
-Projet ISEN Méditerranée — Cybersécurité ISEN4 2025-2026
-
-- **Mendy** — Scanner dynamique Rust + Firecracker + Falco
-- **Lenny, Hugo, Camille** — Orchestrateur, MCP, scanner statique
-- **Antoine** — Project Manager
-- **Tuteur** : Mr. Paillart
