@@ -48,38 +48,38 @@ des règles Falco déclenchées.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           HÔTE LINUX                                 │
-│                                                                      │
+│                           HÔTE LINUX                                │
+│                                                                     │
 │  ┌──────────────────────────────────────────┐                       │
-│  │  Container ddg-scanner (optionnel)        │                       │
-│  │  OU binaire Rust directement sur l'hôte   │                       │
-│  │                                            │                       │
+│  │  Container ddg-scanner (optionnel)       │                       │
+│  │  OU binaire Rust directement sur l'hôte  │                       │
+│  │                                          │                       │
 │  │  API HTTP :8080  ◀──── MCP / curl / IA   │                       │
-│  │  Scanner Rust (axum + bollard + musl)      │                       │
-│  └──────────┬─────────────────────────────────┘                      │
-│             │                                                         │
-│             │  sudo bash scan_vm.sh <image>                          │
-│             ▼                                                         │
+│  │  Scanner Rust (axum + bollard + musl)    │                       │
+│  └──────────┬───────────────────────────────┘                       │
+│             │                                                       │
+│             │  sudo bash scan_vm.sh <image>                         │
+│             ▼                                                       │
 │  ┌──────────────────────────────────────────┐                       │
-│  │  scan_vm.sh                               │                       │
-│  │  → crée interface TAP (ddg-tap0)          │                       │
-│  │  → configure NAT iptables                 │                       │
-│  │  → lance Firecracker microVM              │                       │
-│  └──────────┬─────────────────────────────────┘                      │
-│             ▼                                                         │
+│  │  scan_vm.sh                              │                       │
+│  │  → crée interface TAP (ddg-tap0)         │                       │
+│  │  → configure NAT iptables                │                       │
+│  │  → lance Firecracker microVM             │                       │
+│  └──────────┬───────────────────────────────┘                       │
+│             ▼                                                       │
 │  ┌──────────────────────────────────────────┐                       │
-│  │  microVM Firecracker (KVM)                │                       │
-│  │  Kernel Linux 5.15 custom BTF             │                       │
-│  │  ┌────────────────────────────────────┐   │                       │
-│  │  │  Ubuntu 22.04 (rootfs ext4 10GB)   │   │                       │
-│  │  │  Docker + containerd               │   │                       │
-│  │  │  Falco modern_ebpf (CO-RE eBPF)    │   │                       │
-│  │  │  Scanner HTTP Rust (port 8080)     │   │                       │
-│  │  │                                    │   │                       │
-│  │  │  Container observé (image scannée) │   │                       │
-│  │  └────────────────────────────────────┘   │                       │
+│  │  microVM Firecracker (KVM)               │                       │
+│  │  Kernel Linux 5.15 custom BTF            │                       │
+│  │  ┌────────────────────────────────────┐  │                       │
+│  │  │  Ubuntu 22.04 (rootfs ext4 10GB)   │  │                       │
+│  │  │  Docker + containerd               │  │                       │
+│  │  │  Falco modern_ebpf (CO-RE eBPF)    │  │                       │
+│  │  │  Scanner HTTP Rust (port 8080)     │  │                       │
+│  │  │                                    │  │                       │
+│  │  │  Container observé (image scannée) │  │                       │
+│  │  └────────────────────────────────────┘  │                       │
 │  └──────────────────────────────────────────┘                       │
-│                                                                      │
+│                                                                     │
 │  Falco modern_ebpf (service hôte)                                   │
 │  → observe syscalls de tous les containers hôte                     │
 │  → écrit alertes dans /var/log/falco.log                            │
