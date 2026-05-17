@@ -197,17 +197,21 @@ impl LlmBackend for OpenAiBackend {
             Some("required")
         };
 
-        // Les providers MiniMax natifs (minimax/fp8, minimax/highspeed) retournent les
-        // tool calls dans un format XML propriétaire au lieu du format OpenAI standard.
-        // On préfère en priorité les providers OpenAI-compatibles. Si tous sont indisponibles,
-        // OpenRouter tombe sur MiniMax natif — le pipeline gère ça gracieusement (fallback 0.3).
+        // require_parameters: true — OpenRouter ne route que vers les providers qui supportent
+        // tous les paramètres envoyés (dont tool_choice). Évite le routing silencieux vers des
+        // providers qui ignorent tool_choice et répondent en texte libre.
         // vLLM/Ollama ignorent silencieusement ce champ inconnu.
         let provider = if model.starts_with("minimax/") {
+            // MiniMax : en plus de require_parameters, on préfère les providers OpenAI-compat
+            // car ses providers natifs retournent un format XML propriétaire.
             Some(serde_json::json!({
-                "order": ["Fireworks", "Together", "SambaNova"]
+                "order": ["Fireworks", "Together", "SambaNova"],
+                "require_parameters": true
             }))
         } else {
-            None
+            Some(serde_json::json!({
+                "require_parameters": true
+            }))
         };
 
         let body = OpenAiRequest {

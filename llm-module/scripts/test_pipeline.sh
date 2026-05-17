@@ -285,6 +285,26 @@ for line in logs.splitlines():
 " 2>/dev/null
 fi
 
+log "─── Réponse envoyée à l'orchestrateur ─────────────"
+python3 -c "
+import json, re, sys
+
+with open('/tmp/llm-decision.log') as f:
+    content = f.read()
+
+for line in content.splitlines():
+    if '[réponse]' not in line:
+        continue
+    idx = line.find('[réponse] ')
+    raw = line[idx + len('[réponse] '):]
+    try:
+        data = json.loads(raw)
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    except Exception:
+        print(raw)
+    break
+" 2>/dev/null
+
 echo ""
 log "Logs complets disponibles :"
 log "  tail -f /tmp/orchestrator.log"

@@ -191,38 +191,38 @@ async fn decide(
             )
             .await
             {
-                Ok(report) => (StatusCode::OK, Json(report)).into_response(),
+                Ok(report) => {
+                    info!(
+                        "[réponse] {}",
+                        serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
+                    );
+                    (StatusCode::OK, Json(report)).into_response()
+                }
                 Err(e) => {
                     error!("Pipeline phase 3 dégradé : {}", e);
-                    (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(serde_json::json!({
-                            "error": "pipeline_failed",
-                            "reason": e.to_string()
-                        })),
-                    )
-                        .into_response()
+                    let payload = serde_json::json!({
+                        "error": "pipeline_failed",
+                        "reason": e.to_string()
+                    });
+                    info!("[réponse] {}", payload);
+                    (StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response()
                 }
             }
         }
         Err(llm_common::LlmError::PipelineFailed(reason)) => {
             error!("Pipeline phase 1 dégradé : {}", reason);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": "pipeline_failed",
-                    "reason": reason
-                })),
-            )
-                .into_response()
+            let payload = serde_json::json!({
+                "error": "pipeline_failed",
+                "reason": reason
+            });
+            info!("[réponse] {}", payload);
+            (StatusCode::SERVICE_UNAVAILABLE, Json(payload)).into_response()
         }
         Err(e) => {
             error!("Erreur pipeline décision : {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Erreur analyse LLM : {e}"),
-            )
-                .into_response()
+            let msg = format!("Erreur analyse LLM : {e}");
+            info!("[réponse] {}", msg);
+            (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
         }
     }
 }

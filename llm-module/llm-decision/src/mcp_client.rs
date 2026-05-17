@@ -124,6 +124,13 @@ impl McpClient {
             })
             .unwrap_or_default();
 
+        if result["isError"].as_bool() == Some(true) {
+            return Err(LlmError::BackendUnavailable(format!(
+                "Scanner MCP '{}' a échoué : {}",
+                name, text
+            )));
+        }
+
         Ok(text)
     }
 }
