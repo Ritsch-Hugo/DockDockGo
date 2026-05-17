@@ -1,0 +1,40 @@
+[[images]]
+name = "nginx:1.25"
+
+[[images.sbom.packages]]
+name = "openssl"
+version = "3.0.7"
+
+[[images.sbom.packages]]
+name = "zlib"
+version = "1.2.13"
+
+[[images.sbom.packages]]
+name = "libpng"
+version = "1.6.37"
+
+[[images]]
+name = "redis:7.2"
+
+[[images.sbom.packages]]
+name = "openssl"
+version = "1.1.1"
+
+[[images.sbom.packages]]
+name = "jemalloc"
+version = "5.3.0"
+
+[[images]]
+name = "postgres:16"
+
+[[images.sbom.packages]]
+name = "openssl"
+version = "3.0.7"
+
+[[images.sbom.packages]]
+name = "libxml2"
+version = "2.10.3"
+
+[[images.sbom.packages]]
+name = "zlib"
+version = "1.2.13"

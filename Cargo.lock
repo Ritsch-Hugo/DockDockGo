@@ -277,6 +277,7 @@ dependencies = [
 name = "cycle-de-vie"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "chrono",
  "config",
