@@ -1,7 +1,9 @@
 mod models;
+mod poller;
 mod store;
 
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tracing::{error, info};
 
 #[tokio::main]
@@ -32,4 +34,12 @@ async fn main() {
             "Registered image"
         );
     }
+
+    let (cve_tx, _cve_rx) = broadcast::channel(32);
+
+    tokio::spawn(poller::run(cve_tx, 5));
+
+    // park the main task until Ctrl-C
+    tokio::signal::ctrl_c().await.expect("failed to listen for ctrl-c");
+    info!("Shutting down");
 }
