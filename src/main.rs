@@ -1,3 +1,5 @@
+mod models;
+
 use tracing::info;
 
 #[tokio::main]
