@@ -1,5 +1,6 @@
 mod matcher;
 mod models;
+mod notifier;
 mod poller;
 mod store;
 
@@ -19,7 +20,7 @@ async fn main() {
 
     info!(service = "cycle-de-vie", "Service starting");
 
-    let store = match store::WhitelistStore::load("config/whitelist") {
+    let whitelist = match store::WhitelistStore::load("config/whitelist") {
         Ok(s) => Arc::new(s),
         Err(e) => {
             error!(error = %e, "Failed to load whitelist");
@@ -27,8 +28,8 @@ async fn main() {
         }
     };
 
-    info!(count = store.images().len(), "Whitelist loaded");
-    for image in store.images() {
+    info!(count = whitelist.images().len(), "Whitelist loaded");
+    for image in whitelist.images() {
         info!(
             image = %image.name,
             packages = image.sbom.packages.len(),
@@ -37,17 +38,16 @@ async fn main() {
     }
 
     let (cve_tx, cve_rx) = broadcast::channel(32);
-    let (match_tx, mut match_rx) = mpsc::channel(32);
+    let (match_tx, match_rx) = mpsc::channel(32);
+    let notification_store = notifier::new_store();
 
     tokio::spawn(poller::run(cve_tx, 5));
-    tokio::spawn(matcher::run(cve_rx, Arc::clone(&store), match_tx));
-
-    // temporary: log matches until the notifier is wired up (step 6)
-    tokio::spawn(async move {
-        while let Some(m) = match_rx.recv().await {
-            info!(cve_id = %m.cve_id, image = %m.image_name, "Match received by main");
-        }
-    });
+    tokio::spawn(matcher::run(cve_rx, Arc::clone(&whitelist), match_tx));
+    tokio::spawn(notifier::run(
+        match_rx,
+        Arc::clone(&notification_store),
+        None, // no dashboard URL in Phase 1
+    ));
 
     tokio::signal::ctrl_c().await.expect("failed to listen for ctrl-c");
     info!("Shutting down");
