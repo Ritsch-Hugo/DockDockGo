@@ -44,19 +44,11 @@ pub struct MatchResult {
     pub matched_packages: Vec<Package>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum NotificationStatus {
-    Pending,
-    Acknowledged { rescan: bool },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
     pub id: Uuid,
     pub cve_id: String,
     pub image_name: String,
     pub matched_packages: Vec<Package>,
-    pub created_at: DateTime<Utc>,
-    pub status: NotificationStatus,
+    pub sent_at: DateTime<Utc>,
 }

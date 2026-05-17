@@ -1,10 +1,13 @@
+mod http;
 mod matcher;
 mod models;
 mod notifier;
 mod poller;
 mod store;
 
+use std::future::IntoFuture;
 use std::sync::Arc;
+use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
 
@@ -46,8 +49,13 @@ async fn main() {
     tokio::spawn(notifier::run(
         match_rx,
         Arc::clone(&notification_store),
-        None, // no dashboard URL in Phase 1
+        None,
     ));
+
+    let router = http::router(Arc::clone(&whitelist), Arc::clone(&notification_store));
+    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    info!(addr = "0.0.0.0:3000", "HTTP server listening");
+    tokio::spawn(axum::serve(listener, router).into_future());
 
     tokio::signal::ctrl_c().await.expect("failed to listen for ctrl-c");
     info!("Shutting down");

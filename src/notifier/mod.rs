@@ -1,4 +1,4 @@
-use crate::models::{MatchResult, Notification, NotificationStatus};
+use crate::models::{MatchResult, Notification};
 use chrono::Utc;
 use reqwest::Client;
 use std::sync::{Arc, Mutex};
@@ -25,8 +25,7 @@ pub async fn run(
             cve_id: result.cve_id.clone(),
             image_name: result.image_name.clone(),
             matched_packages: result.matched_packages.clone(),
-            created_at: Utc::now(),
-            status: NotificationStatus::Pending,
+            sent_at: Utc::now(),
         };
 
         info!(
