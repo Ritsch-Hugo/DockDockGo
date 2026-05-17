@@ -155,6 +155,68 @@ Content-Type: application/json
 
 Voir `output_template.md` pour un exemple complet.
 
+## Gestion des erreurs
+
+### HTTP 400 — Requête invalide
+
+Rejeté avant tout appel LLM. Se produit si le `PullContext` ne passe pas la validation :
+
+| Cause | Message |
+|---|---|
+| `registry` vide ou > 255 caractères | `registry : longueur invalide (1–255)` |
+| `repository` vide ou > 255 caractères | `repository : longueur invalide (1–255)` |
+| `tag` vide ou > 128 caractères | `tag : longueur invalide (1–128)` |
+| `..` ou octet nul dans registry/repository/tag | `champ invalide : séquence interdite ou caractère nul` |
+| Digest SHA256 ≠ 64 caractères hexadécimaux | `digest invalide : format non reconnu` |
+| Plus de 50 digests dans une liste | `trop de digests dans une liste` |
+
+### HTTP 422 — Artefacts introuvables
+
+Les fichiers de la quarantaine correspondant au `PullContext` sont absents ou inaccessibles.
+
+### HTTP 429 — Trop de requêtes simultanées
+
+Le nombre de pipelines LLM actifs dépasse `MAX_CONCURRENT_PIPELINES` (défaut : 5). Réessayer après quelques instants.
+
+### HTTP 503 — Échec pipeline
+
+Corps JSON :
+
+```json
+{
+  "error": "pipeline_failed",
+  "reason": "..."
+}
+```
+
+Trois situations le déclenchent :
+
+**2/3 workers en échec (phases 1 ou 3)** — signal LLM insuffisant pour décider. Le champ `reason` détaille le type d'échec de chaque worker défaillant :
+
+| Type | Exemple dans `reason` |
+|---|---|
+| Timeout | `minimax/minimax-m2.7: timeout (120s)` |
+| Erreur HTTP du backend LLM | `google/gemma-4-31b-it: erreur HTTP (HTTP 429 Too Many Requests)` |
+| Réponse texte libre (tool calling non respecté) | `qwen/qwen3.5-35b-a3b: réponse texte ("Je pense que...")` |
+
+**Arbitre en échec (phases 1 ou 3)** — sans arbitre il n'y a pas de décision finale :
+
+| Type | Exemple dans `reason` |
+|---|---|
+| Timeout | `Arbitre phase 1 : timeout (120s)` |
+| Erreur HTTP | `Arbitre phase 1 : erreur HTTP (HTTP 500)` |
+| Réponse texte | `Arbitre phase 1 : réponse texte ("...")` |
+
+**Scan requis en échec (phase 2)** — un scan jugé nécessaire par l'arbitre n'a pas pu s'exécuter. Le pipeline s'arrête pour ne pas produire un verdict sur des données incomplètes :
+
+```
+Scans échoués : run_static_scan — pipeline interrompu
+```
+
+### Comportement recommandé pour l'orchestrateur
+
+Tout code non-200 doit être traité comme un **DENY conservateur** : si l'analyse ne peut pas conclure, l'image ne doit pas être autorisée.
+
 ## Tests
 
 ```bash
