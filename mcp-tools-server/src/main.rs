@@ -5,7 +5,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
@@ -77,13 +77,15 @@ impl DocDockGoTools {
     #[tool(
         description = "Run a static CVE scan using Trivy on a Docker image stored in the quarantine folder. Returns a JSON report with vulnerability findings, severity counts, and CVE details."
     )]
-    async fn run_static_scan(&self, params: Parameters<ScanParams>) -> String {
+    async fn run_static_scan(&self, params: Parameters<ScanParams>) -> CallToolResult {
         let quarantine_path = params.0.quarantine_path;
         match self.do_static_scan(&quarantine_path).await {
-            Ok(v) => v,
+            Ok(v) => CallToolResult::success(vec![Content::text(v)]),
             Err(e) => {
                 tracing::error!("static scan error: {e}");
-                json!({"error": e.to_string(), "status": "ERROR"}).to_string()
+                CallToolResult::error(vec![Content::text(
+                    json!({"error": e.to_string(), "status": "ERROR"}).to_string(),
+                )])
             }
         }
     }
@@ -92,13 +94,15 @@ impl DocDockGoTools {
     #[tool(
         description = "Run a compliance scan on a Docker image stored in the quarantine folder. Checks security rules: root user, dangerous permissions, exposed secrets in env/fs, forbidden binaries, missing labels, unsafe entrypoint. Returns a JSON report with pass/warn/fail findings."
     )]
-    async fn run_compliance_scan(&self, params: Parameters<ScanParams>) -> String {
+    async fn run_compliance_scan(&self, params: Parameters<ScanParams>) -> CallToolResult {
         let quarantine_path = params.0.quarantine_path;
         match self.do_compliance_scan(&quarantine_path).await {
-            Ok(v) => v,
+            Ok(v) => CallToolResult::success(vec![Content::text(v)]),
             Err(e) => {
                 tracing::error!("compliance scan error: {e}");
-                json!({"error": e.to_string(), "status": "ERROR"}).to_string()
+                CallToolResult::error(vec![Content::text(
+                    json!({"error": e.to_string(), "status": "ERROR"}).to_string(),
+                )])
             }
         }
     }
