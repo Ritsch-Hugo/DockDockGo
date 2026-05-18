@@ -25,6 +25,7 @@ const DEFAULT_STATIC_URL: &str = "http://localhost:3002";
 /// Les layers gzip dépassant cette limite sont ignorés pour éviter un OOM sur les grandes images.
 const MAX_BLOB_SIZE_BYTES: u64 = 500 * 1024 * 1024;
 const DEFAULT_COMPLIANCE_URL: &str = "http://localhost:3001";
+const DEFAULT_DYNAMIC_URL: &str = "http://localhost:8080";
 
 // ============================================================
 // Paramètres des tools (schema JSON auto-généré via JsonSchema)
@@ -48,6 +49,7 @@ struct DocDockGoTools {
     tool_router: ToolRouter<Self>,
     static_scanner_url: String,
     compliance_scanner_url: String,
+    dynamic_scanner_url: String,
     http: reqwest::Client,
 }
 
@@ -59,6 +61,8 @@ impl DocDockGoTools {
                 .unwrap_or_else(|_| DEFAULT_STATIC_URL.to_string()),
             compliance_scanner_url: std::env::var("COMPLIANCE_SCANNER_URL")
                 .unwrap_or_else(|_| DEFAULT_COMPLIANCE_URL.to_string()),
+            dynamic_scanner_url: std::env::var("DYNAMIC_SCANNER_URL")
+                .unwrap_or_else(|_| DEFAULT_DYNAMIC_URL.to_string()),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
@@ -107,17 +111,21 @@ impl DocDockGoTools {
         }
     }
 
-    /// Lance un scan dynamique comportemental avec Falco (non encore implémenté).
+    /// Lance un scan dynamique comportemental avec Falco.
     #[tool(
-        description = "Run a dynamic behavioral scan on a Docker image using Falco syscall monitoring. Detects suspicious runtime behavior. NOTE: Not yet implemented, returns a stub response."
+        description = "Run a dynamic behavioral scan on a Docker image using Falco syscall monitoring. Executes the image in an isolated sandbox and monitors for suspicious runtime behavior (file modifications, privilege escalation, network connections, etc). Returns a JSON report with a risk score (0-100), verdict, and triggered Falco rules."
     )]
-    async fn run_dynamic_scan(&self, params: Parameters<ScanParams>) -> String {
-        let _ = params;
-        json!({
-            "status": "NOT_IMPLEMENTED",
-            "message": "Dynamic scanner (Falco) is not yet available. Scan skipped."
-        })
-        .to_string()
+    async fn run_dynamic_scan(&self, params: Parameters<ScanParams>) -> CallToolResult {
+        let quarantine_path = params.0.quarantine_path;
+        match self.do_dynamic_scan(&quarantine_path).await {
+            Ok(v) => CallToolResult::success(vec![Content::text(v)]),
+            Err(e) => {
+                tracing::error!("dynamic scan error: {e}");
+                CallToolResult::error(vec![Content::text(
+                    json!({"error": e.to_string(), "status": "ERROR"}).to_string(),
+                )])
+            }
+        }
     }
 }
 
@@ -240,6 +248,44 @@ impl DocDockGoTools {
         }
         let text = resp.text().await?;
         Ok(text)
+    }
+
+    /// Dérive le nom d'image depuis le chemin de quarantaine et appelle le scanner dynamique.
+    async fn do_dynamic_scan(&self, quarantine_path: &str) -> Result<String> {
+        validate_quarantine_path(quarantine_path)?;
+
+        // Extraire registry/repository/tag depuis les 3 derniers composants du chemin
+        // Ex: /quarantaine/library/alpine/3.18 → registry=library, repo=alpine, tag=3.18
+        let components: Vec<&str> = std::path::Path::new(quarantine_path)
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+
+        if components.len() < 3 {
+            anyhow::bail!("quarantine_path trop court pour dériver le nom d'image");
+        }
+        let n = components.len();
+        let (registry, repository, tag) = (components[n - 3], components[n - 2], components[n - 1]);
+
+        // Docker Hub library/ est implicite dans les noms d'image
+        let image = if registry == "library" {
+            format!("{}:{}", repository, tag)
+        } else {
+            format!("{}/{}:{}", registry, repository, tag)
+        };
+
+        let url = format!("{}/scan", self.dynamic_scanner_url);
+        info!("POST dynamic scan → {} (image: {})", url, image);
+
+        let body = json!({"image": image, "mode": "docker"});
+        let resp = self.http.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Scanner dynamique retourné HTTP {}",
+                resp.status()
+            ));
+        }
+        Ok(resp.text().await?)
     }
 
     /// Construit un ScanRequest JSON avec paths vers la quarantaine et appelle le scanner compliance.
@@ -377,6 +423,10 @@ async fn main() -> Result<()> {
         "Scanner compliance: {}",
         std::env::var("COMPLIANCE_SCANNER_URL")
             .unwrap_or_else(|_| DEFAULT_COMPLIANCE_URL.to_string())
+    );
+    info!(
+        "Scanner dynamique : {}",
+        std::env::var("DYNAMIC_SCANNER_URL").unwrap_or_else(|_| DEFAULT_DYNAMIC_URL.to_string())
     );
 
     use rmcp::transport::streamable_http_server::{
