@@ -161,11 +161,39 @@ for i in $(seq 1 60); do
     fi
 done
 
-# ── 7. mcp-tools-server (3004) ────────────────────────────────────────────────
+# ── 7. Scanner dynamique (8080) ──────────────────────────────────────────────
+log "Démarrage scanner dynamique — image dockdockgo-scan-dynamique:1.0.0 (port 8080)..."
+CID_DYNAMIC=$(docker run -d --rm \
+    --name ddg-scanner \
+    --network host \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /var/log/falco.log:/var/log/falco.log \
+    dockdockgo-scan-dynamique:1.0.0 2>/dev/null)
+if [ -z "$CID_DYNAMIC" ]; then
+    warn "Impossible de démarrer dockdockgo-scan-dynamique:1.0.0"
+    warn "Vérifie que l'image existe : docker images | grep dockdockgo-scan-dynamique"
+    warn "Build : cd /home/scuti/temp/dynamique/DocDockGo/docdockgo-scan-dynamique && docker build -t dockdockgo-scan-dynamique:1.0.0 ."
+else
+    DOCKER_CONTAINERS+=("$CID_DYNAMIC")
+    log "Attente scanner dynamique..."
+    for i in $(seq 1 30); do
+        if curl -s http://localhost:8080/health 2>/dev/null | grep -q "DockDockGo"; then
+            log "Scanner dynamique prêt (${i}s)"
+            break
+        fi
+        sleep 1
+        if [ $i -eq 30 ]; then
+            warn "Scanner dynamique pas prêt après 30s — vérifie : docker logs ddg-scanner"
+        fi
+    done
+fi
+
+# ── 8. mcp-tools-server (3004) ────────────────────────────────────────────────
 log "Démarrage mcp-tools-server (3004)..."
 MCP_SERVER_PORT=3004 \
 STATIC_SCANNER_URL="http://localhost:3002" \
 COMPLIANCE_SCANNER_URL="http://localhost:3001" \
+DYNAMIC_SCANNER_URL="http://localhost:8080" \
     "$MCP_REPO_DIR/mcp-tools-server/target/debug/mcp-tools-server" > /tmp/mcp-tools-server.log 2>&1 &
 PIDS+=($!)
 
@@ -223,7 +251,7 @@ log "Orchestrateur prêt"
 log ""
 log "═══════════════════════════════════════════════════════"
 log " POST /v1/decision → orchestrateur → llm-decision"
-log " → mcp-tools-server → scanners (3001 + 3002)"
+log " → mcp-tools-server → scanners (3001 + 3002 + 8080)"
 log " Image : alpine/3.18"
 log "═══════════════════════════════════════════════════════"
 

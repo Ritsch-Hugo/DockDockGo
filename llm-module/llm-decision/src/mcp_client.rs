@@ -283,6 +283,11 @@ pub fn submit_vulnerability_analysis_schema() -> Value {
                         "type": "string",
                         "description": "If a compliance scan was run: 1-2 sentence summary. \
                                         Mention specific failed rules and their security impact."
+                    },
+                    "dynamic_summary": {
+                        "type": "string",
+                        "description": "If a dynamic behavioral scan was run: 1-2 sentence summary. \
+                                        Mention the risk score, critical flag if set, and which Falco rules were triggered."
                     }
                 },
                 "required": ["vulnerability_score", "confidence", "reasoning"]

@@ -248,7 +248,19 @@ pub fn build_worker_analysis_prompt(
         content.push('\n');
     }
 
-    if !scan_decision.run_static_scan && !scan_decision.run_compliance_scan {
+    if scan_decision.run_dynamic_scan {
+        content.push_str("--- DYNAMIC BEHAVIORAL SCAN ---\n");
+        match &scan_decision.dynamic_scan_result {
+            Some(result) => format_dynamic_scan(result, &mut content),
+            None => content.push_str("Status: result not available\n"),
+        }
+        content.push('\n');
+    }
+
+    if !scan_decision.run_static_scan
+        && !scan_decision.run_compliance_scan
+        && !scan_decision.run_dynamic_scan
+    {
         content.push_str(
             "No scans were executed — the image was deemed clean in the decision phase. \
             Assign a low vulnerability score.\n\n",
@@ -258,7 +270,7 @@ pub fn build_worker_analysis_prompt(
     content.push_str(
         "Call submit_vulnerability_analysis with your assessment. \
         For each scan type that was executed, provide a concise summary \
-        (static_summary / compliance_summary) of 1-2 sentences highlighting \
+        (static_summary / compliance_summary / dynamic_summary) of 1-2 sentences highlighting \
         the key findings and whether a fix is available.",
     );
 
@@ -501,6 +513,46 @@ fn format_compliance_scan(result: &serde_json::Value, out: &mut String) {
                 let rule = f.get("rule_id").and_then(|v| v.as_str()).unwrap_or("?");
                 let msg = f.get("message").and_then(|v| v.as_str()).unwrap_or("");
                 out.push_str(&format!("  [FAIL] {rule}: {msg}\n"));
+            }
+        }
+    }
+}
+
+fn format_dynamic_scan(result: &serde_json::Value, out: &mut String) {
+    let verdict = result
+        .get("verdict")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let score = result.get("score").and_then(|v| v.as_u64()).unwrap_or(0);
+    let critical = result
+        .get("critical")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    out.push_str(&format!(
+        "Verdict: {verdict} | Risk score: {score}/100{}\n",
+        if critical { " | CRITICAL flag" } else { "" }
+    ));
+
+    if let Some(rules) = result.get("rule_counts").and_then(|v| v.as_object()) {
+        if rules.is_empty() {
+            out.push_str("Triggered rules: none\n");
+        } else {
+            out.push_str("Triggered rules:\n");
+            for (rule, count) in rules {
+                out.push_str(&format!("  {rule}: {} occurrence(s)\n", count));
+            }
+        }
+    }
+
+    if let Some(details) = result.get("details").and_then(|v| v.as_array()) {
+        let shown: Vec<_> = details.iter().take(5).collect();
+        if !shown.is_empty() {
+            out.push_str("Sample alerts:\n");
+            for d in shown {
+                if let Some(s) = d.as_str() {
+                    out.push_str(&format!("  {s}\n"));
+                }
             }
         }
     }
