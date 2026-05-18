@@ -255,12 +255,24 @@ async fn main() {
     info!("Quarantaine : {:?}", config.quarantine_path);
     info!("MCP server : {}", config.mcp_server_url);
 
+    let max_retries: u32 = std::env::var("STARTUP_MAX_RETRIES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24);
+    let startup_retry_delay: u64 = std::env::var("STARTUP_RETRY_DELAY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5);
+    let max_body_bytes: usize = std::env::var("MAX_REQUEST_BODY_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024 * 1024);
+
     // Attendre que llm-manager soit prêt avant d'accepter des requêtes
-    const MAX_RETRIES: u32 = 24; // 24 × 5s = 2 minutes max
     let manager_health = format!("{}/health", config.manager_url());
     info!("Attente de llm-manager sur {}...", manager_health);
     let mut manager_ready = false;
-    for attempt in 1..=MAX_RETRIES {
+    for attempt in 1..=max_retries {
         match backend.http_client().get(&manager_health).send().await {
             Ok(r) if r.status().is_success() => {
                 info!("llm-manager prêt");
@@ -269,18 +281,19 @@ async fn main() {
             }
             _ => {
                 tracing::warn!(
-                    "llm-manager pas encore prêt ({}/{}), nouvelle tentative dans 5s...",
+                    "llm-manager pas encore prêt ({}/{}), nouvelle tentative dans {}s...",
                     attempt,
-                    MAX_RETRIES
+                    max_retries,
+                    startup_retry_delay
                 );
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(startup_retry_delay)).await;
             }
         }
     }
     if !manager_ready {
         error!(
             "llm-manager injoignable après {} tentatives, abandon.",
-            MAX_RETRIES
+            max_retries
         );
         std::process::exit(1);
     }
@@ -291,7 +304,7 @@ async fn main() {
         config.mcp_timeout_secs,
     ));
     let mut mcp_tools_opt: Option<Vec<Value>> = None;
-    for attempt in 1..=MAX_RETRIES {
+    for attempt in 1..=max_retries {
         match mcp_client.list_tools().await {
             Ok(tools) if !tools.is_empty() => {
                 info!("MCP tools chargés avec succès ({} tools)", tools.len());
@@ -300,20 +313,22 @@ async fn main() {
             }
             Ok(_) => {
                 tracing::warn!(
-                    "MCP server accessible mais aucun tool disponible ({}/{}), retry dans 5s...",
+                    "MCP server accessible mais aucun tool disponible ({}/{}), retry dans {}s...",
                     attempt,
-                    MAX_RETRIES
+                    max_retries,
+                    startup_retry_delay
                 );
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(startup_retry_delay)).await;
             }
             Err(e) => {
                 tracing::warn!(
-                    "MCP server pas encore prêt ({}/{}) : {}, retry dans 5s...",
+                    "MCP server pas encore prêt ({}/{}) : {}, retry dans {}s...",
                     attempt,
-                    MAX_RETRIES,
-                    e
+                    max_retries,
+                    e,
+                    startup_retry_delay
                 );
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(startup_retry_delay)).await;
             }
         }
     }
@@ -322,7 +337,7 @@ async fn main() {
         None => {
             error!(
                 "MCP server injoignable après {} tentatives, abandon.",
-                MAX_RETRIES
+                max_retries
             );
             std::process::exit(1);
         }
@@ -347,7 +362,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/decision", post(decide))
-        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB max
+        .layer(DefaultBodyLimit::max(max_body_bytes))
         .with_state(state);
 
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse().expect("Adresse invalide");
