@@ -21,9 +21,6 @@ use tracing::info;
 // ============================================================
 
 const DEFAULT_STATIC_URL: &str = "http://localhost:3002";
-/// Taille maximale d'un blob envoyé au scanner statique (500 MB).
-/// Les layers gzip dépassant cette limite sont ignorés pour éviter un OOM sur les grandes images.
-const MAX_BLOB_SIZE_BYTES: u64 = 500 * 1024 * 1024;
 const DEFAULT_COMPLIANCE_URL: &str = "http://localhost:3001";
 const DEFAULT_DYNAMIC_URL: &str = "http://localhost:8080";
 
@@ -51,10 +48,19 @@ struct DocDockGoTools {
     compliance_scanner_url: String,
     dynamic_scanner_url: String,
     http: reqwest::Client,
+    max_blob_size_bytes: u64,
 }
 
 impl DocDockGoTools {
     fn new() -> Self {
+        let scanner_timeout: u64 = std::env::var("SCANNER_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300);
+        let max_blob_size_bytes: u64 = std::env::var("MAX_BLOB_SIZE_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500 * 1024 * 1024);
         Self {
             tool_router: Self::tool_router(),
             static_scanner_url: std::env::var("STATIC_SCANNER_URL")
@@ -64,9 +70,10 @@ impl DocDockGoTools {
             dynamic_scanner_url: std::env::var("DYNAMIC_SCANNER_URL")
                 .unwrap_or_else(|_| DEFAULT_DYNAMIC_URL.to_string()),
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
+                .timeout(std::time::Duration::from_secs(scanner_timeout))
                 .build()
                 .expect("Failed to build HTTP client"),
+            max_blob_size_bytes,
         }
     }
 }
@@ -215,12 +222,12 @@ impl DocDockGoTools {
                 }
 
                 let size = fs::metadata(&path).await?.len();
-                if size > MAX_BLOB_SIZE_BYTES {
+                if size > self.max_blob_size_bytes {
                     info!(
                         "skip large blob: {} ({} MB > {} MB limit)",
                         filename,
                         size / 1024 / 1024,
-                        MAX_BLOB_SIZE_BYTES / 1024 / 1024
+                        self.max_blob_size_bytes / 1024 / 1024
                     );
                     continue;
                 }
@@ -471,7 +478,12 @@ async fn main() -> Result<()> {
                 }
             }
         }))
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
+        .layer(axum::extract::DefaultBodyLimit::max(
+            std::env::var("MAX_REQUEST_BODY_BYTES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1024 * 1024),
+        ));
 
     // /health en dehors du rate limiting pour ne pas bloquer les health checks K8s
     let router = axum::Router::new()
