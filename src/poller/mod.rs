@@ -208,7 +208,9 @@ pub async fn run(tx: broadcast::Sender<Cve>, store: Arc<WhitelistStore>, poll_in
             .collect();
 
         if queries.is_empty() {
-            warn!("No packages with ecosystem set — add `ecosystem` fields to config/whitelist.toml");
+            warn!(
+                "No packages with ecosystem set — add `ecosystem` fields to config/whitelist.toml"
+            );
         } else {
             match fetch_batch(&client, queries).await {
                 Ok(vulns) => {
@@ -221,7 +223,11 @@ pub async fn run(tx: broadcast::Sender<Cve>, store: Arc<WhitelistStore>, poll_in
                             new_count += 1;
                         }
                     }
-                    info!(new = new_count, total_seen = seen.len(), "OSV poll complete");
+                    info!(
+                        new = new_count,
+                        total_seen = seen.len(),
+                        "OSV poll complete"
+                    );
                 }
                 Err(e) => {
                     error!(error = %e, "OSV poll failed");

@@ -92,7 +92,11 @@ mod tests {
                     sbom: Sbom {
                         packages: pkgs
                             .into_iter()
-                            .map(|(n, v)| Package { name: n.to_string(), version: v.to_string(), ecosystem: None })
+                            .map(|(n, v)| Package {
+                                name: n.to_string(),
+                                version: v.to_string(),
+                                ecosystem: None,
+                            })
                             .collect(),
                     },
                 })

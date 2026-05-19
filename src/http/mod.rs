@@ -1,8 +1,4 @@
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, routing::get, Json, Router};
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -18,7 +14,10 @@ struct AppState {
 }
 
 pub fn router(whitelist: Arc<WhitelistStore>, notifications: NotificationStore) -> Router {
-    let state = AppState { whitelist, notifications };
+    let state = AppState {
+        whitelist,
+        notifications,
+    };
 
     Router::new()
         .route("/health", get(health))
@@ -58,11 +57,18 @@ mod tests {
     #[tokio::test]
     async fn health_returns_ok() {
         let resp = test_router()
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
@@ -70,11 +76,18 @@ mod tests {
     #[tokio::test]
     async fn images_returns_json_array() {
         let resp = test_router()
-            .oneshot(Request::builder().uri("/images").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/images")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json.is_array());
     }
@@ -82,11 +95,18 @@ mod tests {
     #[tokio::test]
     async fn notifications_empty_on_start() {
         let resp = test_router()
-            .oneshot(Request::builder().uri("/notifications").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/notifications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json, serde_json::json!([]));
     }
@@ -94,7 +114,12 @@ mod tests {
     #[tokio::test]
     async fn unknown_route_returns_404() {
         let resp = test_router()
-            .oneshot(Request::builder().uri("/unknown").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/unknown")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);

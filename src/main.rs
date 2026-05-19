@@ -24,13 +24,15 @@ async fn main() {
         .init();
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "3020".to_string());
-    let dashboard_url = std::env::var("DASHBOARD_URL").ok().filter(|s| !s.is_empty());
+    let dashboard_url = std::env::var("DASHBOARD_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
     let poll_interval: u64 = std::env::var("POLL_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(60);
-    let whitelist_path = std::env::var("WHITELIST_PATH")
-        .unwrap_or_else(|_| "config/whitelist".to_string());
+    let whitelist_path =
+        std::env::var("WHITELIST_PATH").unwrap_or_else(|_| "config/whitelist".to_string());
 
     info!(service = "cycle-de-vie", "Service starting");
 
@@ -76,7 +78,8 @@ async fn shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
             _ = sigterm.recv() => {},
@@ -84,7 +87,9 @@ async fn shutdown_signal() {
     }
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c().await.expect("failed to listen for ctrl-c");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for ctrl-c");
     }
     info!("Shutdown signal received");
 }
