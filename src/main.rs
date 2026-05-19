@@ -49,12 +49,12 @@ async fn main() {
     tokio::spawn(notifier::run(
         match_rx,
         Arc::clone(&notification_store),
-        None,
+        Some("http://localhost:3010/notifications".to_string()),
     ));
 
     let router = http::router(Arc::clone(&whitelist), Arc::clone(&notification_store));
-    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    info!(addr = "0.0.0.0:3000", "HTTP server listening");
+    let listener = TcpListener::bind("0.0.0.0:3020").await.unwrap();
+    info!(addr = "0.0.0.0:3020", "HTTP server listening");
     tokio::spawn(axum::serve(listener, router).into_future());
 
     tokio::signal::ctrl_c().await.expect("failed to listen for ctrl-c");
