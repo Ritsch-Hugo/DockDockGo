@@ -44,7 +44,7 @@ async fn main() {
     let (match_tx, match_rx) = mpsc::channel(32);
     let notification_store = notifier::new_store();
 
-    tokio::spawn(poller::run(cve_tx, 5));
+    tokio::spawn(poller::run(cve_tx, Arc::clone(&whitelist), 60));
     tokio::spawn(matcher::run(cve_rx, Arc::clone(&whitelist), match_tx));
     tokio::spawn(notifier::run(
         match_rx,

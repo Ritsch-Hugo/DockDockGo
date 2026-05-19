@@ -31,3 +31,10 @@ impl WhitelistStore {
         &self.images
     }
 }
+
+#[cfg(test)]
+impl WhitelistStore {
+    pub fn from_images(images: Vec<WhitelistedImage>) -> Self {
+        Self { images }
+    }
+}

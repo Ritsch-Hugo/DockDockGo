@@ -15,6 +15,8 @@ pub enum Severity {
 pub struct Package {
     pub name: String,
     pub version: String,
+    #[serde(default)]
+    pub ecosystem: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

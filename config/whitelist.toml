@@ -1,3 +1,7 @@
+# Images sans ecosystem = ignorées par le poller OSV pour l'instant.
+# Le full-stack alimentera ces entrées avec de vrais SBOMs Trivy
+# (versions distro + ecosystem exact, ex: "Alpine:3.18").
+
 [[images]]
 name = "nginx:1.25"
 
@@ -38,3 +42,19 @@ version = "2.10.3"
 [[images.sbom.packages]]
 name = "zlib"
 version = "1.2.13"
+
+# Image de démo avec de vrais packages PyPI — permet de valider le polling OSV
+# sans attendre les vrais SBOMs. À retirer quand les images réelles sont câblées.
+
+[[images]]
+name = "demo-python-app:1.0"
+
+[[images.sbom.packages]]
+name = "pillow"
+version = "9.0.0"
+ecosystem = "PyPI"
+
+[[images.sbom.packages]]
+name = "cryptography"
+version = "38.0.0"
+ecosystem = "PyPI"

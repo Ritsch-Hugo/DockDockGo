@@ -1,82 +1,234 @@
 use crate::models::{Cve, Package, Severity};
-use chrono::Utc;
+use crate::store::WhitelistStore;
+use chrono::{DateTime, Utc};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
-use tokio::time::{interval, Duration};
-use tracing::info;
+use tokio::time::sleep;
+use tracing::{error, info, warn};
 
-fn fixtures() -> Vec<Cve> {
-    vec![
-        Cve {
-            id: "CVE-2024-0001".to_string(),
-            description: "Buffer overflow in openssl 3.0.7".to_string(),
-            severity: Severity::Critical,
-            affected_packages: vec![Package {
-                name: "openssl".to_string(),
-                version: "3.0.7".to_string(),
-            }],
-            published_at: Utc::now(),
-        },
-        Cve {
-            id: "CVE-2024-0002".to_string(),
-            description: "Use-after-free in zlib 1.2.13".to_string(),
-            severity: Severity::High,
-            affected_packages: vec![Package {
-                name: "zlib".to_string(),
-                version: "1.2.13".to_string(),
-            }],
-            published_at: Utc::now(),
-        },
-        Cve {
-            id: "CVE-2024-0003".to_string(),
-            description: "Remote code execution in libxml2 2.10.3".to_string(),
-            severity: Severity::Critical,
-            affected_packages: vec![Package {
-                name: "libxml2".to_string(),
-                version: "2.10.3".to_string(),
-            }],
-            published_at: Utc::now(),
-        },
-        Cve {
-            id: "CVE-2024-0004".to_string(),
-            description: "Information disclosure in jemalloc 5.3.0".to_string(),
-            severity: Severity::Medium,
-            affected_packages: vec![Package {
-                name: "jemalloc".to_string(),
-                version: "5.3.0".to_string(),
-            }],
-            published_at: Utc::now(),
-        },
-        Cve {
-            id: "CVE-2024-0005".to_string(),
-            description: "Heap overflow in libpng 1.6.37".to_string(),
-            severity: Severity::High,
-            affected_packages: vec![Package {
-                name: "libpng".to_string(),
-                version: "1.6.37".to_string(),
-            }],
-            published_at: Utc::now(),
-        },
-    ]
+const OSV_BATCH_URL: &str = "https://api.osv.dev/v1/querybatch";
+const MAX_RETRIES: u32 = 3;
+
+// ── OSV request types ────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct BatchRequest {
+    queries: Vec<Query>,
 }
 
-pub async fn run(tx: broadcast::Sender<Cve>, poll_interval_secs: u64) {
-    let cves = fixtures();
-    let mut ticker = interval(Duration::from_secs(poll_interval_secs));
-    let mut index = 0;
+#[derive(Serialize)]
+struct Query {
+    package: QueryPkg,
+    version: String,
+}
+
+#[derive(Serialize)]
+struct QueryPkg {
+    name: String,
+    ecosystem: String,
+}
+
+// ── OSV response types (untrusted external data — all fields optional/default) ─
+
+// `#[serde(default)]` skips absent fields but NOT `null` values.
+// This helper maps both absent and null to an empty Vec.
+fn null_as_empty<'de, D, T>(de: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(de)?.unwrap_or_default())
+}
+
+#[derive(Deserialize)]
+struct BatchResponse {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    results: Vec<QueryResult>,
+}
+
+#[derive(Deserialize)]
+struct QueryResult {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    vulns: Vec<OsvVuln>,
+}
+
+#[derive(Deserialize)]
+struct OsvVuln {
+    id: String,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    details: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    severity: Vec<OsvSeverityEntry>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    affected: Vec<OsvAffected>,
+    // Some OSV entries omit `published` — fall back to epoch.
+    #[serde(default)]
+    published: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+struct OsvSeverityEntry {
+    #[serde(rename = "type")]
+    kind: String,
+    score: String,
+}
+
+#[derive(Deserialize)]
+struct OsvAffected {
+    package: OsvAffectedPkg,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    versions: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct OsvAffectedPkg {
+    name: String,
+    ecosystem: String,
+}
+
+// ── Mapping ──────────────────────────────────────────────────────────────────
+
+// Heuristic from CVSS vector: count High-impact metrics (C:H / I:H / A:H).
+fn parse_severity(entries: &[OsvSeverityEntry]) -> Severity {
+    for entry in entries {
+        if entry.kind.starts_with("CVSS_V") {
+            let highs = ["C:H", "I:H", "A:H"]
+                .iter()
+                .filter(|&&m| entry.score.contains(m))
+                .count();
+            return match highs {
+                3 => Severity::Critical,
+                2 => Severity::High,
+                1 => Severity::Medium,
+                _ => Severity::Low,
+            };
+        }
+    }
+    // Conservative default when severity metadata is absent
+    Severity::High
+}
+
+fn to_cve(vuln: OsvVuln) -> Cve {
+    let severity = parse_severity(&vuln.severity);
+
+    let affected_packages: Vec<Package> = vuln
+        .affected
+        .iter()
+        .flat_map(|a| {
+            a.versions.iter().map(|v| Package {
+                name: a.package.name.clone(),
+                version: v.clone(),
+                ecosystem: Some(a.package.ecosystem.clone()),
+            })
+        })
+        .collect();
+
+    let description = match (vuln.summary, vuln.details) {
+        (Some(s), _) => s,
+        (None, Some(d)) => d.chars().take(200).collect(),
+        (None, None) => String::new(),
+    };
+
+    Cve {
+        id: vuln.id,
+        description,
+        severity,
+        affected_packages,
+        published_at: vuln.published.unwrap_or_else(Utc::now),
+    }
+}
+
+// ── OSV HTTP call with exponential backoff ───────────────────────────────────
+
+async fn fetch_batch(client: &Client, queries: Vec<Query>) -> anyhow::Result<Vec<OsvVuln>> {
+    let body = BatchRequest { queries };
+    let mut delay = Duration::from_secs(2);
+
+    for attempt in 1..=MAX_RETRIES {
+        match client.post(OSV_BATCH_URL).json(&body).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let text = resp.text().await?;
+                let batch: BatchResponse = serde_json::from_str(&text).map_err(|e| {
+                    tracing::debug!(body = %text, "OSV response body that failed to parse");
+                    anyhow::anyhow!("failed to parse OSV response: {e}")
+                })?;
+                return Ok(batch.results.into_iter().flat_map(|r| r.vulns).collect());
+            }
+            Ok(resp) if resp.status().as_u16() == 429 => {
+                warn!(attempt, "OSV rate limited — backing off");
+                sleep(delay).await;
+                delay *= 2;
+            }
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                warn!(attempt, status, "OSV returned error status");
+                sleep(delay).await;
+                delay *= 2;
+            }
+            Err(e) => {
+                warn!(attempt, error = %e, "OSV request failed");
+                if attempt < MAX_RETRIES {
+                    sleep(delay).await;
+                    delay *= 2;
+                }
+            }
+        }
+    }
+
+    anyhow::bail!("OSV query failed after {MAX_RETRIES} attempts")
+}
+
+// ── Main loop ────────────────────────────────────────────────────────────────
+
+pub async fn run(tx: broadcast::Sender<Cve>, store: Arc<WhitelistStore>, poll_interval_secs: u64) {
+    let client = Client::new();
+    // In-memory dedup: CVEs already broadcast won't be re-sent until restart.
+    let mut seen: HashSet<String> = HashSet::new();
 
     loop {
-        ticker.tick().await;
+        let queries: Vec<Query> = store
+            .images()
+            .iter()
+            .flat_map(|img| &img.sbom.packages)
+            .filter_map(|pkg| {
+                pkg.ecosystem.as_ref().map(|eco| Query {
+                    package: QueryPkg {
+                        name: pkg.name.clone(),
+                        ecosystem: eco.clone(),
+                    },
+                    version: pkg.version.clone(),
+                })
+            })
+            .collect();
 
-        let cve = cves[index % cves.len()].clone();
-        index += 1;
+        if queries.is_empty() {
+            warn!("No packages with ecosystem set — add `ecosystem` fields to config/whitelist.toml");
+        } else {
+            match fetch_batch(&client, queries).await {
+                Ok(vulns) => {
+                    let mut new_count = 0u32;
+                    for vuln in vulns {
+                        if seen.insert(vuln.id.clone()) {
+                            let cve = to_cve(vuln);
+                            info!(cve_id = %cve.id, severity = ?cve.severity, "New CVE from OSV");
+                            let _ = tx.send(cve);
+                            new_count += 1;
+                        }
+                    }
+                    info!(new = new_count, total_seen = seen.len(), "OSV poll complete");
+                }
+                Err(e) => {
+                    error!(error = %e, "OSV poll failed");
+                }
+            }
+        }
 
-        info!(
-            cve_id = %cve.id,
-            severity = ?cve.severity,
-            "New CVE detected"
-        );
-
-        // receivers lagging behind simply miss old CVEs — acceptable for Phase 1
-        let _ = tx.send(cve);
+        sleep(Duration::from_secs(poll_interval_secs)).await;
     }
 }
