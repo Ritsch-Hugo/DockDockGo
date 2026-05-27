@@ -13,6 +13,7 @@ use tower_http::timeout::TimeoutLayer;
 use crate::notifier::NotificationStore;
 use crate::sbom::{generate_and_store, SbomStore};
 use crate::store::WhitelistStore;
+use sqlx::PgPool;
 
 #[derive(Clone)]
 struct AppState {
@@ -20,6 +21,7 @@ struct AppState {
     notifications: NotificationStore,
     sbom_store: Arc<SbomStore>,
     syft_bin: String,
+    db_pool: Option<PgPool>,
 }
 
 pub fn router(
@@ -27,12 +29,14 @@ pub fn router(
     notifications: NotificationStore,
     sbom_store: Arc<SbomStore>,
     syft_bin: String,
+    db_pool: Option<PgPool>,
 ) -> Router {
     let state = AppState {
         whitelist,
         notifications,
         sbom_store,
         syft_bin,
+        db_pool,
     };
 
     Router::new()
@@ -40,6 +44,8 @@ pub fn router(
         .route("/health",        get(health))
         .route("/images",        get(get_images))
         .route("/notifications", get(get_notifications))
+        // CVE alerts (DB-backed)
+        .route("/cve-alerts",    get(get_cve_alerts))
         // SBOM management
         .route("/sbom",          get(list_sboms))
         .route("/sbom",          delete(delete_sbom))
@@ -138,6 +144,49 @@ async fn refresh_sbom(
     (StatusCode::OK, Json(serde_json::Value::Object(results)))
 }
 
+/// GET /cve-alerts — list all CVE alerts persisted in the database,
+/// ordered by most recent first. Returns an empty array if the DB is not
+/// configured or if the query fails.
+async fn get_cve_alerts(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let Some(ref pool) = state.db_pool else {
+        return Json(serde_json::json!([]));
+    };
+
+    match sqlx::query_as::<_, (String, String, String, String, serde_json::Value, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+        r#"
+        SELECT cve_id, image_name, severity, description,
+               affected_packages, first_seen_at, published_at
+        FROM cve_alerts
+        ORDER BY first_seen_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => {
+            let alerts: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(cve_id, image_name, severity, description, packages, first_seen_at, published_at)| {
+                    serde_json::json!({
+                        "cve_id": cve_id,
+                        "image_name": image_name,
+                        "severity": severity,
+                        "description": description,
+                        "affected_packages": packages,
+                        "first_seen_at": first_seen_at,
+                        "published_at": published_at,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!(alerts))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to fetch CVE alerts from DB");
+            Json(serde_json::json!([]))
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -157,7 +206,7 @@ mod tests {
                 .to_string(),
         )
         .expect("test sbom store");
-        router(whitelist, notifications, sbom_store, "syft".to_owned())
+        router(whitelist, notifications, sbom_store, "syft".to_owned(), None)
     }
 
     async fn get(router: Router, uri: &str) -> axum::response::Response {

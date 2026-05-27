@@ -57,6 +57,9 @@ fn find_matches(cve: &Cve, store: &WhitelistStore) -> Vec<MatchResult> {
                     cve_id: cve.id.clone(),
                     image_name: image.name.clone(),
                     matched_packages: matched,
+                    severity: cve.severity.clone(),
+                    description: cve.description.clone(),
+                    published_at: cve.published_at,
                 })
             }
         })

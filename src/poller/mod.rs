@@ -1,9 +1,11 @@
+use crate::db;
 use crate::models::{Cve, Package, Severity};
 use crate::sbom::SbomStore;
 use crate::store::WhitelistStore;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -204,9 +206,25 @@ pub async fn run(
     store: Arc<WhitelistStore>,
     sbom_store: Arc<SbomStore>,
     poll_interval_secs: u64,
+    db_pool: Option<PgPool>,
 ) {
     let client = Client::new();
-    let mut seen: HashSet<String> = HashSet::new();
+
+    // Pre-populate `seen` from the DB so CVEs known before a restart are not
+    // re-notified. Falls back to an empty set if the DB is unavailable.
+    let mut seen: HashSet<String> = match db_pool.as_ref() {
+        Some(pool) => match db::load_seen_cve_ids(pool).await {
+            Ok(ids) => {
+                info!(count = ids.len(), "Loaded seen CVE IDs from DB");
+                ids
+            }
+            Err(e) => {
+                warn!(error = %e, "Could not load seen CVE IDs from DB — starting fresh");
+                HashSet::new()
+            }
+        },
+        None => HashSet::new(),
+    };
 
     loop {
         // Build OSV queries using stored SBOMs (or TOML fallback)

@@ -1,3 +1,4 @@
+mod db;
 mod http;
 mod matcher;
 mod models;
@@ -27,6 +28,7 @@ async fn main() {
     // ── Configuration ─────────────────────────────────────────────────────────
     let port           = std::env::var("PORT").unwrap_or_else(|_| "3020".to_string());
     let dashboard_url  = std::env::var("DASHBOARD_URL").ok().filter(|s| !s.is_empty());
+    let database_url   = std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty());
     let poll_interval: u64 = std::env::var("POLL_INTERVAL_SECS")
         .ok().and_then(|v| v.parse().ok()).unwrap_or(60);
     let whitelist_path = std::env::var("WHITELIST_PATH")
@@ -43,6 +45,24 @@ async fn main() {
         .ok().and_then(|v| v.parse().ok()).unwrap_or(86_400); // 24 h
 
     info!(service = "cycle-de-vie", "Starting");
+
+    // ── Database ──────────────────────────────────────────────────────────────
+    let db_pool = match database_url {
+        Some(ref url) => match db::connect(url).await {
+            Ok(pool) => {
+                info!("Connected to PostgreSQL");
+                Some(pool)
+            }
+            Err(e) => {
+                warn!(error = %e, "Could not connect to PostgreSQL — CVE alerts will not be persisted");
+                None
+            }
+        },
+        None => {
+            warn!("DATABASE_URL not set — CVE alerts will not be persisted across restarts");
+            None
+        }
+    };
 
     // ── Whitelist ─────────────────────────────────────────────────────────────
     let whitelist = match store::WhitelistStore::load(&whitelist_path) {
@@ -86,6 +106,7 @@ async fn main() {
         Arc::clone(&whitelist),
         Arc::clone(&sbom_store),
         poll_interval,
+        db_pool.clone(),
     ));
 
     // 3. Matcher
@@ -96,6 +117,7 @@ async fn main() {
         match_rx,
         Arc::clone(&notification_store),
         dashboard_url,
+        db_pool.clone(),
     ));
 
     // ── HTTP server ───────────────────────────────────────────────────────────
@@ -104,6 +126,7 @@ async fn main() {
         Arc::clone(&notification_store),
         Arc::clone(&sbom_store),
         syft_bin,
+        db_pool,
     );
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await.unwrap();

@@ -49,6 +49,11 @@ pub struct MatchResult {
     pub cve_id: String,
     pub image_name: String,
     pub matched_packages: Vec<Package>,
+    /// Carried from the source CVE so the notifier can persist it without
+    /// needing a separate lookup.
+    pub severity: Severity,
+    pub description: String,
+    pub published_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

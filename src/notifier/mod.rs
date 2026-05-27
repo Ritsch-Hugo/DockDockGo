@@ -1,6 +1,8 @@
+use crate::db;
 use crate::models::{MatchResult, Notification};
 use chrono::Utc;
 use reqwest::Client;
+use sqlx::PgPool;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -16,10 +18,19 @@ pub async fn run(
     mut match_rx: mpsc::Receiver<MatchResult>,
     store: NotificationStore,
     dashboard_url: Option<String>,
+    db_pool: Option<PgPool>,
 ) {
     let client = Client::new();
 
     while let Some(result) = match_rx.recv().await {
+        // Persist to DB (deduplication via ON CONFLICT DO NOTHING)
+        if let Some(ref pool) = db_pool {
+            let published_at = result.published_at;
+            if let Err(e) = db::record_cve_alert(pool, &result, published_at).await {
+                warn!(error = %e, cve_id = %result.cve_id, "Failed to persist CVE alert to DB");
+            }
+        }
+
         let notification = Notification {
             id: Uuid::new_v4(),
             cve_id: result.cve_id.clone(),
