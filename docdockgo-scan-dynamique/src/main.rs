@@ -120,7 +120,7 @@ fn check_rootfs_binary_version() {
 
     // Monte le rootfs en lecture seule
     let mount_ok = Command::new("sudo")
-        .args(["mount", "-o", "loop,ro", rootfs, &mount_point])
+        .args(["mount", "-o", "loop", rootfs, &mount_point])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
