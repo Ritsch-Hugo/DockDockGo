@@ -1,0 +1,244 @@
+-- Schéma DocDockGo — exécuté automatiquement par le conteneur postgres au premier démarrage
+
+CREATE FUNCTION public.notify_dashboard_change() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+DECLARE
+  row_data json;
+  payload  text;
+  src      record;
+BEGIN
+  -- Source row: NEW for INSERT/UPDATE, OLD for DELETE
+  IF TG_OP = 'DELETE' THEN
+    src := OLD;
+  ELSE
+    src := NEW;
+  END IF;
+
+  -- For tables with large JSONB/text fields, omit only the heavy columns to
+  -- stay within PostgreSQL's 8000-byte pg_notify payload limit.
+  -- ia_decisions: drop scan_reasoning / decision_metadata / alternatives (full LLM JSON)
+  -- scan_events:  drop response_scanner (full scanner result JSON)
+  IF TG_TABLE_NAME = 'ia_decisions' THEN
+    row_data := json_build_object(
+      'id',                  src.id,
+      'pull_id',             src.pull_id,
+      'created_at',          src.created_at,
+      'decision',            src.decision,
+      'dynamic_scan',        src.dynamic_scan,
+      'compliance_scan',     src.compliance_scan,
+      'static_scan',         src.static_scan,
+      'vulnerability_score', src.vulnerability_score,
+      'confidence',          src.confidence,
+      'rationale',           src.rationale
+    );
+  ELSIF TG_TABLE_NAME = 'scan_events' THEN
+    row_data := json_build_object(
+      'id',             src.id,
+      'pull_id',        src.pull_id,
+      'ia_decision_id', src.ia_decision_id,
+      'scanner_type',   src.scanner_type,
+      'created_at',     src.created_at,
+      'executed',       src.executed,
+      'llm_summary',    src.llm_summary
+    );
+  ELSIF TG_TABLE_NAME = 'sboms' THEN
+    -- Exclude packages JSONB (can be hundreds of KB) to stay within the
+    -- 8000-byte pg_notify payload limit.
+    row_data := json_build_object(
+      'id',           src.id,
+      'image_name',   src.image_name,
+      'image_digest', src.image_digest,
+      'source',       src.source,
+      'generated_at', src.generated_at
+    );
+  ELSE
+    row_data := row_to_json(src);
+  END IF;
+
+  -- Payload JSON attendu par le listener SSE Rust + le JS côté client
+  payload := json_build_object(
+    'table',  TG_TABLE_NAME,
+    'action', TG_OP,
+    'data',   row_data
+  )::text;
+
+  -- Canal 'dashboard_updates' écouté par le PgListener Rust
+  PERFORM pg_notify('dashboard_updates', payload);
+  RETURN NULL;
+END;
+$$;
+
+CREATE TABLE public.pulls (
+    uuid uuid NOT NULL,
+    ip_client character varying(45) NOT NULL,
+    registry character varying(255) NOT NULL,
+    repository character varying(255) NOT NULL,
+    tag character varying(100),
+    os character varying(50),
+    arch character varying(50),
+    client_type character varying(50),
+    started_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    last_activity timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    scan_completed boolean DEFAULT false,
+    decision_final character varying(50),
+    CONSTRAINT pulls_pkey PRIMARY KEY (uuid)
+);
+
+CREATE TABLE public.pull_digests (
+    id uuid NOT NULL,
+    pull_id uuid NOT NULL,
+    digest_value character varying(255) NOT NULL,
+    digest_type character varying(50),
+    received_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    digest_algo character varying(20),
+    CONSTRAINT pull_digests_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_pull_digest FOREIGN KEY (pull_id) REFERENCES public.pulls(uuid) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX uq_pull_digests ON public.pull_digests (pull_id, digest_value, digest_type);
+
+CREATE TABLE public.ia_decisions (
+    id uuid NOT NULL,
+    pull_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    decision character varying(20),
+    dynamic_scan boolean DEFAULT false,
+    compliance_scan boolean DEFAULT false,
+    static_scan boolean DEFAULT false,
+    vulnerability_score double precision DEFAULT 0.0,
+    confidence double precision DEFAULT 0.0,
+    rationale text,
+    scan_reasoning jsonb,
+    decision_metadata jsonb,
+    alternatives jsonb,
+    CONSTRAINT ia_decisions_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_pull_ia FOREIGN KEY (pull_id) REFERENCES public.pulls(uuid) ON DELETE CASCADE
+);
+
+CREATE TABLE public.scan_events (
+    id uuid NOT NULL,
+    pull_id uuid NOT NULL,
+    ia_decision_id uuid,
+    scanner_type character varying(100),
+    response_scanner jsonb,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    executed boolean DEFAULT false NOT NULL,
+    llm_summary text,
+    CONSTRAINT scan_events_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_pull_scan FOREIGN KEY (pull_id) REFERENCES public.pulls(uuid) ON DELETE CASCADE,
+    CONSTRAINT fk_ia_decision FOREIGN KEY (ia_decision_id) REFERENCES public.ia_decisions(id) ON DELETE SET NULL
+);
+
+CREATE TABLE public.whitelist (
+    id uuid NOT NULL,
+    registry character varying(255) NOT NULL,
+    repository character varying(255) NOT NULL,
+    tag character varying(100),
+    added_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT whitelist1_pkey PRIMARY KEY (id),
+    CONSTRAINT whitelist_registry_repo_tag_unique UNIQUE (registry, repository, tag)
+);
+
+CREATE TABLE public.blacklist (
+    id uuid NOT NULL,
+    registry character varying(255) NOT NULL,
+    repository character varying(255) NOT NULL,
+    tag character varying(100),
+    added_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT blacklist_pkey PRIMARY KEY (id),
+    CONSTRAINT blacklist_registry_repo_tag_unique UNIQUE (registry, repository, tag)
+);
+
+CREATE TABLE public.cache (
+    id uuid NOT NULL,
+    registry character varying(255) NOT NULL,
+    repository character varying(255) NOT NULL,
+    digest character varying(255) NOT NULL,
+    type character varying(50),
+    file_path character varying(512),
+    size_bytes bigint,
+    added_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    digest_algo character varying(20),
+    CONSTRAINT cache_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX uq_cache ON public.cache (registry, repository, digest, type);
+
+CREATE TABLE public.quarantine (
+    id uuid NOT NULL,
+    registry character varying(255) NOT NULL,
+    repository character varying(255) NOT NULL,
+    digest character varying(255) NOT NULL,
+    type character varying(50),
+    file_path character varying(512),
+    size_bytes bigint,
+    added_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    digest_algo character varying(20),
+    CONSTRAINT quarantine_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX uq_quarantine ON public.quarantine (registry, repository, digest, type);
+
+CREATE TABLE public.users (
+    username character varying(100),
+    role character varying(20) NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    allowed_ips text[] DEFAULT '{}'::text[],
+    sub character varying(100) NOT NULL,
+    last_login timestamp with time zone,
+    CONSTRAINT users_pkey PRIMARY KEY (sub)
+);
+
+CREATE UNIQUE INDEX users_username_key ON public.users (username);
+
+-- ── SBOMs (cycle-de-vie) ──────────────────────────────────────────────────────
+-- One row per whitelisted image. Generated by Syft at startup and refreshed
+-- periodically. Packages are stored as JSONB so the poller can query them
+-- without re-running Syft after a service restart.
+
+CREATE TABLE public.sboms (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    image_name character varying(255) NOT NULL,
+    image_digest character varying(255),
+    source character varying(50) DEFAULT 'syft',
+    packages jsonb NOT NULL DEFAULT '[]',
+    generated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT sboms_pkey PRIMARY KEY (id),
+    CONSTRAINT sboms_image_name_unique UNIQUE (image_name)
+);
+
+CREATE INDEX idx_sboms_generated_at ON public.sboms (generated_at DESC);
+
+-- ── Trigger dédié pour cycle-de-vie (canal 'whitelist_new') ──────────────────
+-- Notifie cycle-de-vie à chaque INSERT en whitelist afin qu'il génère le SBOM
+-- de la nouvelle image sans couplage HTTP entre services.
+CREATE OR REPLACE FUNCTION public.notify_whitelist_insert()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify(
+    'whitelist_new',
+    json_build_object(
+      'registry',   NEW.registry,
+      'repository', NEW.repository,
+      'tag',        NEW.tag
+    )::text
+  );
+  RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER trg_whitelist_new
+AFTER INSERT ON public.whitelist
+FOR EACH ROW EXECUTE FUNCTION public.notify_whitelist_insert();
+
+-- Triggers de notification dashboard (LISTEN/NOTIFY)
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.pulls         FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.pull_digests  FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.ia_decisions  FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.scan_events   FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.whitelist     FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.blacklist     FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.cache         FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.quarantine    FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.users         FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.sboms         FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
