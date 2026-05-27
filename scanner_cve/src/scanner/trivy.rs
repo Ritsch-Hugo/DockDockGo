@@ -14,19 +14,33 @@ pub async fn run_trivy(rootfs: &Path) -> Result<Value> {
         .unwrap_or(300);
     let trivy_timeout = Duration::from_secs(timeout_secs);
 
+    // TRIVY_SKIP_DB_UPDATE=true → passe --skip-db-update à Trivy.
+    // À activer quand la DB est pré-téléchargée par trivy-db-init (docker-compose).
+    // Évite les tentatives de mise à jour réseau à chaque scan.
+    let skip_db_update = std::env::var("TRIVY_SKIP_DB_UPDATE")
+        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+
     let run = async {
-        let output = Command::new("trivy")
-            .arg("fs")
+        let mut cmd = Command::new("trivy");
+        cmd.arg("fs")
             .arg(rootfs)
             .arg("--quiet")
             .arg("--format")
-            .arg("json")
+            .arg("json");
+
+        if skip_db_update {
+            cmd.arg("--skip-db-update");
+        }
+
+        let output = cmd
             .output()
             .await
             .with_context(|| "failed to execute trivy")?;
 
         if !output.status.success() {
-            anyhow::bail!("trivy scan failed");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("trivy scan failed: {}", stderr.trim());
         }
 
         if output.stdout.len() > MAX_OUTPUT_SIZE {
