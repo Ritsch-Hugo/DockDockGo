@@ -80,7 +80,10 @@ fn md5_of_file(path: &str) -> Option<String> {
 /// Ne bloque pas le démarrage — affiche juste un avertissement.
 fn check_rootfs_binary_version() {
     let rootfs = "/opt/firecracker/ddg-rootfs.ext4";
-    let current_binary = "target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique";
+    let current_binary = if Path::new("/usr/local/bin/ddg-scanner").exists() {
+    "/usr/local/bin/ddg-scanner"
+} else {
+    "target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique"};
     let mount_point    = "/tmp/ddg-check-mount";
     let binary_in_vm   = format!("{}/usr/local/bin/ddg-scanner", mount_point);
 
