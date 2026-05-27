@@ -16,7 +16,7 @@ COPY src ./src
 RUN touch src/main.rs && cargo build --release
 
 # ── Stage 2 : image runtime ───────────────────────────────────────────────────
-FROM alpine:3.20
+FROM alpine:3.21
 
 # ca-certificates : HTTPS vers api.osv.dev
 # wget            : installation de Syft
@@ -24,7 +24,7 @@ RUN apk add --no-cache ca-certificates wget
 
 # Syft (Go statique → compatible musl/Alpine)
 # https://github.com/anchore/syft/releases
-ARG SYFT_VERSION=1.20.0
+ARG SYFT_VERSION=1.44.0
 RUN ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" \
     && wget -qO /tmp/syft.tar.gz \
        "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${ARCH}.tar.gz" \
