@@ -172,7 +172,7 @@ services:
   # ── Dashboard ────────────────────────────────────────────────────────────────
 
   dashboard:
-    image: ghcr.io/ritsch-hugo/docdockgo-dashboard:sha-7574b08
+    image: ghcr.io/ritsch-hugo/docdockgo-dashboard:sha-9e92f34
     env_file: dashboard/.env
     network_mode: host
     environment:
