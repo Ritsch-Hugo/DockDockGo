@@ -681,8 +681,8 @@ pub async fn pull_detail(
             scanners.iter().map(|s| format!("<span class='chip chip-blue'>{}</span>", s)).collect()
         };
 
-        let rationale     = ia.rationale.as_deref().unwrap_or("—");
-        let reasoning_dec = "—";
+        let rationale_html = markdown_to_html(ia.rationale.as_deref().unwrap_or("—"));
+        let reasoning_dec  = "—";
 
         let workers_html     = build_workers_html(ia.scan_reasoning.as_ref());
         let arbiter_html     = build_arbiter_html(ia.scan_reasoning.as_ref());
@@ -732,7 +732,7 @@ pub async fn pull_detail(
   <div class="ia-card-body hidden" id="body-{ia_id}">
     <div class="ia-section">
       <div class="ia-section-label">Raisonnement final (arbitre)</div>
-      <div class="ia-text-block">{rationale}</div>
+      <div class="ia-text-block md-text">{rationale_html}</div>
     </div>
     {reasoning_dec_section}
     <div class="ia-tabs" id="tabs-{ia_id}">
@@ -766,7 +766,7 @@ pub async fn pull_detail(
             vuln_color        = vuln_color,
             vuln_score        = vuln_score,
             confidence_pct    = (confidence * 100.0) as i32,
-            rationale         = html_escape(rationale),
+            rationale_html    = rationale_html,
             reasoning_dec_section = reasoning_dec_section,
             alternatives_tab  = alternatives_tab,
             workers_html      = workers_html,
@@ -783,60 +783,85 @@ pub async fn pull_detail(
     // ── Scan events ───────────────────────────────────────────────────────────
     let mut events_html = String::new();
     for ev in &scan_events {
-        let resp_json = ev.response_scanner.as_ref()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "null".to_string());
-        let resp_escaped = resp_json
-            .replace('\\', "\\\\")
-            .replace('"', "&quot;")
-            .replace('\'', "\\'");
-        let resp_preview = if resp_json.len() > 80 {
-            format!("{}...", &resp_json[..80])
-        } else {
-            resp_json.clone()
-        };
+        let scanner_type = ev.scanner_type.as_deref().unwrap_or("?");
+        let executed     = ev.executed.unwrap_or(false);
+        let resp         = ev.response_scanner.as_ref();
+        let llm_summary  = ev.llm_summary.as_deref().unwrap_or("");
+        let raw_json     = resp
+            .map(|v| serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string()))
+            .unwrap_or_default();
 
-        let summary = ev.llm_summary.as_deref().unwrap_or("");
-        let summary_html = if !summary.is_empty() {
-            format!(
-                "<div style='font-size:11px;color:var(--text-success);margin-top:4px;padding:4px 6px;background:rgba(99,153,34,0.1);border-radius:4px;border-left:2px solid var(--green)'>🤖 {}</div>",
-                html_escape(summary)
-            )
-        } else {
-            String::new()
-        };
-
-        let exec_badge = if ev.executed.unwrap_or(false) {
+        let exec_badge = if executed {
             "<span class='badge badge-green' style='font-size:10px'>Exécuté</span>"
         } else {
             "<span class='badge badge-gray' style='font-size:10px'>Non exécuté</span>"
         };
 
-        let mt = if summary.is_empty() { 0 } else { 4 };
+        let (scanner_summary, scanner_body) = if let Some(r) = resp {
+            let stype = scanner_type.to_lowercase();
+            if stype.contains("haut") || stype.contains("hl") || stype.contains("high") {
+                render_hl_scanner(r)
+            } else if stype.contains("static") || stype.contains("cve") || stype.contains("trivy") {
+                render_static_scanner(r)
+            } else if stype.contains("compliance") {
+                render_compliance_scanner(r)
+            } else {
+                let preview = if raw_json.len() > 120 {
+                    format!("{}…", &raw_json[..120])
+                } else {
+                    raw_json.clone()
+                };
+                (String::new(), format!(
+                    "<pre style='font-size:10px;color:var(--text-secondary);white-space:pre-wrap;overflow-wrap:break-word'>{}</pre>",
+                    html_escape(&preview)
+                ))
+            }
+        } else {
+            ("<span style='color:var(--text-tertiary);font-size:11px'>—</span>".to_string(), String::new())
+        };
 
-        events_html.push_str(&format!(r#"<tr>
-  <td>
-    <span class='chip'>{scanner}</span>
-    {exec_badge}
-  </td>
-  <td>
-    {summary_html}
-    <div style='font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);max-width:260px;overflow:hidden;white-space:nowrap;cursor:pointer;margin-top:{mt}px'
-         onclick="openJsonModal('{resp_escaped}')" title='Cliquer pour voir le JSON complet'>{resp_preview}</div>
-  </td>
-  <td style='color:var(--text-tertiary);font-size:11px'>{time}</td>
-</tr>"#,
-            scanner      = ev.scanner_type.as_deref().unwrap_or("?"),
-            exec_badge   = exec_badge,
-            summary_html = summary_html,
-            mt           = mt,
-            resp_escaped = resp_escaped,
-            resp_preview = resp_preview,
-            time         = format_since(ev.created_at),
+        let llm_html = if !llm_summary.is_empty() {
+            format!("<div class='ev-llm-summary'>🤖 {}</div>", html_escape(llm_summary))
+        } else {
+            String::new()
+        };
+
+        let ev_id      = ev.id;
+        let json_attr  = html_escape(&raw_json);
+
+        events_html.push_str(&format!(r#"
+<div class='ev-card' id='ev-{ev_id}'>
+  <div class='ev-card-header' onclick="toggleEvCard('{ev_id}')">
+    <div style='display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap'>
+      <span class='chip'>{scanner}</span>
+      {exec_badge}
+      <div class='ev-stats'>{scanner_summary}</div>
+    </div>
+    <div style='display:flex;align-items:center;gap:10px;flex-shrink:0'>
+      <span style='font-size:11px;color:var(--text-tertiary)'>{time}</span>
+      <span class='ia-chevron' id='ev-chevron-{ev_id}'>▼</span>
+    </div>
+  </div>
+  <div class='ev-card-body hidden' id='ev-body-{ev_id}'>
+    {scanner_body}
+    {llm_html}
+    <div style='margin-top:10px;padding-top:10px;border-top:0.5px solid var(--border)'>
+      <button class='json-btn' data-json='{json_attr}' onclick="openJsonModal(this.getAttribute('data-json'))">Voir JSON brut</button>
+    </div>
+  </div>
+</div>"#,
+            ev_id          = ev_id,
+            scanner        = html_escape(scanner_type),
+            exec_badge     = exec_badge,
+            scanner_summary = scanner_summary,
+            time           = format_since(ev.created_at),
+            scanner_body   = scanner_body,
+            llm_html       = llm_html,
+            json_attr      = json_attr,
         ));
     }
     if events_html.is_empty() {
-        events_html = "<tr><td colspan='3' style='color:var(--text-tertiary);text-align:center;padding:16px'>Aucun scan event</td></tr>".to_string();
+        events_html = "<div data-empty style='color:var(--text-tertiary);font-size:12px;padding:12px'>Aucun scan event</div>".to_string();
     }
 
     // ── Timeline ──────────────────────────────────────────────────────────────
@@ -1038,6 +1063,38 @@ pub async fn pull_detail(
   .modal-close:hover {{ color: var(--text-primary); }}
   pre.json-view {{ font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; word-break: break-all; }}
   .hidden {{ display: none !important; }}
+  /* ── Scan event cards ── */
+  .ev-card {{ background: var(--bg-secondary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 8px; overflow: hidden; }}
+  .ev-card-header {{ display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; cursor: pointer; transition: background .1s; gap: 8px; }}
+  .ev-card-header:hover {{ background: rgba(255,255,255,0.03); }}
+  .ev-card-body {{ padding: 12px 14px; border-top: 0.5px solid var(--border); }}
+  .ev-stats {{ display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
+  .ev-llm-summary {{ font-size: 11px; color: var(--text-success); margin-top: 10px; padding: 6px 10px; background: rgba(99,153,34,0.1); border-radius: var(--radius-md); border-left: 2px solid var(--green); line-height: 1.5; }}
+  .json-btn {{ font-size: 11px; color: var(--text-secondary); background: transparent; border: 0.5px solid var(--border); border-radius: var(--radius-md); padding: 4px 10px; cursor: pointer; font-family: var(--font); }}
+  .json-btn:hover {{ color: var(--text-primary); border-color: var(--border-md); }}
+  /* ── Markdown rendering ── */
+  .md-text {{ font-size: 12px; color: var(--text-secondary); line-height: 1.7; }}
+  .md-text .md-p {{ margin-bottom: 6px; }}
+  .md-text .md-p:last-child {{ margin-bottom: 0; }}
+  .md-text .md-gap {{ height: 4px; }}
+  .md-text .md-list {{ margin: 4px 0 8px 18px; }}
+  .md-text .md-list li {{ margin-bottom: 4px; }}
+  .md-text strong {{ color: var(--text-primary); font-weight: 600; }}
+  .md-text em {{ font-style: italic; }}
+  .md-text .inline-code {{ font-family: var(--font-mono); font-size: 0.9em; background: rgba(255,255,255,0.07); padding: 1px 4px; border-radius: 3px; color: var(--text-info); }}
+  /* ── CVE list ── */
+  .vuln-list {{ display: flex; flex-direction: column; gap: 5px; max-height: 400px; overflow-y: auto; padding-right: 4px; }}
+  .vuln-row {{ background: var(--bg-primary); border-radius: var(--radius-md); padding: 6px 10px; border-left: 2px solid var(--border-md); }}
+  .sev-critical {{ color: #f09595; font-size: 11px; font-weight: 700; }}
+  .sev-high     {{ color: #fac775; font-size: 11px; font-weight: 700; }}
+  .sev-medium   {{ color: #fde68a; font-size: 11px; }}
+  .sev-low      {{ color: #a0c4ff; font-size: 11px; }}
+  .sev-unknown  {{ color: var(--text-tertiary); font-size: 11px; }}
+  /* ── Compliance findings ── */
+  .finding-row {{ background: var(--bg-primary); border-radius: var(--radius-md); padding: 6px 10px; margin-bottom: 4px; }}
+  .finding-fail {{ border-left: 2px solid var(--red) !important; }}
+  .finding-warn {{ border-left: 2px solid var(--amber) !important; }}
+  .finding-pass {{ border-left: 2px solid var(--green) !important; }}
 </style>
 </head>
 <body>
@@ -1073,10 +1130,7 @@ pub async fn pull_detail(
       </div>
       <div class="card">
         <div class="section-title">Scan events ({nb_events})</div>
-        <table class="table">
-          <thead><tr><th>Scanner</th><th>Résultat</th><th>Créé</th></tr></thead>
-          <tbody id="events-tbody">{events}</tbody>
-        </table>
+        <div id="events-container">{events}</div>
       </div>
     </div>
     <div class="timeline-card">
@@ -1131,15 +1185,34 @@ window.addEventListener('DOMContentLoaded', () => {{
   }}
 }});
 
+// ── Collapse scan event card ──────────────────────────────────────────────────
+function toggleEvCard(evId) {{
+  const body    = document.getElementById('ev-body-' + evId);
+  const chevron = document.getElementById('ev-chevron-' + evId);
+  if (!body) return;
+  const isOpen = !body.classList.contains('hidden');
+  body.classList.toggle('hidden', isOpen);
+  if (chevron) chevron.classList.toggle('open', !isOpen);
+}}
+
 // ── JSON Modal ────────────────────────────────────────────────────────────────
 function openJsonModal(rawJson) {{
   if (!rawJson) return;
-  const decoded = rawJson.replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  // data-json attributes are decoded by the browser natively; only legacy
+  // onclick-embedded strings need manual entity decoding.
+  let str = rawJson;
+  if (str.includes('&quot;') || str.includes('&#39;') || str.includes('&amp;')) {{
+    str = str.replace(/&quot;/g, '"')
+             .replace(/&#39;/g, "'")
+             .replace(/&amp;/g, '&')
+             .replace(/&lt;/g, '<')
+             .replace(/&gt;/g, '>');
+  }}
   try {{
-    const obj = JSON.parse(decoded);
+    const obj = JSON.parse(str);
     document.getElementById('json-content').textContent = JSON.stringify(obj, null, 2);
   }} catch {{
-    document.getElementById('json-content').textContent = decoded;
+    document.getElementById('json-content').textContent = str;
   }}
   document.getElementById('json-modal').classList.add('open');
 }}
@@ -1275,34 +1348,54 @@ function addIaCardFromSSE(data) {{
 }}
 
 function addScanEventFromSSE(data) {{
-  const tbody = document.getElementById('events-tbody');
-  if (!tbody) return;
-  const empty = tbody.querySelector('td[colspan]');
-  if (empty) empty.parentElement.remove();
+  const container = document.getElementById('events-container');
+  if (!container) return;
+  const empty = container.querySelector('[data-empty]');
+  if (empty) empty.remove();
 
-  const resp    = data.response_scanner ? JSON.stringify(data.response_scanner) : '—';
-  const preview = resp.length > 80 ? resp.substring(0, 80) + '...' : resp;
-  const summary = data.llm_summary || '';
-  const sumHtml = summary
-    ? `<div style="font-size:11px;color:var(--text-success);margin-top:4px;padding:4px 6px;background:rgba(99,153,34,0.1);border-radius:4px;border-left:2px solid var(--green)">🤖 ${{summary}}</div>`
-    : '';
-  const execBadge = data.executed
+  const scanner  = data.scanner_type || '?';
+  const executed = data.executed;
+  const summary  = data.llm_summary  || '';
+  const evId     = data.id || ('sse-' + Date.now());
+
+  const execBadge = executed
     ? "<span class='badge badge-green' style='font-size:10px'>Exécuté</span>"
     : "<span class='badge badge-gray'  style='font-size:10px'>Non exécuté</span>";
 
-  const tr = document.createElement('tr');
-  const jsonKey = 'sse_json_' + Date.now();
-  window[jsonKey] = resp;
-  tr.innerHTML = `
-    <td><span class="chip">${{data.scanner_type || '?'}}</span> ${{execBadge}}</td>
-    <td>
-      ${{sumHtml}}
-      <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);max-width:260px;overflow:hidden;white-space:nowrap;cursor:pointer"
-           onclick="openJsonModal(window['${{jsonKey}}'])">${{preview}}</div>
-    </td>
-    <td style="color:var(--text-tertiary);font-size:11px">À l'instant</td>`;
-  tbody.appendChild(tr);
-  updateCount('Scan events', tbody.rows.length);
+  const llmHtml = summary
+    ? `<div class="ev-llm-summary">🤖 ${{escHtml(summary)}}</div>`
+    : '';
+
+  // response_scanner is stripped from SSE payload to stay under pg_notify limit.
+  const bodyHtml = `
+    <div style="color:var(--text-tertiary);font-size:12px;padding:4px 0">
+      Détail complet disponible après rechargement de la page.
+    </div>
+    ${{llmHtml}}`;
+
+  const card = document.createElement('div');
+  card.className = 'ev-card';
+  card.id = 'ev-' + evId;
+  card.innerHTML = `
+    <div class="ev-card-header" onclick="toggleEvCard('${{evId}}')">
+      <div style="display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap">
+        <span class="chip">${{escHtml(scanner)}}</span>
+        ${{execBadge}}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+        <span style="font-size:11px;color:var(--text-tertiary)">À l'instant</span>
+        <span class="ia-chevron" id="ev-chevron-${{evId}}">▼</span>
+      </div>
+    </div>
+    <div class="ev-card-body hidden" id="ev-body-${{evId}}">${{bodyHtml}}</div>`;
+  container.appendChild(card);
+  updateCount('Scan events', container.querySelectorAll('.ev-card').length);
+}}
+
+function escHtml(s) {{
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }}
 
 function updateTimelineFromIA(data, scanners) {{
@@ -1681,7 +1774,7 @@ fn build_workers_html(scan_reasoning: Option<&serde_json::Value>) -> String {
                 )
             } else { String::new() },
             reasoning = if is_ok && reason != "—" {
-                format!("<div style='font-size:11px;color:var(--text-secondary);line-height:1.5'>{}</div>", html_escape(reason))
+                format!("<div class='md-text'>{}</div>", markdown_to_html(reason))
             } else { String::new() },
         ));
     }
@@ -1710,13 +1803,13 @@ fn build_arbiter_html(scan_reasoning: Option<&serde_json::Value>) -> String {
         <div><div style="font-size:9px;color:var(--text-tertiary)">Confiance</div>
         <div style="font-size:16px;font-weight:700;color:var(--text-secondary)">{conf_pct}%</div></div>
       </div>
-      <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">{reasoning}</div>
+      <div class="md-text">{reasoning}</div>
     </div>"#,
-        model = html_escape(model),
+        model       = html_escape(model),
         score_color = score_color,
-        score = score,
-        conf_pct = (conf * 100.0) as i32,
-        reasoning = html_escape(reason),
+        score       = score,
+        conf_pct    = (conf * 100.0) as i32,
+        reasoning   = markdown_to_html(reason),
     )
 }
 
@@ -1801,7 +1894,7 @@ fn build_decision_workers_html(decision_metadata: Option<&serde_json::Value>) ->
                 (c * 100.0) as i32
             )).unwrap_or_default(),
             reasoning = if is_ok && reason != "—" {
-                format!("<div style='font-size:11px;color:var(--text-secondary);line-height:1.5'>{}</div>", html_escape(reason))
+                format!("<div class='md-text'>{}</div>", markdown_to_html(reason))
             } else { String::new() },
         ));
     }
@@ -1821,11 +1914,241 @@ fn build_decision_arbiter_html(decision_metadata: Option<&serde_json::Value>) ->
         <span style="font-size:11px;font-weight:700;color:var(--text-primary)">⚖️ Arbitre — choix des scanners</span>
         <span style="font-size:11px;font-family:var(--font-mono);color:var(--text-tertiary)">{model}</span>
       </div>
-      <div style="font-size:11px;color:var(--text-secondary);line-height:1.6">{reasoning}</div>
+      <div class="md-text">{reasoning}</div>
     </div>"#,
-        model = html_escape(model),
-        reasoning = html_escape(reason),
+        model     = html_escape(model),
+        reasoning = markdown_to_html(reason),
     )
+}
+
+// ─── Markdown helpers ─────────────────────────────────────────────────────────
+
+/// Wraps paired `marker` occurrences with HTML open/close tags.
+fn toggle_wrap(s: &str, marker: &str, open_tag: &str, close_tag: &str) -> String {
+    let parts: Vec<&str> = s.split(marker).collect();
+    if parts.len() <= 1 { return s.to_string(); }
+    let mut out = String::with_capacity(s.len() + parts.len() * (open_tag.len() + close_tag.len()) / 2);
+    for (i, part) in parts.iter().enumerate() {
+        out.push_str(part);
+        if i < parts.len() - 1 {
+            out.push_str(if i % 2 == 0 { open_tag } else { close_tag });
+        }
+    }
+    // Odd number of markers → last open tag is unclosed
+    if parts.len() % 2 == 0 { out.push_str(close_tag); }
+    out
+}
+
+/// Applies inline markdown (bold/italic/code) to an already HTML-escaped string.
+fn apply_inline_md(s: &str) -> String {
+    // ** must run before * to avoid consuming doubled chars
+    let s = toggle_wrap(s, "**", "<strong>", "</strong>");
+    let s = toggle_wrap(&s, "*",  "<em>",      "</em>");
+    toggle_wrap(&s, "`", "<code class='inline-code'>", "</code>")
+}
+
+/// Converts a markdown block (headings, lists, paragraphs) to safe HTML.
+fn markdown_to_html(raw: &str) -> String {
+    let mut html   = String::with_capacity(raw.len() * 2);
+    let mut in_list = false;
+    let mut ordered = false;
+
+    for raw_line in raw.lines() {
+        let line = raw_line.trim();
+
+        // Ordered list: line starts with digit(s) + ". "
+        let is_ordered = line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            && line.find(". ")
+                   .map(|p| line[..p].chars().all(|c| c.is_ascii_digit()))
+                   .unwrap_or(false);
+        // Bullet list: line starts with "* " or "- " (with 1–3 trailing spaces)
+        let is_bullet = !is_ordered && (
+            line.starts_with("* ") || line.starts_with("- ")
+            || line.starts_with("*  ") || line.starts_with("-  ")
+            || line.starts_with("*   ") || line.starts_with("-   ")
+        );
+
+        if is_ordered || is_bullet {
+            if !in_list {
+                html.push_str(if is_ordered { "<ol class='md-list'>" } else { "<ul class='md-list'>" });
+                in_list = true;
+                ordered = is_ordered;
+            } else if ordered != is_ordered {
+                html.push_str(if ordered { "</ol>" } else { "</ul>" });
+                html.push_str(if is_ordered { "<ol class='md-list'>" } else { "<ul class='md-list'>" });
+                ordered = is_ordered;
+            }
+            let content = if is_ordered {
+                line[line.find(". ").map(|p| p + 2).unwrap_or(0)..].trim()
+            } else {
+                line.trim_start_matches(|c| c == '*' || c == '-').trim_start()
+            };
+            html.push_str(&format!("<li>{}</li>", apply_inline_md(&html_escape(content))));
+        } else {
+            if in_list {
+                html.push_str(if ordered { "</ol>" } else { "</ul>" });
+                in_list = false;
+            }
+            if line.is_empty() {
+                html.push_str("<div class='md-gap'></div>");
+            } else {
+                html.push_str(&format!("<p class='md-p'>{}</p>", apply_inline_md(&html_escape(line))));
+            }
+        }
+    }
+    if in_list { html.push_str(if ordered { "</ol>" } else { "</ul>" }); }
+    html
+}
+
+// ─── Scan event renderers ─────────────────────────────────────────────────────
+
+/// HL / supply-chain scanner — shows score + formatted markdown analysis.
+fn render_hl_scanner(resp: &serde_json::Value) -> (String, String) {
+    let score    = resp.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0) as i32;
+    let decision = resp.get("decision").and_then(|v| v.as_str()).unwrap_or("?");
+    let raw_text = resp.get("raw_text").and_then(|v| v.as_str()).unwrap_or("");
+
+    let (badge_cls, score_color) = match decision {
+        "ALLOW" => ("badge-green", "var(--text-success)"),
+        "DENY"  => ("badge-red",   "var(--text-danger)"),
+        _       => ("badge-amber", "var(--text-warning)"),
+    };
+    let summary = format!(
+        "<span class='badge {badge}'>{decision}</span>\
+         <span style='font-size:13px;font-weight:700;color:{color}'>{score}/100</span>",
+        badge    = badge_cls,
+        decision = html_escape(decision),
+        color    = score_color,
+        score    = score,
+    );
+    let body = if raw_text.is_empty() {
+        "<div style='color:var(--text-tertiary);font-size:12px'>Aucun détail disponible</div>".to_string()
+    } else {
+        format!("<div class='md-text' style='padding:4px 0'>{}</div>", markdown_to_html(raw_text))
+    };
+    (summary, body)
+}
+
+/// Static / CVE scanner (Trivy) — shows severity counts + CVE list.
+fn render_static_scanner(resp: &serde_json::Value) -> (String, String) {
+    let mut crit = 0usize; let mut high = 0usize;
+    let mut med  = 0usize; let mut low  = 0usize; let mut unk = 0usize;
+    let mut rows = String::new();
+
+    if let Some(results) = resp.get("Results").and_then(|v| v.as_array()) {
+        for r in results {
+            if let Some(vulns) = r.get("Vulnerabilities").and_then(|v| v.as_array()) {
+                for v in vulns {
+                    let sev   = v.get("Severity").and_then(|s| s.as_str()).unwrap_or("UNKNOWN");
+                    let id    = v.get("VulnerabilityID").and_then(|s| s.as_str()).unwrap_or("?");
+                    let pkg   = v.get("PkgName").and_then(|s| s.as_str()).unwrap_or("?");
+                    let ver   = v.get("InstalledVersion").and_then(|s| s.as_str()).unwrap_or("?");
+                    let fix   = v.get("FixedVersion").and_then(|s| s.as_str()).unwrap_or("");
+                    let title = v.get("Title").and_then(|s| s.as_str()).unwrap_or("");
+                    let (sev_cls, border) = match sev {
+                        "CRITICAL" => { crit += 1; ("sev-critical", "var(--red)") },
+                        "HIGH"     => { high += 1; ("sev-high",     "var(--amber)") },
+                        "MEDIUM"   => { med  += 1; ("sev-medium",   "#fde68a") },
+                        "LOW"      => { low  += 1; ("sev-low",      "#a0c4ff") },
+                        _          => { unk  += 1; ("sev-unknown",  "var(--border-md)") },
+                    };
+                    rows.push_str(&format!(
+                        r#"<div class='vuln-row' style='border-left-color:{border}'>
+  <div style='display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap'>
+    <span class='{sev_cls}'>{sev}</span>
+    <code style='font-size:11px;color:var(--text-info)'>{id}</code>
+    <span style='font-size:11px;color:var(--text-secondary)'>{pkg} {ver}</span>
+    {fix_span}
+  </div>{title_row}
+</div>"#,
+                        border   = border,
+                        sev_cls  = sev_cls,
+                        sev      = sev,
+                        id       = html_escape(id),
+                        pkg      = html_escape(pkg),
+                        ver      = html_escape(ver),
+                        fix_span = if !fix.is_empty() {
+                            format!("<span style='font-size:10px;color:var(--text-success)'>fix: {}</span>", html_escape(fix))
+                        } else { String::new() },
+                        title_row = if !title.is_empty() {
+                            format!("<div style='font-size:11px;color:var(--text-tertiary)'>{}</div>", html_escape(title))
+                        } else { String::new() },
+                    ));
+                }
+            }
+        }
+    }
+
+    let total = crit + high + med + low + unk;
+    let summary = if total == 0 {
+        "<span style='color:var(--text-success);font-size:12px'>✓ Aucune CVE</span>".to_string()
+    } else {
+        let mut parts = Vec::new();
+        if crit > 0 { parts.push(format!("<span class='sev-critical'>{} CRITICAL</span>", crit)); }
+        if high > 0 { parts.push(format!("<span class='sev-high'>{} HIGH</span>",     high)); }
+        if med  > 0 { parts.push(format!("<span class='sev-medium'>{} MED</span>",    med));  }
+        if low  > 0 { parts.push(format!("<span class='sev-low'>{} LOW</span>",       low));  }
+        parts.join("<span style='color:var(--border-md);margin:0 3px'>·</span>")
+    };
+    let body = if rows.is_empty() {
+        "<div style='color:var(--text-success);font-size:12px;padding:8px 0'>✓ Aucune CVE détectée</div>".to_string()
+    } else {
+        format!("<div class='vuln-list'>{}</div>", rows)
+    };
+    (summary, body)
+}
+
+/// Compliance scanner — shows FAIL/WARN/PASS counts + findings.
+fn render_compliance_scanner(resp: &serde_json::Value) -> (String, String) {
+    let mut fail = 0usize; let mut warn = 0usize;
+    let mut pass = 0usize;
+    let mut rows = String::new();
+
+    if let Some(findings) = resp.get("findings").and_then(|v| v.as_array()) {
+        for f in findings {
+            let status  = f.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            let rule_id = f.get("rule_id").and_then(|v| v.as_str()).unwrap_or("?");
+            let msg     = f.get("message").and_then(|v| v.as_str()).unwrap_or("—");
+            let (border_cls, color) = match status {
+                "FAIL" => { fail += 1; ("finding-fail", "var(--text-danger)")  },
+                "WARN" => { warn += 1; ("finding-warn", "var(--text-warning)") },
+                "PASS" => { pass += 1; ("finding-pass", "var(--text-success)") },
+                _      => ("", "var(--text-tertiary)"),
+            };
+            if status != "PASS" {   // only show non-passing findings in detail
+                rows.push_str(&format!(
+                    r#"<div class='finding-row {border}'>
+  <div style='display:flex;align-items:center;gap:8px;margin-bottom:2px'>
+    <span style='font-size:10px;font-weight:700;color:{color}'>{status}</span>
+    <code style='font-size:11px;color:var(--text-secondary)'>{rule_id}</code>
+  </div>
+  <div style='font-size:11px;color:var(--text-tertiary)'>{msg}</div>
+</div>"#,
+                    border  = border_cls,
+                    color   = color,
+                    status  = status,
+                    rule_id = html_escape(rule_id),
+                    msg     = html_escape(msg),
+                ));
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    if fail > 0 { parts.push(format!("<span style='color:var(--text-danger)'>{} FAIL</span>",   fail)); }
+    if warn > 0 { parts.push(format!("<span style='color:var(--text-warning)'>{} WARN</span>",  warn)); }
+    if pass > 0 { parts.push(format!("<span style='color:var(--text-success)'>{} PASS</span>",  pass)); }
+    let summary = if parts.is_empty() {
+        "<span style='color:var(--text-tertiary)'>—</span>".to_string()
+    } else {
+        parts.join("<span style='color:var(--border-md);margin:0 3px'>·</span>")
+    };
+    let body = if rows.is_empty() {
+        format!("<div style='color:var(--text-success);font-size:12px;padding:8px 0'>✓ {} PASS — aucun problème détecté</div>", pass)
+    } else {
+        format!("<div style='display:flex;flex-direction:column;gap:4px'>{}</div>", rows)
+    };
+    (summary, body)
 }
 
 // ─── Logo ─────────────────────────────────────────────────────────────────────
