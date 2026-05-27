@@ -191,7 +191,7 @@ async fn health_handler() -> impl IntoResponse {
 
 /* ---------------- JSON ENDPOINT ---------------- */
 
-async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
+async fn scan_handler(Json(mut req): Json<ScanRequest>) -> impl IntoResponse {
     let request_id = Uuid::new_v4().to_string();
     eprintln!("[req:{}] scan_handler start", request_id);
 
@@ -214,6 +214,33 @@ async fn scan_handler(Json(req): Json<ScanRequest>) -> impl IntoResponse {
     if let Err(e) = check_json_depth(&req.manifest_raw) {
         eprintln!("[req:{}] rejected: {}", request_id, e);
         return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    // Résolution des blobs sans path depuis le volume quarantaine partagé.
+    // Le mcp-tools-server skippe les layer blobs gzip (il n'envoie pas leur `path`).
+    // On les retrouve automatiquement dans la quarantaine pour que has_fs = true.
+    let quarantine_base =
+        std::env::var("QUARANTINE_BASE").unwrap_or_else(|_| "/quarantaine".to_string());
+    for blob in &mut req.blobs {
+        if blob.path.is_none() && blob.bytes_b64.is_none() {
+            match find_blob_in_quarantine(&quarantine_base, &blob.digest) {
+                Some(found) => {
+                    eprintln!(
+                        "[req:{}] blob resolved from quarantine: {} → {}",
+                        request_id,
+                        &blob.digest[..blob.digest.len().min(25)],
+                        found
+                    );
+                    blob.path = Some(found);
+                }
+                None => {
+                    eprintln!(
+                        "[req:{}] blob not found in quarantine: {}",
+                        request_id, &blob.digest
+                    );
+                }
+            }
+        }
     }
 
     let image = match pipeline::image_from_scan_request(req) {
@@ -429,4 +456,39 @@ async fn upload_handler(mut multipart: Multipart) -> impl IntoResponse {
     // workspace drops here → Drop::drop() removes /tmp/scans/<uuid> automatically
     eprintln!("[req:{}] workspace cleanup triggered", request_id);
     (StatusCode::OK, Json(report)).into_response()
+}
+
+/* ---------------- QUARANTINE BLOB RESOLUTION ---------------- */
+
+/// Cherche un blob dans la quarantaine à partir de son digest.
+///
+/// Structure attendue : `<base>/<registry>/<repo>/blobs/sha256/<hash>`
+/// Algorithme : descente récursive jusqu'à depth 8 ; dès qu'un dossier `sha256`
+/// est trouvé, on cherche le fichier `<hash>` (sans extension — les manifests
+/// portent l'extension `.json`, donc pas de faux-positifs).
+fn find_blob_in_quarantine(quarantine_base: &str, digest: &str) -> Option<String> {
+    let hash = digest.strip_prefix("sha256:").unwrap_or(digest);
+    find_blob_recursive(Path::new(quarantine_base), hash, 0)
+}
+
+fn find_blob_recursive(dir: &Path, hash: &str, depth: u32) -> Option<String> {
+    if depth > 8 {
+        return None;
+    }
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if entry.file_name().to_string_lossy() == "sha256" {
+            let candidate = path.join(hash);
+            if candidate.is_file() {
+                return candidate.to_str().map(|s| s.to_string());
+            }
+        } else if let Some(found) = find_blob_recursive(&path, hash, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
 }
