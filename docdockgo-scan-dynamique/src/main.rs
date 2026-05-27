@@ -46,6 +46,106 @@ struct ScanResponse {
 }
 
 // ─────────────────────────────────────────────
+// VÉRIFICATION BINAIRE DANS LE ROOTFS
+//
+// Compare le hash MD5 du binaire courant (musl) avec celui
+// embarqué dans le rootfs Firecracker.
+// Si différents → le mode VM utilisera une ancienne version
+// du scanner, ce qui peut causer des comportements inattendus
+// (mauvais port, fonctionnalités manquantes, etc.)
+//
+// Pour mettre à jour le rootfs :
+//   cargo build --release --target x86_64-unknown-linux-musl
+//   sudo mkdir -p /tmp/ddg-mount
+//   sudo mount -o loop /opt/firecracker/ddg-rootfs.ext4 /tmp/ddg-mount
+//   sudo cp target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique \
+//       /tmp/ddg-mount/usr/local/bin/ddg-scanner
+//   sudo umount /tmp/ddg-mount && sudo rmdir /tmp/ddg-mount
+// ─────────────────────────────────────────────
+
+/// Calcule le hash MD5 d'un fichier via la commande md5sum.
+/// Retourne None si le fichier est inaccessible.
+fn md5_of_file(path: &str) -> Option<String> {
+    let output = Command::new("md5sum")
+        .arg(path)
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // md5sum retourne "<hash>  <path>"
+    stdout.split_whitespace().next().map(|s| s.to_string())
+}
+
+/// Vérifie si le binaire dans le rootfs est à jour.
+/// Monte le rootfs en lecture seule, compare les hashs, démonte.
+/// Ne bloque pas le démarrage — affiche juste un avertissement.
+fn check_rootfs_binary_version() {
+    let rootfs = "/opt/firecracker/ddg-rootfs.ext4";
+    let current_binary = "target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique";
+    let mount_point    = "/tmp/ddg-check-mount";
+    let binary_in_vm   = format!("{}/usr/local/bin/ddg-scanner", mount_point);
+
+    // Si le rootfs n'existe pas, on ne fait rien (déjà signalé par check_environment)
+    if !Path::new(rootfs).exists() {
+        return;
+    }
+
+    // Si le binaire courant n'existe pas (pas encore compilé en musl)
+    if !Path::new(current_binary).exists() {
+        println!("[!] Binaire musl absent ({}) — impossible de vérifier", current_binary);
+        println!("    Compilez avec : cargo build --release --target x86_64-unknown-linux-musl");
+        return;
+    }
+
+    let hash_current = match md5_of_file(current_binary) {
+        Some(h) => h,
+        None    => {
+            println!("[!] Impossible de calculer le hash du binaire courant");
+            return;
+        }
+    };
+
+    // Monte le rootfs en lecture seule pour extraire le hash
+    let _ = std::fs::create_dir_all(mount_point);
+
+    let mount_ok = Command::new("sudo")
+        .args(["mount", "-o", "loop,ro", rootfs, mount_point])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !mount_ok {
+        // Pas root ou rootfs occupé — skip silencieux
+        let _ = std::fs::remove_dir(mount_point);
+        return;
+    }
+
+    let hash_rootfs = md5_of_file(&binary_in_vm);
+
+    // Démonte proprement
+    let _ = Command::new("sudo")
+        .args(["umount", mount_point])
+        .status();
+    let _ = std::fs::remove_dir(mount_point);
+
+    match hash_rootfs {
+        Some(h) if h == hash_current => {
+            println!("[✓] Binaire rootfs VM à jour");
+        }
+        Some(_) => {
+            println!("[⚠] Binaire rootfs VM OBSOLÈTE — le mode VM utilisera une ancienne version !");
+            println!("    Mettez à jour avec :");
+            println!("      sudo mkdir -p /tmp/ddg-mount");
+            println!("      sudo mount -o loop {} /tmp/ddg-mount", rootfs);
+            println!("      sudo cp {} /tmp/ddg-mount/usr/local/bin/ddg-scanner", current_binary);
+            println!("      sudo umount /tmp/ddg-mount && sudo rmdir /tmp/ddg-mount");
+        }
+        None => {
+            println!("[!] Impossible de lire le binaire dans le rootfs VM");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
 // VÉRIFICATION ENVIRONNEMENT
 // ─────────────────────────────────────────────
 fn check_environment() {
@@ -87,6 +187,9 @@ fn check_environment() {
         println!("[✓] KVM disponible");
     }
 
+    // Vérification version binaire dans le rootfs
+    check_rootfs_binary_version();
+
     if issues {
         println!("\n[!] Problèmes détectés — certains modes peuvent échouer");
         println!("[!] Setup complet : sudo bash setup_firecracker.sh");
@@ -121,12 +224,10 @@ fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
     let clean: String = output
         .lines()
         .map(|line| {
-            // Retire les codes ANSI (\x1b[...m)
             let mut result = String::new();
             let mut chars = line.chars().peekable();
             while let Some(c) = chars.next() {
                 if c == '\x1b' {
-                    // Skip jusqu'à la fin du code ANSI
                     while let Some(&nc) = chars.peek() {
                         chars.next();
                         if nc.is_ascii_alphabetic() { break; }
@@ -214,7 +315,6 @@ async fn run_scan_docker(image: &str) -> Result<ScanResponse> {
     ).await?;
     println!("[+] Container : {}", container_name);
 
-    // Récupère le container_id complet pour matching alternatif
     let container_id = match docker.inspect_container(&container_name, None).await {
         Ok(info) => info.id.unwrap_or_default(),
         Err(_)   => String::new(),
@@ -263,45 +363,27 @@ async fn run_scan_pipeline(image: &str, mode: &str) -> Result<ScanResponse> {
 }
 
 // ─────────────────────────────────────────────
-// SCORING — Plus précis et granulaire
+// SCORING
 // ─────────────────────────────────────────────
-
-/// Score de base par règle (avant bonus de fréquence)
-///
-/// Logique :
-/// - 60+ : règles critiques (modification système, fork bomb, accès root)
-/// - 30-50 : règles importantes (mount, accès fichiers sensibles)
-/// - 15-25 : règles d'observation (shell, réseau)
-/// - 10 : par défaut
 fn base_score_for_rule(rule: &str) -> u32 {
-    // CRITICAL — comportements clairement malveillants
-    if rule.contains("System File Modification")    { return 70; }  // /etc/passwd, /etc/shadow modifié
-    if rule.contains("Fork Bomb")                   { return 65; }  // attaque DoS
+    if rule.contains("System File Modification")    { return 70; }
+    if rule.contains("Fork Bomb")                   { return 65; }
     if rule.contains("Privilege Escalation")        { return 60; }
     if rule.contains("Container Escape")            { return 75; }
-
-    // HIGH — comportements suspects
-    if rule.contains("Sensitive File Access")       { return 45; }  // lecture /etc/shadow, etc.
-    if rule.contains("Read sensitive file")         { return 40; }  // règle Falco par défaut
-    if rule.contains("Mount")                       { return 35; }  // montage de filesystems
-    if rule.contains("Crypto")                      { return 50; }  // mining crypto
+    if rule.contains("Sensitive File Access")       { return 45; }
+    if rule.contains("Read sensitive file")         { return 40; }
+    if rule.contains("Mount")                       { return 35; }
+    if rule.contains("Crypto")                      { return 50; }
     if rule.contains("Reverse Shell")               { return 70; }
-    if rule.contains("Clear Log")                   { return 55; }  // anti-forensic
-
-    // MEDIUM — comportements à surveiller
-    if rule.contains("Outbound")                    { return 25; }  // connexion sortante
+    if rule.contains("Clear Log")                   { return 55; }
+    if rule.contains("Outbound")                    { return 25; }
     if rule.contains("Suspicious Network")          { return 30; }
-    if rule.contains("Package Management")          { return 20; }  // apt, apk dans container
-
-    // LOW — observations
+    if rule.contains("Package Management")          { return 20; }
     if rule.contains("Shell Spawn")                 { return 15; }
     if rule.contains("Process")                     { return 12; }
-
-    // Par défaut
     10
 }
 
-/// Indique si une règle déclenche le flag critical
 fn is_critical_rule(rule: &str) -> bool {
     rule.contains("System File Modification")
         || rule.contains("Fork Bomb")
@@ -321,14 +403,6 @@ fn score_to_verdict(score: u32) -> String {
     }.to_string()
 }
 
-/// Analyse les logs Falco JSON et calcule le score.
-///
-/// Match container par :
-///   - container_name (long)
-///   - container_id (12 premiers chars Docker)
-///
-/// Cela évite de rater les alertes qui apparaissent avec
-/// container=<NA> mais qui ont bien le bon container_id.
 fn analyze_logs(
     logs: &str,
     start_time: SystemTime,
@@ -345,7 +419,6 @@ fn analyze_logs(
         .unwrap()
         .as_secs();
 
-    // Container ID court (Docker affiche 12 chars dans les logs Falco)
     let cid_short = if container_id.len() >= 12 {
         &container_id[..12]
     } else {
@@ -358,14 +431,12 @@ fn analyze_logs(
             Err(_) => continue,
         };
 
-        // Match par container_name OU container_id court
         let output = match json["output"].as_str() {
             Some(o) if o.contains(container_name)
                     || (!cid_short.is_empty() && o.contains(cid_short)) => o,
             _ => continue,
         };
 
-        // Filtre temporel : on ignore les alertes antérieures au scan
         if let Some(time_str) = json["time"].as_str() {
             if let Ok(t) = chrono::DateTime::parse_from_rfc3339(time_str) {
                 if (t.timestamp() as u64) < start_unix { continue; }
@@ -386,7 +457,6 @@ fn analyze_logs(
         }
     }
 
-    // Calcul du score : base + bonus log de fréquence (plafonné)
     for (rule, &count) in &counters {
         let base       = base_score_for_rule(rule) as f32;
         let freq_bonus = if count > 1 {
@@ -399,7 +469,6 @@ fn analyze_logs(
 
     let final_score = (total_score as u32).min(100);
 
-    // Résumé console
     println!("\n===== FALCO ALERT SUMMARY =====");
     println!("{:<45} {:>12} {:>10}", "Règle", "Occurrences", "Score");
     println!("{}", "-".repeat(70));
