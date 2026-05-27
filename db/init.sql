@@ -2,8 +2,58 @@
 
 CREATE FUNCTION public.notify_dashboard_change() RETURNS trigger
     LANGUAGE plpgsql AS $$
+DECLARE
+  row_data json;
+  payload  text;
+  src      record;
 BEGIN
-  PERFORM pg_notify('dashboard_changes', TG_TABLE_NAME);
+  -- Source row: NEW for INSERT/UPDATE, OLD for DELETE
+  IF TG_OP = 'DELETE' THEN
+    src := OLD;
+  ELSE
+    src := NEW;
+  END IF;
+
+  -- For tables with large JSONB/text fields, omit only the heavy columns to
+  -- stay within PostgreSQL's 8000-byte pg_notify payload limit.
+  -- ia_decisions: drop scan_reasoning / decision_metadata / alternatives (full LLM JSON)
+  -- scan_events:  drop response_scanner (full scanner result JSON)
+  IF TG_TABLE_NAME = 'ia_decisions' THEN
+    row_data := json_build_object(
+      'id',                  src.id,
+      'pull_id',             src.pull_id,
+      'created_at',          src.created_at,
+      'decision',            src.decision,
+      'dynamic_scan',        src.dynamic_scan,
+      'compliance_scan',     src.compliance_scan,
+      'static_scan',         src.static_scan,
+      'vulnerability_score', src.vulnerability_score,
+      'confidence',          src.confidence,
+      'rationale',           src.rationale
+    );
+  ELSIF TG_TABLE_NAME = 'scan_events' THEN
+    row_data := json_build_object(
+      'id',             src.id,
+      'pull_id',        src.pull_id,
+      'ia_decision_id', src.ia_decision_id,
+      'scanner_type',   src.scanner_type,
+      'created_at',     src.created_at,
+      'executed',       src.executed,
+      'llm_summary',    src.llm_summary
+    );
+  ELSE
+    row_data := row_to_json(src);
+  END IF;
+
+  -- Payload JSON attendu par le listener SSE Rust + le JS côté client
+  payload := json_build_object(
+    'table',  TG_TABLE_NAME,
+    'action', TG_OP,
+    'data',   row_data
+  )::text;
+
+  -- Canal 'dashboard_updates' écouté par le PgListener Rust
+  PERFORM pg_notify('dashboard_updates', payload);
   RETURN NULL;
 END;
 $$;
