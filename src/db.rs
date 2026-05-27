@@ -19,11 +19,10 @@ pub async fn connect(database_url: &str) -> Result<PgPool> {
 /// Load all SBOMs stored in the database. Called once at startup to
 /// pre-populate the in-memory cache — Syft does not need to re-run.
 pub async fn load_all_sboms(pool: &PgPool) -> Result<Vec<StoredSbom>> {
-    let rows = sqlx::query(
-        "SELECT image_name, image_digest, source, packages, generated_at FROM sboms",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query("SELECT image_name, image_digest, source, packages, generated_at FROM sboms")
+            .fetch_all(pool)
+            .await?;
 
     let sboms = rows
         .into_iter()

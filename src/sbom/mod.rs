@@ -78,23 +78,22 @@ struct CdxComponent {
 /// <https://osv.dev/docs/#section/Requesting-information/Package-filter>
 fn purl_type_to_ecosystem(t: &str) -> Option<&'static str> {
     match t {
-        "apk"    => Some("Alpine"),
-        "deb"    => Some("Debian"),
-        "rpm"    => Some("Red Hat"),
-        "pypi"   => Some("PyPI"),
-        "npm"    => Some("npm"),
-        "gem"    => Some("RubyGems"),
+        "apk" => Some("Alpine"),
+        "deb" => Some("Debian"),
+        "rpm" => Some("Red Hat"),
+        "pypi" => Some("PyPI"),
+        "npm" => Some("npm"),
+        "gem" => Some("RubyGems"),
         "golang" => Some("Go"),
-        "cargo"  => Some("crates.io"),
-        "maven"  => Some("Maven"),
-        "nuget"  => Some("NuGet"),
-        _        => None,
+        "cargo" => Some("crates.io"),
+        "maven" => Some("Maven"),
+        "nuget" => Some("NuGet"),
+        _ => None,
     }
 }
 
 fn parse_purl_type(purl: &str) -> Option<&str> {
-    purl.strip_prefix("pkg:")
-        .and_then(|s| s.split('/').next())
+    purl.strip_prefix("pkg:").and_then(|s| s.split('/').next())
 }
 
 fn cdx_to_packages(bom: CycloneDxBom) -> Vec<Package> {
@@ -111,7 +110,11 @@ fn cdx_to_packages(bom: CycloneDxBom) -> Vec<Package> {
                 .and_then(parse_purl_type)
                 .and_then(purl_type_to_ecosystem)
                 .map(str::to_owned);
-            Some(Package { name: c.name, version, ecosystem })
+            Some(Package {
+                name: c.name,
+                version,
+                ecosystem,
+            })
         })
         .collect()
 }
@@ -219,7 +222,10 @@ impl SbomStore {
         if let Some(ref pool) = self.pool {
             match db::delete_sbom(pool, image).await {
                 Ok(existed) => {
-                    self.cache.write().expect("sbom cache poisoned").remove(image);
+                    self.cache
+                        .write()
+                        .expect("sbom cache poisoned")
+                        .remove(image);
                     existed
                 }
                 Err(e) => {
@@ -235,7 +241,10 @@ impl SbomStore {
                     warn!(error = %e, "Failed to delete SBOM file");
                 }
             }
-            self.cache.write().expect("sbom cache poisoned").remove(image);
+            self.cache
+                .write()
+                .expect("sbom cache poisoned")
+                .remove(image);
             existed
         }
     }
@@ -245,7 +254,13 @@ impl SbomStore {
     fn stem(image: &str) -> String {
         image
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect()
     }
 

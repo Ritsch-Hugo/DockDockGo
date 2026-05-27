@@ -37,13 +37,13 @@ pub fn router(
 
     Router::new()
         // Core
-        .route("/health",        get(health))
-        .route("/images",        get(get_images))
+        .route("/health", get(health))
+        .route("/images", get(get_images))
         .route("/notifications", get(get_notifications))
         // SBOM management
-        .route("/sbom",          get(list_sboms))
-        .route("/sbom",          delete(delete_sbom))
-        .route("/sbom/refresh",  post(refresh_sbom))
+        .route("/sbom", get(list_sboms))
+        .route("/sbom", delete(delete_sbom))
+        .route("/sbom/refresh", post(refresh_sbom))
         .layer(RequestBodyLimitLayer::new(16 * 1024))
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .with_state(state)
@@ -85,7 +85,10 @@ async fn delete_sbom(
 ) -> (StatusCode, Json<serde_json::Value>) {
     let existed = state.sbom_store.delete(&q.image).await;
     if existed {
-        (StatusCode::OK, Json(serde_json::json!({ "deleted": q.image })))
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "deleted": q.image })),
+        )
     } else {
         (
             StatusCode::NOT_FOUND,
@@ -177,7 +180,9 @@ mod tests {
     async fn images_array() {
         let resp = get(test_router(), "/images").await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json.is_array());
     }
@@ -186,7 +191,9 @@ mod tests {
     async fn notifications_empty() {
         let resp = get(test_router(), "/notifications").await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json, serde_json::json!([]));
     }
@@ -195,7 +202,9 @@ mod tests {
     async fn sbom_list_empty() {
         let resp = get(test_router(), "/sbom").await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json.is_array());
     }

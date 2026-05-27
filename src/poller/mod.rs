@@ -244,7 +244,11 @@ pub async fn run(
                             new_count += 1;
                         }
                     }
-                    info!(new = new_count, total_seen = seen.len(), "OSV poll complete");
+                    info!(
+                        new = new_count,
+                        total_seen = seen.len(),
+                        "OSV poll complete"
+                    );
                 }
                 Err(e) => error!(error = %e, "OSV poll failed"),
             }

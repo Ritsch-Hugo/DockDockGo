@@ -26,23 +26,27 @@ async fn main() {
         .init();
 
     // ── Configuration ─────────────────────────────────────────────────────────
-    let port           = std::env::var("PORT").unwrap_or_else(|_| "3020".to_string());
-    let dashboard_url  = std::env::var("DASHBOARD_URL").ok().filter(|s| !s.is_empty());
-    let database_url   = std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty());
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3020".to_string());
+    let dashboard_url = std::env::var("DASHBOARD_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let database_url = std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty());
     let poll_interval: u64 = std::env::var("POLL_INTERVAL_SECS")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(60);
-    let whitelist_path = std::env::var("WHITELIST_PATH")
-        .unwrap_or_else(|_| "config/whitelist".to_string());
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let whitelist_path =
+        std::env::var("WHITELIST_PATH").unwrap_or_else(|_| "config/whitelist".to_string());
     // Directory where per-image SBOM JSON files are stored.
-    let sbom_dir       = std::env::var("SBOM_DIR")
-        .unwrap_or_else(|_| "sboms".to_string());
+    let sbom_dir = std::env::var("SBOM_DIR").unwrap_or_else(|_| "sboms".to_string());
     // Path/name of the Syft executable.
-    let syft_bin       = std::env::var("SYFT_BIN")
-        .unwrap_or_else(|_| "syft".to_string());
+    let syft_bin = std::env::var("SYFT_BIN").unwrap_or_else(|_| "syft".to_string());
     // How often (seconds) to regenerate SBOMs for all whitelisted images.
     // 0 = disabled (generate once on startup for missing images, then stop).
     let sbom_refresh: u64 = std::env::var("SBOM_REFRESH_INTERVAL_SECS")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(86_400); // 24 h
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(86_400); // 24 h
 
     info!(service = "cycle-de-vie", "Starting");
 
@@ -94,16 +98,16 @@ async fn main() {
     info!("SBOM store ready");
 
     // ── Channels ──────────────────────────────────────────────────────────────
-    let (cve_tx, cve_rx)   = broadcast::channel(32);
+    let (cve_tx, cve_rx) = broadcast::channel(32);
     let (match_tx, match_rx) = mpsc::channel(32);
-    let notification_store  = notifier::new_store();
+    let notification_store = notifier::new_store();
 
     // ── Background tasks ──────────────────────────────────────────────────────
     // 1. SBOM generation — fills missing SBOMs at startup, then refreshes periodically
     {
-        let store     = Arc::clone(&whitelist);
-        let sbom_st   = Arc::clone(&sbom_store);
-        let syft      = syft_bin.clone();
+        let store = Arc::clone(&whitelist);
+        let sbom_st = Arc::clone(&sbom_store);
+        let syft = syft_bin.clone();
         tokio::spawn(async move {
             sbom_refresh_loop(store, sbom_st, syft, sbom_refresh).await;
         });
