@@ -85,6 +85,9 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '1'
+          # Syft est un binaire Go tiers invoqué en subprocess (non exposé réseau).
+          # Ses dépendances Go peuvent avoir des CVEs sans rapport avec notre service.
+          skip-files: /usr/local/bin/syft
 
       - name: Upload résultats Trivy → GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
