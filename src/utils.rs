@@ -99,25 +99,34 @@ pub fn save_to_quarantine(
     // ===== MANIFEST par tag =====
     if parts[2] == "manifests" && !parts[3].starts_with("sha256:") {
         if let Some(racine) = &ctx.manifest_racine_digest {
-            if let Some(fp) = write_digest(&base_dir, "manifests", racine, bytes, Some("json")) {
-                let size = bytes.len() as i64;
-                let pool2 = pool.clone();
-                let registry2 = ctx.registry.clone();
-                let repository2 = ctx.repository.clone();
-                let digest2 = format!("sha256:{}", racine.value);
-                tokio::spawn(async move {
-                    let _ = crate::db::upsert_quarantine_file(
-                        &pool2,
-                        &registry2,
-                        &repository2,
-                        &digest2,
-                        "manifest",
-                        "sha256",
-                        &fp,
-                        size,
-                    )
-                    .await;
-                });
+            match write_digest(&base_dir, "manifests", racine, bytes, Some("json")) {
+                Some(fp) => {
+                    let size = bytes.len() as i64;
+                    let pool2 = pool.clone();
+                    let registry2 = ctx.registry.clone();
+                    let repository2 = ctx.repository.clone();
+                    let digest2 = format!("sha256:{}", racine.value);
+                    tokio::spawn(async move {
+                        let _ = crate::db::upsert_quarantine_file(
+                            &pool2,
+                            &registry2,
+                            &repository2,
+                            &digest2,
+                            "manifest",
+                            "sha256",
+                            &fp,
+                            size,
+                        )
+                        .await;
+                    });
+                }
+                None => {
+                    eprintln!(
+                        "[QUARANTINE ERROR] écriture manifest-par-tag échouée pour {}",
+                        racine.value
+                    );
+                    return false;
+                }
             }
         }
         return true;
@@ -134,25 +143,34 @@ pub fn save_to_quarantine(
             value: digest_value.to_string(),
         };
 
-        if let Some(fp) = write_digest(&base_dir, "manifests", &digest, bytes, Some("json")) {
-            let size = bytes.len() as i64;
-            let pool2 = pool.clone();
-            let registry2 = ctx.registry.clone();
-            let repository2 = ctx.repository.clone();
-            let digest2 = format!("sha256:{}", digest_value);
-            tokio::spawn(async move {
-                let _ = crate::db::upsert_quarantine_file(
-                    &pool2,
-                    &registry2,
-                    &repository2,
-                    &digest2,
-                    "manifest",
-                    "sha256",
-                    &fp,
-                    size,
-                )
-                .await;
-            });
+        match write_digest(&base_dir, "manifests", &digest, bytes, Some("json")) {
+            Some(fp) => {
+                let size = bytes.len() as i64;
+                let pool2 = pool.clone();
+                let registry2 = ctx.registry.clone();
+                let repository2 = ctx.repository.clone();
+                let digest2 = format!("sha256:{}", digest_value);
+                tokio::spawn(async move {
+                    let _ = crate::db::upsert_quarantine_file(
+                        &pool2,
+                        &registry2,
+                        &repository2,
+                        &digest2,
+                        "manifest",
+                        "sha256",
+                        &fp,
+                        size,
+                    )
+                    .await;
+                });
+            }
+            None => {
+                eprintln!(
+                    "[QUARANTINE ERROR] écriture manifest sha256:{} échouée",
+                    digest_value
+                );
+                return false;
+            }
         }
         return true;
     }
@@ -168,25 +186,34 @@ pub fn save_to_quarantine(
             value: digest_value.to_string(),
         };
 
-        if let Some(fp) = write_digest(&base_dir, "blobs", &digest, bytes, None) {
-            let size = bytes.len() as i64;
-            let pool2 = pool.clone();
-            let registry2 = ctx.registry.clone();
-            let repository2 = ctx.repository.clone();
-            let digest2 = format!("sha256:{}", digest_value);
-            tokio::spawn(async move {
-                let _ = crate::db::upsert_quarantine_file(
-                    &pool2,
-                    &registry2,
-                    &repository2,
-                    &digest2,
-                    "blob",
-                    "sha256",
-                    &fp,
-                    size,
-                )
-                .await;
-            });
+        match write_digest(&base_dir, "blobs", &digest, bytes, None) {
+            Some(fp) => {
+                let size = bytes.len() as i64;
+                let pool2 = pool.clone();
+                let registry2 = ctx.registry.clone();
+                let repository2 = ctx.repository.clone();
+                let digest2 = format!("sha256:{}", digest_value);
+                tokio::spawn(async move {
+                    let _ = crate::db::upsert_quarantine_file(
+                        &pool2,
+                        &registry2,
+                        &repository2,
+                        &digest2,
+                        "blob",
+                        "sha256",
+                        &fp,
+                        size,
+                    )
+                    .await;
+                });
+            }
+            None => {
+                eprintln!(
+                    "[QUARANTINE ERROR] écriture blob sha256:{} échouée",
+                    digest_value
+                );
+                return false;
+            }
         }
         return true;
     }
@@ -202,25 +229,34 @@ pub fn save_to_quarantine(
             value: digest_value.to_string(),
         };
 
-        if let Some(fp) = write_digest(&base_dir, "referrers", &digest, bytes, Some("json")) {
-            let size = bytes.len() as i64;
-            let pool2 = pool.clone();
-            let registry2 = ctx.registry.clone();
-            let repository2 = ctx.repository.clone();
-            let digest2 = format!("sha256:{}", digest_value);
-            tokio::spawn(async move {
-                let _ = crate::db::upsert_quarantine_file(
-                    &pool2,
-                    &registry2,
-                    &repository2,
-                    &digest2,
-                    "referrer",
-                    "sha256",
-                    &fp,
-                    size,
-                )
-                .await;
-            });
+        match write_digest(&base_dir, "referrers", &digest, bytes, Some("json")) {
+            Some(fp) => {
+                let size = bytes.len() as i64;
+                let pool2 = pool.clone();
+                let registry2 = ctx.registry.clone();
+                let repository2 = ctx.repository.clone();
+                let digest2 = format!("sha256:{}", digest_value);
+                tokio::spawn(async move {
+                    let _ = crate::db::upsert_quarantine_file(
+                        &pool2,
+                        &registry2,
+                        &repository2,
+                        &digest2,
+                        "referrer",
+                        "sha256",
+                        &fp,
+                        size,
+                    )
+                    .await;
+                });
+            }
+            None => {
+                eprintln!(
+                    "[QUARANTINE ERROR] écriture referrer sha256:{} échouée",
+                    digest_value
+                );
+                return false;
+            }
         }
         return true;
     }
