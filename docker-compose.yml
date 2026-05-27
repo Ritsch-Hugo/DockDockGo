@@ -59,7 +59,7 @@ services:
   # ── Orchestrateur ────────────────────────────────────────────────────────────
 
   orchestrateur:
-    image: ghcr.io/ritsch-hugo/docdockgo-orchestrateur:sha-731fbad
+    image: ghcr.io/ritsch-hugo/docdockgo-orchestrateur:sha-5e2d487
     env_file: orchestrateur/.env
     environment:
       DATABASE_URL: postgres://docdockgo_admin:docdockgo@postgres:5432/docdockgo
@@ -67,6 +67,12 @@ services:
       LLM_DECISION_URL: http://host-gateway:3005/v1/decision
       QUARANTINE_BASE: /app/quarantaine
       CACHE_BASE: /app/cache
+      # Timeouts — cohérents avec les autres services
+      HL_TIMEOUT_SECS: "60"
+      LLM_DECISION_TIMEOUT_SECS: "120"
+      # Seuils décision scanner haut-niveau
+      HL_ALLOW_THRESHOLD: "90"
+      HL_DENY_THRESHOLD: "30"
     extra_hosts:
       - "host-gateway:host-gateway"
     ports:
@@ -108,7 +114,7 @@ services:
       - quarantaine:/quarantaine
 
   scanner-static:
-    image: ghcr.io/ritsch-hugo/dockdockgo/scanner-cve:sha-98a57378c49f8f7cc735d7070232a7be4a669030
+    image: ghcr.io/ritsch-hugo/dockdockgo/scanner-cve:sha-7d6cd63c
     env_file: scanner-static/.env
     ports:
       - "3002:3002"
