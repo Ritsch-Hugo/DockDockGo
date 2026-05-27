@@ -1,7 +1,7 @@
 use crate::auth::{AppState, OidcState};
 use axum::extract::DefaultBodyLimit;
 use axum::{extract::State, http::StatusCode, response::IntoResponse};
-use axum::{routing::get, Router};
+use axum::{routing::{get, post}, Router};
 use std::net::SocketAddr;
 use tokio::signal;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -36,6 +36,8 @@ async fn main() {
         .route("/logged-out", get(auth::logged_out_handler))
         // Healthcheck — pas besoin du state, réponse statique
         .route("/health", get(health_handler))
+        // CVE notifications (inter-service, cycle-de-vie → dashboard, pas d'auth)
+        .route("/notifications", post(dashboard::handlers::api_receive_cve_notification))
         // Dashboard
         .nest("/dashboard", dashboard::router())
         .with_state(state)

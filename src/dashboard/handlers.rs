@@ -2579,6 +2579,53 @@ fn render_compliance_scanner(resp: &serde_json::Value) -> (String, String) {
     (summary, body)
 }
 
+// ─── CVE notifications (cycle-de-vie → dashboard) ────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct CveNotificationPayload {
+    pub id: uuid::Uuid,
+    pub cve_id: String,
+    pub image_name: String,
+    pub matched_packages: serde_json::Value,
+    pub severity: Option<String>,
+    pub description: Option<String>,
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Reçoit une notification CVE depuis cycle-de-vie, la persiste en BDD, et
+/// déclenche automatiquement le canal `dashboard_updates` via le trigger SQL
+/// pour diffusion SSE instantanée aux clients connectés.
+pub async fn api_receive_cve_notification(
+    State(state): State<AppState>,
+    axum::Json(payload): axum::Json<CveNotificationPayload>,
+) -> Response {
+    // Serialize matched_packages to String then cast to jsonb — sqlx `json`
+    // feature is not enabled, so serde_json::Value cannot be bound directly.
+    let packages_str = payload.matched_packages.to_string();
+    let result = sqlx::query(
+        r#"INSERT INTO cve_notifications (id, cve_id, image_name, matched_packages, severity, description, published_at)
+           VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+           ON CONFLICT (id) DO NOTHING"#,
+    )
+    .bind(payload.id)
+    .bind(&payload.cve_id)
+    .bind(&payload.image_name)
+    .bind(&packages_str)
+    .bind(&payload.severity)
+    .bind(&payload.description)
+    .bind(payload.published_at)
+    .execute(&state.db)
+    .await;
+
+    match result {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(e) => {
+            eprintln!("Failed to store CVE notification: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 // ─── Logo ─────────────────────────────────────────────────────────────────────
 
 pub async fn serve_logo() -> impl IntoResponse {
