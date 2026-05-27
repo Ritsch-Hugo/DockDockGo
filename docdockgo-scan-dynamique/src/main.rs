@@ -588,7 +588,7 @@ async fn start_api_server() -> Result<()> {
         .route("/scan",   post(handle_scan))
         .route("/health", get(|| async { "DockDockGo OK" }));
 
-    let addr = "0.0.0.0:8080";
+    let addr = "0.0.0.0:3006";
     println!("[+] Scanner HTTP : http://{}", addr);
     println!("[+] POST /scan  → lancer un scan");
     println!("[+] GET  /health → healthcheck");

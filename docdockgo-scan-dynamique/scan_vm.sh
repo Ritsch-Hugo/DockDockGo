@@ -215,7 +215,7 @@ update-alternatives --set ip6tables \
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<'DOCKERCONF'
 {
-  "iptables": true,
+  "iptables": false,
   "storage-driver": "overlay2",
   "exec-opts": ["native.cgroupdriver=cgroupfs"],
   "log-driver": "json-file",
@@ -286,7 +286,7 @@ echo "[FC] Attente scanner HTTP..."
 T_START=$(date +%s)
 SCANNER_READY=0
 for i in $(seq 1 60); do
-    if vm_ssh "curl -sf http://localhost:8080/health" &>/dev/null; then
+    if vm_ssh "curl -sf http://localhost:3006/health" &>/dev/null; then
         T_END=$(date +%s)
         echo "[FC] Scanner prêt en $((T_END - T_START))s ✓"
         SCANNER_READY=1
@@ -314,7 +314,7 @@ T_SCAN_START=$(date +%s)
 RESULT=$(vm_ssh \
     "curl -sf \
           --max-time 300 \
-          -X POST http://localhost:8080/scan \
+          -X POST http://localhost:3006/scan \
           -H 'Content-Type: application/json' \
           -d '{\"image\": \"$IMAGE\", \"mode\": \"docker\"}'")
 

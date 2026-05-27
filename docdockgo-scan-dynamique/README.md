@@ -54,7 +54,7 @@ des règles Falco déclenchées.
 │  │  Container ddg-scanner (optionnel)       │                       │
 │  │  OU binaire Rust directement sur l'hôte  │                       │
 │  │                                          │                       │
-│  │  API HTTP :8080  ◀──── MCP / curl / IA   │                       │
+│  │  API HTTP :3006  ◀──── MCP / curl / IA   │                       │
 │  │  Scanner Rust (axum + bollard + musl)    │                       │
 │  └──────────┬───────────────────────────────┘                       │
 │             │                                                       │
@@ -74,7 +74,7 @@ des règles Falco déclenchées.
 │  │  │  Ubuntu 22.04 (rootfs ext4 10GB)   │  │                       │
 │  │  │  Docker + containerd               │  │                       │
 │  │  │  Falco modern_ebpf (CO-RE eBPF)    │  │                       │
-│  │  │  Scanner HTTP Rust (port 8080)     │  │                       │
+│  │  │  Scanner HTTP Rust (port 3006)     │  │                       │
 │  │  │                                    │  │                       │
 │  │  │  Container observé (image scannée) │  │                       │
 │  │  └────────────────────────────────────┘  │                       │
@@ -267,15 +267,15 @@ cargo run --release -- nginx:alpine --docker
 cargo run --release -- --server &
 
 # Healthcheck
-curl http://localhost:8080/health
+curl http://localhost:3006/health
 
 # Scan mode VM
-curl -X POST http://localhost:8080/scan \
+curl -X POST http://localhost:3006/scan \
   -H "Content-Type: application/json" \
   -d '{"image": "nginx:alpine", "mode": "vm"}'
 
 # Scan mode Docker
-curl -X POST http://localhost:8080/scan \
+curl -X POST http://localhost:3006/scan \
   -H "Content-Type: application/json" \
   -d '{"image": "nginx:alpine", "mode": "docker"}'
 ```
@@ -348,15 +348,15 @@ docker images | grep dockdockgo   # taille image
 
 ```bash
 # Healthcheck
-curl http://localhost:8080/health
+curl http://localhost:3006/health
 
 # Scan mode Docker (via le container)
-curl -X POST http://localhost:8080/scan \
+curl -X POST http://localhost:3006/scan \
   -H "Content-Type: application/json" \
   -d '{"image": "nginx:alpine", "mode": "docker"}'
 
 # Scan mode VM (depuis le container, ~30-45s)
-curl --max-time 120 -X POST http://localhost:8080/scan \
+curl --max-time 120 -X POST http://localhost:3006/scan \
   -H "Content-Type: application/json" \
   -d '{"image": "dockdockgo-evil", "mode": "vm"}'
 ```
@@ -404,7 +404,7 @@ def scan_docker_image(image: str, mode: str = "vm") -> dict:
         dict avec score, verdict, allowed, critical, rule_counts, details
     """
     response = requests.post(
-        "http://localhost:8080/scan",
+        "http://localhost:3006/scan",
         json={"image": image, "mode": mode},
         timeout=120,
     )
@@ -530,12 +530,12 @@ L'hôte n'est pas touché. L'isolation Firecracker est prouvée.
 
 ```bash
 # CLEAN depuis le container
-curl -X POST http://localhost:8080/scan \
+curl -X POST http://localhost:3006/scan \
   -d '{"image":"nginx:alpine","mode":"docker"}'
 # → score: 0, verdict: CLEAN, allowed: true
 
 # CRITICAL depuis le container (mode VM)
-curl -X POST http://localhost:8080/scan \
+curl -X POST http://localhost:3006/scan \
   -d '{"image":"dockdockgo-evil","mode":"vm"}'
 # → score: 100, verdict: CRITICAL, allowed: false
 ```

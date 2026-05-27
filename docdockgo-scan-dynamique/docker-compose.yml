@@ -19,7 +19,7 @@ version: '3.8'
 #
 # Usage :
 #   docker-compose up -d
-#   curl -X POST http://localhost:8080/scan \
+#   curl -X POST http://localhost:3006/scan \
 #     -H "Content-Type: application/json" \
 #     -d '{"image": "nginx:alpine", "mode": "docker"}'
 # ═══════════════════════════════════════════════════════════════

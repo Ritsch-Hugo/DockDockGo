@@ -2,7 +2,7 @@
 # Dockerfile — DockDockGo Scanner v1.1
 #
 # Modes :
-#   - API HTTP : ddg-scanner --server (port 8080, défaut)
+#   - API HTTP : ddg-scanner --server (port 3006, défaut)
 #   - CLI : ddg-scanner <image> --docker
 #
 # Le scanner cherche scan_vm.sh dans :
@@ -87,9 +87,9 @@ RUN chmod +x ./scan_vm.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -fsS http://localhost:8080/health || exit 1
+    CMD curl -fsS http://localhost:3006/health || exit 1
 
-EXPOSE 8080
+EXPOSE 3006
 
 ENTRYPOINT ["/usr/local/bin/ddg-scanner"]
 CMD ["--server"]
