@@ -34,36 +34,31 @@ fn default_mode() -> String { "vm".to_string() }
 
 #[derive(Serialize, Deserialize, Clone)]
 struct ScanResponse {
-    image:    String,
-    score:    u32,
-    critical: bool,
-    verdict:  String,
-    allowed:  bool,
-    mode:     String,
-    /// Compteur par règle pour transparence du scoring
+    image:       String,
+    score:       u32,
+    critical:    bool,
+    verdict:     String,
+    allowed:     bool,
+    mode:        String,
     rule_counts: HashMap<String, u32>,
-    details:  Vec<String>,
+    details:     Vec<String>,
 }
 
 // ─────────────────────────────────────────────
 // VÉRIFICATION BINAIRE DANS LE ROOTFS
 //
-// Compare le hash MD5 du binaire courant (musl) avec celui
-// embarqué dans le rootfs Firecracker.
-// Si différents → le mode VM utilisera une ancienne version
-// du scanner, ce qui peut causer des comportements inattendus
-// (mauvais port, fonctionnalités manquantes, etc.)
+// Compare le hash MD5 du binaire courant avec celui
+// embarqué dans le rootfs Firecracker via mount loop.
 //
-// Pour mettre à jour le rootfs :
-//   cargo build --release --target x86_64-unknown-linux-musl
-//   sudo mkdir -p /tmp/ddg-mount
-//   sudo mount -o loop /opt/firecracker/ddg-rootfs.ext4 /tmp/ddg-mount
-//   sudo cp target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique \
-//       /tmp/ddg-mount/usr/local/bin/ddg-scanner
-//   sudo umount /tmp/ddg-mount && sudo rmdir /tmp/ddg-mount
+// Logique de sélection du binaire de référence :
+//   1. /usr/local/bin/ddg-scanner  (si on est dans le container Docker)
+//   2. target/x86_64-unknown-linux-musl/release/...  (si on est sur l'hôte)
+//
+// Utilise un chemin de mount unique (timestamp) pour éviter
+// tout conflit avec un mount précédent qui aurait mal été nettoyé.
 // ─────────────────────────────────────────────
 
-/// Calcule le hash MD5 d'un fichier via la commande md5sum.
+/// Calcule le hash MD5 d'un fichier via md5sum.
 /// Retourne None si le fichier est inaccessible.
 fn md5_of_file(path: &str) -> Option<String> {
     let output = Command::new("md5sum")
@@ -71,28 +66,41 @@ fn md5_of_file(path: &str) -> Option<String> {
         .output()
         .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // md5sum retourne "<hash>  <path>"
     stdout.split_whitespace().next().map(|s| s.to_string())
 }
 
-/// Vérifie si le binaire dans le rootfs est à jour.
-/// Monte le rootfs en lecture seule, compare les hashs, démonte.
-/// Ne bloque pas le démarrage — affiche juste un avertissement.
+/// Vérifie si le binaire dans le rootfs Firecracker est à jour.
+/// Monte le rootfs en lecture seule, compare les hashs MD5, démonte.
+/// Affiche un avertissement avec la commande exacte si obsolète.
+/// Ne bloque pas le démarrage en cas d'erreur.
 fn check_rootfs_binary_version() {
     let rootfs = "/opt/firecracker/ddg-rootfs.ext4";
-    let current_binary = if Path::new("/usr/local/bin/ddg-scanner").exists() {
-    "/usr/local/bin/ddg-scanner"
-} else {
-    "target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique"};
-    let mount_point    = "/tmp/ddg-check-mount";
-    let binary_in_vm   = format!("{}/usr/local/bin/ddg-scanner", mount_point);
 
-    // Si le rootfs n'existe pas, on ne fait rien (déjà signalé par check_environment)
+    // Chemin unique avec timestamp pour éviter conflits entre runs
+    let mount_point = format!(
+        "/tmp/ddg-check-{}",
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
+    let binary_in_vm = format!("{}/usr/local/bin/ddg-scanner", mount_point);
+
+    // Binaire de référence :
+    //   - dans le container Docker : /usr/local/bin/ddg-scanner
+    //   - sur l'hôte : binaire musl compilé localement
+    let current_binary = if Path::new("/usr/local/bin/ddg-scanner").exists() {
+        "/usr/local/bin/ddg-scanner"
+    } else {
+        "target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique"
+    };
+
+    // Rootfs absent → déjà signalé par check_environment()
     if !Path::new(rootfs).exists() {
         return;
     }
 
-    // Si le binaire courant n'existe pas (pas encore compilé en musl)
+    // Binaire de référence absent
     if !Path::new(current_binary).exists() {
         println!("[!] Binaire musl absent ({}) — impossible de vérifier", current_binary);
         println!("    Compilez avec : cargo build --release --target x86_64-unknown-linux-musl");
@@ -101,34 +109,33 @@ fn check_rootfs_binary_version() {
 
     let hash_current = match md5_of_file(current_binary) {
         Some(h) => h,
-        None    => {
+        None => {
             println!("[!] Impossible de calculer le hash du binaire courant");
             return;
         }
     };
 
-    // Monte le rootfs en lecture seule pour extraire le hash
-    let _ = std::fs::create_dir_all(mount_point);
+    // Crée le point de montage temporaire
+    let _ = std::fs::create_dir_all(&mount_point);
 
+    // Monte le rootfs en lecture seule
     let mount_ok = Command::new("sudo")
-        .args(["mount", "-o", "loop,ro", rootfs, mount_point])
-        .status()
-        .map(|s| s.success())
+        .args(["mount", "-o", "loop,ro", rootfs, &mount_point])
+        .output()
+        .map(|o| o.status.success())
         .unwrap_or(false);
 
     if !mount_ok {
-        // Pas root ou rootfs occupé — skip silencieux
-        let _ = std::fs::remove_dir(mount_point);
+        // Pas root, device busy, ou autre erreur → skip silencieux
+        let _ = std::fs::remove_dir(&mount_point);
         return;
     }
 
     let hash_rootfs = md5_of_file(&binary_in_vm);
 
-    // Démonte proprement
-    let _ = Command::new("sudo")
-        .args(["umount", mount_point])
-        .status();
-    let _ = std::fs::remove_dir(mount_point);
+    // Démonte proprement dans tous les cas
+    let _ = Command::new("sudo").args(["umount", &mount_point]).status();
+    let _ = std::fs::remove_dir(&mount_point);
 
     match hash_rootfs {
         Some(h) if h == hash_current => {
@@ -223,7 +230,7 @@ async fn run_scan_firecracker(image: &str) -> Result<ScanResponse> {
 }
 
 fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
-    // Strip ANSI codes et caractères non-ASCII
+    // Strip codes ANSI avant parsing JSON
     let clean: String = output
         .lines()
         .map(|line| {
@@ -254,7 +261,7 @@ fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
         }
     }
 
-    // Fallback : cherche le JSON entre { et }
+    // Fallback : cherche entre { et }
     if let Some(start) = clean.find('{') {
         if let Some(end) = clean.rfind('}') {
             let json_str = &clean[start..=end];
@@ -276,13 +283,11 @@ fn find_script(name: &str) -> Result<String> {
         format!("/opt/firecracker/{}", name),
         format!("/home/{}/{}", std::env::var("USER").unwrap_or_default(), name),
     ];
-
     for path in &candidates {
         if Path::new(path).exists() {
             return Ok(path.clone());
         }
     }
-
     anyhow::bail!("Script '{}' introuvable.", name)
 }
 
@@ -309,7 +314,6 @@ async fn run_scan_docker(image: &str) -> Result<ScanResponse> {
 
     let (max_rt, warmup, inactivity) = estimate_timeouts(&docker, image).await;
 
-    // Vide les logs
     let _ = std::fs::write("/var/log/falco.log", "");
     let start_time = SystemTime::now();
 
@@ -325,8 +329,7 @@ async fn run_scan_docker(image: &str) -> Result<ScanResponse> {
 
     monitor_container(&docker, &container_name, max_rt, warmup, inactivity).await;
 
-    let logs = std::fs::read_to_string("/var/log/falco.log")
-        .unwrap_or_default();
+    let logs = std::fs::read_to_string("/var/log/falco.log").unwrap_or_default();
 
     let (score, critical, rule_counts, details) =
         analyze_logs(&logs, start_time, &container_name, &container_id);
@@ -353,7 +356,7 @@ async fn run_scan_docker(image: &str) -> Result<ScanResponse> {
 async fn run_scan_pipeline(image: &str, mode: &str) -> Result<ScanResponse> {
     match mode {
         "docker" => run_scan_docker(image).await,
-        _        => {
+        _ => {
             if Path::new("/usr/local/bin/firecracker").exists()
             && Path::new("/opt/firecracker/ddg-rootfs.ext4").exists() {
                 run_scan_firecracker(image).await
@@ -369,21 +372,21 @@ async fn run_scan_pipeline(image: &str, mode: &str) -> Result<ScanResponse> {
 // SCORING
 // ─────────────────────────────────────────────
 fn base_score_for_rule(rule: &str) -> u32 {
-    if rule.contains("System File Modification")    { return 70; }
-    if rule.contains("Fork Bomb")                   { return 65; }
-    if rule.contains("Privilege Escalation")        { return 60; }
-    if rule.contains("Container Escape")            { return 75; }
-    if rule.contains("Sensitive File Access")       { return 45; }
-    if rule.contains("Read sensitive file")         { return 40; }
-    if rule.contains("Mount")                       { return 35; }
-    if rule.contains("Crypto")                      { return 50; }
-    if rule.contains("Reverse Shell")               { return 70; }
-    if rule.contains("Clear Log")                   { return 55; }
-    if rule.contains("Outbound")                    { return 25; }
-    if rule.contains("Suspicious Network")          { return 30; }
-    if rule.contains("Package Management")          { return 20; }
-    if rule.contains("Shell Spawn")                 { return 15; }
-    if rule.contains("Process")                     { return 12; }
+    if rule.contains("System File Modification")  { return 70; }
+    if rule.contains("Fork Bomb")                 { return 65; }
+    if rule.contains("Privilege Escalation")      { return 60; }
+    if rule.contains("Container Escape")          { return 75; }
+    if rule.contains("Sensitive File Access")     { return 45; }
+    if rule.contains("Read sensitive file")       { return 40; }
+    if rule.contains("Mount")                     { return 35; }
+    if rule.contains("Crypto")                    { return 50; }
+    if rule.contains("Reverse Shell")             { return 70; }
+    if rule.contains("Clear Log")                 { return 55; }
+    if rule.contains("Outbound")                  { return 25; }
+    if rule.contains("Suspicious Network")        { return 30; }
+    if rule.contains("Package Management")        { return 20; }
+    if rule.contains("Shell Spawn")               { return 15; }
+    if rule.contains("Process")                   { return 12; }
     10
 }
 
@@ -448,25 +451,15 @@ fn analyze_logs(
 
         if let Some(rule) = json["rule"].as_str() {
             *counters.entry(rule.to_string()).or_insert(0) += 1;
-
-            if is_critical_rule(rule) {
-                critical = true;
-            }
-
+            if is_critical_rule(rule) { critical = true; }
             let entry = details.entry(rule.to_string()).or_default();
-            if entry.len() < 5 {
-                entry.push(output.to_string());
-            }
+            if entry.len() < 5 { entry.push(output.to_string()); }
         }
     }
 
     for (rule, &count) in &counters {
         let base       = base_score_for_rule(rule) as f32;
-        let freq_bonus = if count > 1 {
-            (count as f32).log2() * 5.0
-        } else {
-            0.0
-        };
+        let freq_bonus = if count > 1 { (count as f32).log2() * 5.0 } else { 0.0 };
         total_score += base + freq_bonus.min(20.0);
     }
 
@@ -479,11 +472,7 @@ fn analyze_logs(
     sorted.sort_by(|a, b| b.1.cmp(a.1));
     for (rule, count) in &sorted {
         let base       = base_score_for_rule(rule) as f32;
-        let freq_bonus = if **count > 1 {
-            (**count as f32).log2() * 5.0
-        } else {
-            0.0
-        };
+        let freq_bonus = if **count > 1 { (**count as f32).log2() * 5.0 } else { 0.0 };
         let rule_score = base + freq_bonus.min(20.0);
         println!("[!] {:<42} × {:>4}   +{:>5.1}", rule, count, rule_score);
     }
@@ -505,19 +494,13 @@ async fn estimate_timeouts(
         Ok(info) => info.size.unwrap_or(0) as u64 / (1024 * 1024),
         Err(_)   => 200,
     };
-
     let (max_s, warm_s, inact_s) = match size_mb {
         0..=100    => (120,  5, 10),
         101..=500  => (240, 15, 20),
         501..=1024 => (360, 30, 25),
         _          => (600, 60, 30),
     };
-
-    (
-        Duration::from_secs(max_s),
-        Duration::from_secs(warm_s),
-        Duration::from_secs(inact_s),
-    )
+    (Duration::from_secs(max_s), Duration::from_secs(warm_s), Duration::from_secs(inact_s))
 }
 
 // ─────────────────────────────────────────────
@@ -564,9 +547,7 @@ async fn monitor_container(
             println!("[~] Activité Falco +{} octets", cur - last_log_size);
             last_log_size = cur;
             last_activity = Instant::now();
-            if state != MonitorState::Watching {
-                state = MonitorState::Watching;
-            }
+            if state != MonitorState::Watching { state = MonitorState::Watching; }
         }
 
         match state {
@@ -642,14 +623,14 @@ async fn handle_scan(Json(req): Json<ScanRequest>) -> Json<ScanResponse> {
         Err(e) => {
             println!("[HTTP] ❌ Erreur : {}", e);
             Json(ScanResponse {
-                image:    req.image,
-                score:    100,
-                critical: true,
-                verdict:  "ERROR".to_string(),
-                allowed:  false,
-                mode:     req.mode,
+                image:       req.image,
+                score:       100,
+                critical:    true,
+                verdict:     "ERROR".to_string(),
+                allowed:     false,
+                mode:        req.mode,
                 rule_counts: HashMap::new(),
-                details:  vec![format!("Erreur : {}", e)],
+                details:     vec![format!("Erreur : {}", e)],
             })
         }
     }
@@ -667,7 +648,6 @@ async fn start_api_server() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
-
     Ok(())
 }
 
