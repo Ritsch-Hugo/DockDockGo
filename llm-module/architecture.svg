@@ -1,176 +1,154 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 790">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 730" width="960" height="730">
 <defs>
-  <marker id="a0" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#64748b"/></marker>
-  <marker id="a1" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#1d4ed8"/></marker>
-  <marker id="a2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#7c3aed"/></marker>
-  <marker id="a3" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#16a34a"/></marker>
-  <marker id="a4" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#ea580c"/></marker>
-  <marker id="a5" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#d97706"/></marker>
-  <marker id="a6" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
+  <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#374151"/></marker>
+  <marker id="arr-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#0369a1"/></marker>
+  <marker id="arr-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#7c3aed"/></marker>
+  <marker id="arr-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#c2410c"/></marker>
+  <marker id="arr-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#991b1b"/></marker>
 </defs>
 
-<!-- Fond -->
-<rect width="960" height="790" fill="#f8fafc" rx="10"/>
+<!-- Background -->
+<rect width="960" height="730" fill="#f8fafc" rx="10"/>
 
-<!-- Titre -->
-<text x="480" y="26" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" font-weight="700" fill="#0f172a">DocDockGo — Architecture</text>
+<!-- Title -->
+<text x="480" y="24" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#0f172a">Architecture llm-module — DocDockGo</text>
 
-<!-- ═══════════════════════════════════════════════════
-     DOCKER CLIENT
-════════════════════════════════════════════════════ -->
-<rect x="365" y="42" width="190" height="40" rx="7" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
-<text x="460" y="59" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#1e3a8a">Docker Client</text>
-<text x="460" y="74" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#3b82f6">docker pull image:tag</text>
+<!-- ===================== ORCHESTRATEUR ===================== -->
+<rect x="330" y="36" width="240" height="57" rx="8" fill="#475569" stroke="#334155" stroke-width="1.5"/>
+<text x="450" y="59" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#f1f5f9">Orchestrateur</text>
+<text x="450" y="76" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#94a3b8">port 3000 · POST /v1/decision (caller)</text>
 
-<!-- ARROW: Docker Client → Proxy -->
-<line x1="460" y1="82" x2="460" y2="126" stroke="#64748b" stroke-width="1.5" marker-end="url(#a0)"/>
+<!-- ===================== LLM-DECISION ===================== -->
+<rect x="75" y="155" width="315" height="148" rx="8" fill="#1d4ed8" stroke="#1e40af" stroke-width="1.5"/>
+<text x="232" y="179" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#ffffff">llm-decision</text>
+<text x="232" y="196" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bfdbfe">port 3005 · POST /v1/decision</text>
+<line x1="90" y1="202" x2="375" y2="202" stroke="#3b82f6" stroke-width="0.8"/>
+<text x="232" y="218" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#93c5fd">Phase 1 — Décision · tool calling workers + arbitre</text>
+<text x="232" y="234" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#93c5fd">Phase 2 — Exécution · MCP JSON-RPC 2.0</text>
+<text x="232" y="250" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#93c5fd">Phase 3a — Analyse · workers + arbitre</text>
+<text x="232" y="266" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#93c5fd">Phase 3b — Alternatives · si verdict DENY</text>
+<text x="232" y="286" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#dbeafe">↳ FinalReport JSON retourné à l'orchestrateur</text>
 
-<!-- ═══════════════════════════════════════════════════
-     PROXY DOCKER
-════════════════════════════════════════════════════ -->
-<rect x="348" y="128" width="224" height="40" rx="7" fill="#e2e8f0" stroke="#475569" stroke-width="1.5"/>
-<text x="460" y="145" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#1e293b">Proxy Docker</text>
-<text x="460" y="161" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#64748b">intercepte les pulls · stocke en quarantaine</text>
+<!-- ===================== LLM-MANAGER ===================== -->
+<rect x="525" y="155" width="250" height="107" rx="8" fill="#0369a1" stroke="#075985" stroke-width="1.5"/>
+<text x="650" y="179" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#ffffff">llm-manager</text>
+<text x="650" y="196" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#bae6fd">port 3003</text>
+<line x1="538" y1="202" x2="762" y2="202" stroke="#0ea5e9" stroke-width="0.8"/>
+<text x="650" y="220" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#7dd3fc">Valide la disponibilité</text>
+<text x="650" y="236" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#7dd3fc">des modèles LLM au démarrage</text>
+<text x="650" y="253" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#bae6fd">GET /health · GET /models</text>
 
-<!-- ARROW: Proxy → Orchestrateur (notifie) -->
-<line x1="446" y1="168" x2="424" y2="220" stroke="#64748b" stroke-width="1.5" marker-end="url(#a0)"/>
-<!-- ARROW: Orchestrateur → Proxy (ALLOW/DENY) -->
-<line x1="472" y1="220" x2="476" y2="168" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#a1)" stroke-dasharray="3,2"/>
-<text x="428" y="198" text-anchor="end" font-family="Arial,sans-serif" font-size="9" fill="#475569">notifie pull</text>
-<text x="495" y="198" text-anchor="start" font-family="Arial,sans-serif" font-size="9" fill="#1d4ed8">ALLOW/DENY</text>
+<!-- ===================== OPENROUTER ===================== -->
+<rect x="468" y="330" width="468" height="225" rx="12" fill="#faf5ff" stroke="#7c3aed" stroke-width="2" stroke-dasharray="8,4"/>
+<text x="702" y="353" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#6d28d9">OpenRouter API</text>
+<text x="702" y="370" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#8b5cf6">openrouter.ai · API OpenAI-compatible · temperature=0 · require_parameters=true</text>
 
-<!-- ARROW: Proxy → Quarantaine (écrit artefacts) -->
-<path d="M572,148 Q668,138 753,188" stroke="#d97706" stroke-width="1.5" fill="none" marker-end="url(#a5)" stroke-dasharray="5,3"/>
-<text x="666" y="134" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#b45309">écrit artefacts OCI</text>
+<!-- Worker 1 -->
+<rect x="480" y="380" width="208" height="44" rx="6" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1"/>
+<text x="584" y="398" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="bold" fill="#5b21b6">Worker 1</text>
+<text x="584" y="415" text-anchor="middle" font-family="monospace" font-size="9" fill="#7c3aed">minimax/minimax-m2.7</text>
 
-<!-- ═══════════════════════════════════════════════════
-     QUARANTAINE (storage, panneau droit)
-════════════════════════════════════════════════════ -->
-<rect x="753" y="112" width="172" height="310" rx="7" fill="#fef9c3" stroke="#d97706" stroke-width="1.5"/>
-<text x="839" y="132" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#92400e">Quarantaine</text>
-<text x="839" y="148" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">filesystem partagé</text>
-<line x1="758" y1="156" x2="920" y2="156" stroke="#d97706" stroke-width="0.6" opacity="0.5"/>
-<text x="839" y="172" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#92400e">{registry}/{repo}/{tag}/</text>
-<text x="839" y="188" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">├─ manifests/</text>
-<text x="839" y="204" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">├─ blobs/sha256/</text>
-<text x="839" y="220" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">├─ referrers/</text>
-<text x="839" y="236" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">└─ sbom.json</text>
-<line x1="758" y1="246" x2="920" y2="246" stroke="#d97706" stroke-width="0.6" opacity="0.5"/>
-<text x="839" y="264" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#92400e">Accès :</text>
-<text x="839" y="280" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">Proxy → écrit</text>
-<text x="839" y="296" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">llm-decision → lit</text>
-<text x="839" y="312" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#b45309">mcp-tools-server → lit</text>
+<!-- Worker 2 -->
+<rect x="703" y="380" width="218" height="44" rx="6" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1"/>
+<text x="812" y="398" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="bold" fill="#5b21b6">Worker 2</text>
+<text x="812" y="415" text-anchor="middle" font-family="monospace" font-size="9" fill="#7c3aed">qwen/qwen3.5-35b-a3b</text>
 
-<!-- ═══════════════════════════════════════════════════
-     ORCHESTRATEUR
-════════════════════════════════════════════════════ -->
-<rect x="282" y="222" width="308" height="52" rx="7" fill="#bfdbfe" stroke="#1d4ed8" stroke-width="1.5"/>
-<text x="436" y="243" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#1e3a8a">Orchestrateur</text>
-<text x="436" y="261" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#1d4ed8">:3000  ·  POST /v1/decision  ·  ALLOW / DENY / PENDING</text>
+<!-- Worker 3 -->
+<rect x="480" y="436" width="208" height="44" rx="6" fill="#ede9fe" stroke="#8b5cf6" stroke-width="1"/>
+<text x="584" y="454" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="bold" fill="#5b21b6">Worker 3</text>
+<text x="584" y="471" text-anchor="middle" font-family="monospace" font-size="9" fill="#7c3aed">google/gemma-4-31b-it</text>
 
-<!-- ARROW: Orchestrateur → Module HN (dashed, non intégré) -->
-<path d="M282,252 L238,343" stroke="#94a3b8" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#a6)"/>
-<text x="244" y="303" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#94a3b8">HEAD · réputation</text>
-
-<!-- ARROW: Orchestrateur → llm-decision -->
-<line x1="472" y1="274" x2="472" y2="332" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#a1)"/>
-<!-- ARROW: llm-decision → Orchestrateur (ScanDecision) -->
-<line x1="490" y1="332" x2="490" y2="275" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#a2)" stroke-dasharray="3,2"/>
-<text x="510" y="307" text-anchor="start" font-family="Arial,sans-serif" font-size="9" fill="#1d4ed8">POST PullContext</text>
-<text x="453" y="307" text-anchor="end" font-family="Arial,sans-serif" font-size="9" fill="#7c3aed">ScanDecision</text>
-
-<!-- ═══════════════════════════════════════════════════
-     MODULE HAUT NIVEAU (non intégré)
-════════════════════════════════════════════════════ -->
-<rect x="12" y="345" width="224" height="58" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,3"/>
-<text x="124" y="366" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#64748b">Module Haut Niveau</text>
-<text x="124" y="382" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#94a3b8">:4000  ·  réputation / popularité</text>
-<text x="124" y="396" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#ef4444">non encore intégré</text>
-
-<!-- ═══════════════════════════════════════════════════
-     LLM-DECISION
-════════════════════════════════════════════════════ -->
-<rect x="332" y="332" width="304" height="110" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
-<text x="484" y="352" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#4c1d95">llm-decision  :3005</text>
-<text x="484" y="368" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#6d28d9">Phase 1 : décision LLM  ·  Phase 2 : scans MCP</text>
-<!-- Workers -->
-<rect x="342" y="378" width="72" height="22" rx="4" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="1"/>
-<text x="378" y="393" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#4c1d95">Worker 1</text>
-<rect x="422" y="378" width="72" height="22" rx="4" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="1"/>
-<text x="458" y="393" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#4c1d95">Worker 2</text>
-<rect x="502" y="378" width="72" height="22" rx="4" fill="#ddd6fe" stroke="#8b5cf6" stroke-width="1"/>
-<text x="538" y="393" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#4c1d95">Worker 3</text>
 <!-- Arbitre -->
-<rect x="412" y="408" width="95" height="22" rx="4" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1"/>
-<text x="460" y="423" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="#3b0764">Arbitre</text>
+<rect x="703" y="436" width="218" height="44" rx="6" fill="#ddd6fe" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="812" y="454" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="bold" fill="#4c1d95">Arbitre</text>
+<text x="812" y="471" text-anchor="middle" font-family="monospace" font-size="9" fill="#6d28d9">mistralai/mistral-small-2603</text>
 
-<!-- ARROW: llm-decision → Quarantaine (lit artefacts) -->
-<path d="M636,362 Q710,338 751,265" stroke="#d97706" stroke-width="1.5" fill="none" marker-end="url(#a5)" stroke-dasharray="4,2"/>
-<text x="716" y="318" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#b45309">lit artefacts</text>
+<text x="702" y="504" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b5cf6">4 familles distinctes · workers exécutés en parallèle (tokio::join!)</text>
+<text x="702" y="518" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b5cf6">tool_choice: required · fail-safe si 2+ workers échouent → HTTP 503</text>
+<text x="702" y="533" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#8b5cf6">MiniMax MoE · Qwen thinking · Gemma dense · Mistral reasoning</text>
 
-<!-- ═══════════════════════════════════════════════════
-     LLM-MANAGER
-════════════════════════════════════════════════════ -->
-<rect x="178" y="505" width="212" height="46" rx="7" fill="#f3f0ff" stroke="#8b5cf6" stroke-width="1.5"/>
-<text x="284" y="525" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#4c1d95">llm-manager</text>
-<text x="284" y="542" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#7c3aed">:3003  ·  valide modèles disponibles</text>
+<!-- ===================== MCP-TOOLS-SERVER ===================== -->
+<rect x="75" y="390" width="315" height="95" rx="8" fill="#c2410c" stroke="#9a3412" stroke-width="1.5"/>
+<text x="232" y="415" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#ffffff">mcp-tools-server</text>
+<text x="232" y="433" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fed7aa">port 3004 · POST /mcp</text>
+<line x1="88" y1="440" x2="377" y2="440" stroke="#ea580c" stroke-width="0.8"/>
+<text x="232" y="456" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fdba74">run_static_scan · run_compliance_scan · run_dynamic_scan</text>
+<text x="232" y="472" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fdba74">JSON-RPC 2.0 stateless · rate limiting MAX_CONCURRENT_SCANS</text>
 
-<!-- ARROW: llm-decision → llm-manager -->
-<path d="M400,442 L345,503" stroke="#8b5cf6" stroke-width="1.5" fill="none" marker-end="url(#a2)"/>
-<text x="354" y="479" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#7c3aed">attend démarrage</text>
+<!-- ===================== SCANNERS ===================== -->
+<!-- scanner-cve -->
+<rect x="18" y="564" width="188" height="82" rx="8" fill="#991b1b" stroke="#7f1d1d" stroke-width="1.5"/>
+<text x="112" y="588" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#ffffff">scanner-cve</text>
+<text x="112" y="605" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fca5a5">port 3002 · Trivy</text>
+<text x="112" y="621" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#fca5a5">POST /v1/scan-upload</text>
+<text x="112" y="637" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#fca5a5">(multipart)</text>
 
-<!-- ═══════════════════════════════════════════════════
-     vLLM
-════════════════════════════════════════════════════ -->
-<rect x="566" y="505" width="196" height="46" rx="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
-<text x="664" y="525" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#14532d">vLLM  :8000</text>
-<text x="664" y="542" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#16a34a">Qwen3.5-4B-AWQ-4bit</text>
+<!-- scanner-compliance -->
+<rect x="218" y="564" width="215" height="82" rx="8" fill="#991b1b" stroke="#7f1d1d" stroke-width="1.5"/>
+<text x="325" y="588" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#ffffff">scanner-compliance</text>
+<text x="325" y="605" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fca5a5">port 3001</text>
+<text x="325" y="621" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#fca5a5">POST /v1/scan</text>
+<text x="325" y="637" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#fca5a5">(JSON)</text>
 
-<!-- ARROW: llm-decision → vLLM (tool calls workers + arbitre) -->
-<path d="M590,415 Q648,465 646,503" stroke="#16a34a" stroke-width="1.5" fill="none" marker-end="url(#a3)"/>
-<text x="648" y="456" text-anchor="start" font-family="Arial,sans-serif" font-size="9" fill="#16a34a">/v1/chat/completions</text>
-<text x="648" y="468" text-anchor="start" font-family="Arial,sans-serif" font-size="9" fill="#16a34a">tool_choice: required</text>
+<!-- scanner-dynamique -->
+<rect x="448" y="564" width="215" height="82" rx="8" fill="#991b1b" stroke="#7f1d1d" stroke-width="1.5"/>
+<text x="555" y="588" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#ffffff">scanner-dynamique</text>
+<text x="555" y="605" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fca5a5">port 3006 · Falco modern_ebpf</text>
+<text x="555" y="621" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#fca5a5">POST /scan</text>
+<text x="555" y="637" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#fca5a5">(JSON)</text>
 
-<!-- ARROW: llm-manager → vLLM -->
-<line x1="390" y1="528" x2="564" y2="528" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#a2)"/>
-<text x="477" y="522" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#7c3aed">health · /v1/models</text>
+<!-- ===================== ARROWS ===================== -->
 
-<!-- ═══════════════════════════════════════════════════
-     MCP-TOOLS-SERVER
-════════════════════════════════════════════════════ -->
-<rect x="318" y="618" width="254" height="46" rx="7" fill="#ffedd5" stroke="#ea580c" stroke-width="1.5"/>
-<text x="445" y="638" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#7c2d12">mcp-tools-server</text>
-<text x="445" y="655" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#ea580c">:3004  ·  MCP JSON-RPC 2.0</text>
+<!-- 1. Orchestrateur → llm-decision (elbow) -->
+<path d="M 450 93 L 450 138 L 232 138 L 232 155" stroke="#374151" stroke-width="1.8" fill="none" marker-end="url(#arr)"/>
+<rect x="318" y="122" width="168" height="15" rx="3" fill="#f1f5f9" opacity="0.92"/>
+<text x="402" y="133" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#374151">POST /v1/decision</text>
 
-<!-- ARROW: llm-decision → mcp-tools-server (passe entre les deux boxes) -->
-<path d="M484,442 Q484,578 445,616" stroke="#ea580c" stroke-width="1.5" fill="none" marker-end="url(#a4)"/>
-<text x="504" y="530" text-anchor="start" font-family="Arial,sans-serif" font-size="9" fill="#ea580c">run_static_scan</text>
-<text x="504" y="542" text-anchor="start" font-family="Arial,sans-serif" font-size="9" fill="#ea580c">run_compliance_scan</text>
+<!-- 2. llm-decision ↔ llm-manager (health check, dashed) -->
+<path d="M 390 210 L 525 205" stroke="#0369a1" stroke-width="1.8" fill="none" marker-end="url(#arr-blue)" stroke-dasharray="5,3"/>
+<rect x="404" y="193" width="108" height="14" rx="3" fill="#f0f9ff" opacity="0.95"/>
+<text x="458" y="204" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#0369a1">health (startup)</text>
 
-<!-- ARROW: mcp-tools-server → Quarantaine (lit fichiers) -->
-<path d="M572,636 Q695,600 751,385" stroke="#d97706" stroke-width="1" fill="none" marker-end="url(#a5)" stroke-dasharray="4,2"/>
-<text x="686" y="572" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#b45309">lit fichiers</text>
+<!-- 3. llm-decision → OpenRouter (tool calling, elbow right then down) -->
+<path d="M 390 245 L 445 245 L 445 445 L 468 445" stroke="#7c3aed" stroke-width="1.8" fill="none" marker-end="url(#arr-purple)"/>
+<rect x="398" y="315" width="118" height="30" rx="3" fill="#f5f3ff" opacity="0.95"/>
+<text x="457" y="328" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6d28d9">tool calling</text>
+<text x="457" y="340" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6d28d9">phases 1 · 3a · 3b</text>
 
-<!-- ═══════════════════════════════════════════════════
-     SCANNER CVE
-════════════════════════════════════════════════════ -->
-<rect x="130" y="726" width="196" height="46" rx="7" fill="#fff7ed" stroke="#f97316" stroke-width="1.5"/>
-<text x="228" y="746" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#7c2d12">Scanner CVE</text>
-<text x="228" y="762" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#ea580c">:3002  ·  Trivy (image Docker)</text>
+<!-- 4. llm-manager → OpenRouter (vertical) -->
+<path d="M 650 262 L 650 330" stroke="#7c3aed" stroke-width="1.8" fill="none" marker-end="url(#arr-purple)"/>
+<rect x="656" y="282" width="98" height="14" rx="3" fill="#f5f3ff" opacity="0.95"/>
+<text x="705" y="293" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#6d28d9">GET /v1/models</text>
 
-<!-- ARROW: mcp-tools-server → Scanner CVE -->
-<path d="M368,664 L288,724" stroke="#f97316" stroke-width="1.5" fill="none" marker-end="url(#a4)"/>
-<text x="305" y="701" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#ea580c">POST multipart</text>
+<!-- 5. llm-decision → mcp-tools-server (vertical) -->
+<path d="M 232 303 L 232 390" stroke="#c2410c" stroke-width="1.8" fill="none" marker-end="url(#arr-orange)"/>
+<rect x="238" y="333" width="122" height="28" rx="3" fill="#fff7ed" opacity="0.95"/>
+<text x="299" y="345" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#c2410c">MCP JSON-RPC 2.0</text>
+<text x="299" y="357" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#c2410c">phase 2</text>
 
-<!-- ═══════════════════════════════════════════════════
-     SCANNER COMPLIANCE
-════════════════════════════════════════════════════ -->
-<rect x="502" y="726" width="222" height="46" rx="7" fill="#fff7ed" stroke="#f97316" stroke-width="1.5"/>
-<text x="613" y="746" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="700" fill="#7c2d12">Scanner Compliance</text>
-<text x="613" y="762" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" fill="#ea580c">:3001  ·  règles sécurité (image Docker)</text>
+<!-- 6. mcp → scanner-cve (elbow left) -->
+<path d="M 142 485 L 142 532 L 112 532 L 112 564" stroke="#991b1b" stroke-width="1.5" fill="none" marker-end="url(#arr-red)"/>
 
-<!-- ARROW: mcp-tools-server → Scanner Compliance -->
-<path d="M522,664 L574,724" stroke="#f97316" stroke-width="1.5" fill="none" marker-end="url(#a4)"/>
-<text x="574" y="701" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#ea580c">POST JSON</text>
+<!-- 7. mcp → scanner-compliance (elbow right) -->
+<path d="M 245 485 L 245 532 L 325 532 L 325 564" stroke="#991b1b" stroke-width="1.5" fill="none" marker-end="url(#arr-red)"/>
+
+<!-- 8. mcp → scanner-dynamique (elbow far right) -->
+<path d="M 325 485 L 325 544 L 555 544 L 555 564" stroke="#991b1b" stroke-width="1.5" fill="none" marker-end="url(#arr-red)"/>
+
+<!-- ===================== LEGEND ===================== -->
+<rect x="693" y="573" width="242" height="128" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1.2"/>
+<text x="814" y="592" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#374151">Légende</text>
+<line x1="706" y1="605" x2="730" y2="605" stroke="#374151" stroke-width="2" marker-end="url(#arr)"/>
+<text x="738" y="609" font-family="sans-serif" font-size="10" fill="#374151">Requête HTTP</text>
+<line x1="706" y1="623" x2="730" y2="623" stroke="#0369a1" stroke-width="2" stroke-dasharray="4,2" marker-end="url(#arr-blue)"/>
+<text x="738" y="627" font-family="sans-serif" font-size="10" fill="#374151">Health check (startup)</text>
+<line x1="706" y1="641" x2="730" y2="641" stroke="#7c3aed" stroke-width="2" marker-end="url(#arr-purple)"/>
+<text x="738" y="645" font-family="sans-serif" font-size="10" fill="#374151">Tool calling LLM</text>
+<line x1="706" y1="659" x2="730" y2="659" stroke="#c2410c" stroke-width="2" marker-end="url(#arr-orange)"/>
+<text x="738" y="663" font-family="sans-serif" font-size="10" fill="#374151">MCP JSON-RPC 2.0</text>
+<line x1="706" y1="677" x2="730" y2="677" stroke="#991b1b" stroke-width="2" marker-end="url(#arr-red)"/>
+<text x="738" y="681" font-family="sans-serif" font-size="10" fill="#374151">Appel scanner</text>
+<rect x="706" y="688" width="18" height="10" rx="2" fill="#faf5ff" stroke="#7c3aed" stroke-width="1" stroke-dasharray="3,2"/>
+<text x="738" y="698" font-family="sans-serif" font-size="10" fill="#374151">Service externe</text>
 
 </svg>

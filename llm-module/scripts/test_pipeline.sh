@@ -73,8 +73,8 @@ fi
 log "Quarantaine OK"
 
 # ── 2. Libérer tous les ports ─────────────────────────────────────────────────
-log "Libération des ports 3000 3001 3002 3003 3004 3005..."
-for port in 3000 3001 3002 3003 3004 3005; do
+log "Libération des ports 3000 3001 3002 3003 3004 3005 3006..."
+for port in 3000 3001 3002 3003 3004 3005 3006; do
     fuser -k "${port}/tcp" 2>/dev/null || true
 done
 docker ps -q --filter "publish=3001" --filter "publish=3002" | xargs -r docker stop 2>/dev/null || true
@@ -161,8 +161,8 @@ for i in $(seq 1 60); do
     fi
 done
 
-# ── 7. Scanner dynamique (8080) ──────────────────────────────────────────────
-log "Démarrage scanner dynamique — image dockdockgo-scan-dynamique:1.0.0 (port 8080)..."
+# ── 7. Scanner dynamique (3006) ──────────────────────────────────────────────
+log "Démarrage scanner dynamique — image dockdockgo-scan-dynamique:1.0.0 (port 3006)..."
 CID_DYNAMIC=$(docker run -d --rm \
     --name ddg-scanner \
     --network host \
@@ -177,7 +177,7 @@ else
     DOCKER_CONTAINERS+=("$CID_DYNAMIC")
     log "Attente scanner dynamique..."
     for i in $(seq 1 30); do
-        if curl -s http://localhost:8080/health 2>/dev/null | grep -q "DockDockGo"; then
+        if curl -s http://localhost:3006/health 2>/dev/null | grep -q "DockDockGo"; then
             log "Scanner dynamique prêt (${i}s)"
             break
         fi
@@ -193,7 +193,7 @@ log "Démarrage mcp-tools-server (3004)..."
 MCP_SERVER_PORT=3004 \
 STATIC_SCANNER_URL="http://localhost:3002" \
 COMPLIANCE_SCANNER_URL="http://localhost:3001" \
-DYNAMIC_SCANNER_URL="http://localhost:8080" \
+DYNAMIC_SCANNER_URL="http://localhost:3006" \
     "$MCP_REPO_DIR/mcp-tools-server/target/debug/mcp-tools-server" > /tmp/mcp-tools-server.log 2>&1 &
 PIDS+=($!)
 
@@ -251,7 +251,7 @@ log "Orchestrateur prêt"
 log ""
 log "═══════════════════════════════════════════════════════"
 log " POST /v1/decision → orchestrateur → llm-decision"
-log " → mcp-tools-server → scanners (3001 + 3002 + 8080)"
+log " → mcp-tools-server → scanners (3001 + 3002 + 3006)"
 log " Image : alpine/3.18"
 log "═══════════════════════════════════════════════════════"
 
