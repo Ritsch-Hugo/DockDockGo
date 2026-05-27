@@ -1,6 +1,5 @@
 use crate::models::{Cve, Package, Severity};
 use crate::sbom::SbomStore;
-use crate::store::WhitelistStore;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -179,43 +178,19 @@ async fn fetch_batch(client: &Client, queries: Vec<Query>) -> anyhow::Result<Vec
     anyhow::bail!("OSV query failed after {MAX_RETRIES} attempts")
 }
 
-// ── Package resolution ────────────────────────────────────────────────────────
-
-/// Returns the effective package list for an image:
-/// 1. Syft-generated SBOM from `SbomStore` (preferred — real, up-to-date)
-/// 2. Fallback packages from `whitelist.toml`   (static, used before first scan)
-fn effective_packages(
-    image_name: &str,
-    toml_packages: &[crate::models::Package],
-    sbom_store: &SbomStore,
-) -> Vec<crate::models::Package> {
-    if let Some(stored) = sbom_store.get(image_name) {
-        if !stored.packages.is_empty() {
-            return stored.packages;
-        }
-    }
-    toml_packages.to_vec()
-}
-
 // ── Main loop ────────────────────────────────────────────────────────────────
 
-pub async fn run(
-    tx: broadcast::Sender<Cve>,
-    store: Arc<WhitelistStore>,
-    sbom_store: Arc<SbomStore>,
-    poll_interval_secs: u64,
-) {
+pub async fn run(tx: broadcast::Sender<Cve>, sbom_store: Arc<SbomStore>, poll_interval_secs: u64) {
     let client = Client::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     loop {
-        // Build OSV queries using stored SBOMs (or TOML fallback)
-        let queries: Vec<Query> = store
-            .images()
-            .iter()
-            .flat_map(|img| {
-                let packages = effective_packages(&img.name, &img.sbom.packages, &sbom_store);
-                packages.into_iter().filter_map(|pkg| {
+        // Build OSV queries from all SBOMs stored in the DB/cache
+        let queries: Vec<Query> = sbom_store
+            .list()
+            .into_iter()
+            .flat_map(|sbom| {
+                sbom.packages.into_iter().filter_map(|pkg| {
                     pkg.ecosystem.map(|eco| Query {
                         package: QueryPkg {
                             name: pkg.name,
@@ -228,10 +203,7 @@ pub async fn run(
             .collect();
 
         if queries.is_empty() {
-            warn!(
-                "No packages with ecosystem set — \
-                 waiting for Syft to generate SBOMs or add `ecosystem` fields to whitelist.toml"
-            );
+            warn!("No SBOMs with ecosystem data — waiting for Syft scans to complete");
         } else {
             match fetch_batch(&client, queries).await {
                 Ok(vulns) => {

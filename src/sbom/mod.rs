@@ -177,14 +177,6 @@ impl SbomStore {
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
-    pub fn get(&self, image: &str) -> Option<StoredSbom> {
-        self.cache
-            .read()
-            .expect("sbom cache poisoned")
-            .get(image)
-            .cloned()
-    }
-
     pub fn list(&self) -> Vec<StoredSbom> {
         self.cache
             .read()
