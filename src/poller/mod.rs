@@ -1,4 +1,5 @@
 use crate::models::{Cve, Package, Severity};
+use crate::sbom::SbomStore;
 use crate::store::WhitelistStore;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
@@ -32,10 +33,8 @@ struct QueryPkg {
     ecosystem: String,
 }
 
-// ── OSV response types (untrusted external data — all fields optional/default) ─
+// ── OSV response types ───────────────────────────────────────────────────────
 
-// `#[serde(default)]` skips absent fields but NOT `null` values.
-// This helper maps both absent and null to an empty Vec.
 fn null_as_empty<'de, D, T>(de: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -67,7 +66,6 @@ struct OsvVuln {
     severity: Vec<OsvSeverityEntry>,
     #[serde(default, deserialize_with = "null_as_empty")]
     affected: Vec<OsvAffected>,
-    // Some OSV entries omit `published` — fall back to epoch.
     #[serde(default)]
     published: Option<DateTime<Utc>>,
 }
@@ -94,7 +92,6 @@ struct OsvAffectedPkg {
 
 // ── Mapping ──────────────────────────────────────────────────────────────────
 
-// Heuristic from CVSS vector: count High-impact metrics (C:H / I:H / A:H).
 fn parse_severity(entries: &[OsvSeverityEntry]) -> Severity {
     for entry in entries {
         if entry.kind.starts_with("CVSS_V") {
@@ -110,13 +107,11 @@ fn parse_severity(entries: &[OsvSeverityEntry]) -> Severity {
             };
         }
     }
-    // Conservative default when severity metadata is absent
     Severity::High
 }
 
 fn to_cve(vuln: OsvVuln) -> Cve {
     let severity = parse_severity(&vuln.severity);
-
     let affected_packages: Vec<Package> = vuln
         .affected
         .iter()
@@ -144,7 +139,7 @@ fn to_cve(vuln: OsvVuln) -> Cve {
     }
 }
 
-// ── OSV HTTP call with exponential backoff ───────────────────────────────────
+// ── OSV HTTP call ────────────────────────────────────────────────────────────
 
 async fn fetch_batch(client: &Client, queries: Vec<Query>) -> anyhow::Result<Vec<OsvVuln>> {
     let body = BatchRequest { queries };
@@ -184,32 +179,58 @@ async fn fetch_batch(client: &Client, queries: Vec<Query>) -> anyhow::Result<Vec
     anyhow::bail!("OSV query failed after {MAX_RETRIES} attempts")
 }
 
+// ── Package resolution ────────────────────────────────────────────────────────
+
+/// Returns the effective package list for an image:
+/// 1. Syft-generated SBOM from `SbomStore` (preferred — real, up-to-date)
+/// 2. Fallback packages from `whitelist.toml`   (static, used before first scan)
+fn effective_packages<'a>(
+    image_name: &str,
+    toml_packages: &'a [crate::models::Package],
+    sbom_store: &SbomStore,
+) -> Vec<crate::models::Package> {
+    if let Some(stored) = sbom_store.get(image_name) {
+        if !stored.packages.is_empty() {
+            return stored.packages;
+        }
+    }
+    toml_packages.to_vec()
+}
+
 // ── Main loop ────────────────────────────────────────────────────────────────
 
-pub async fn run(tx: broadcast::Sender<Cve>, store: Arc<WhitelistStore>, poll_interval_secs: u64) {
+pub async fn run(
+    tx: broadcast::Sender<Cve>,
+    store: Arc<WhitelistStore>,
+    sbom_store: Arc<SbomStore>,
+    poll_interval_secs: u64,
+) {
     let client = Client::new();
-    // In-memory dedup: CVEs already broadcast won't be re-sent until restart.
     let mut seen: HashSet<String> = HashSet::new();
 
     loop {
+        // Build OSV queries using stored SBOMs (or TOML fallback)
         let queries: Vec<Query> = store
             .images()
             .iter()
-            .flat_map(|img| &img.sbom.packages)
-            .filter_map(|pkg| {
-                pkg.ecosystem.as_ref().map(|eco| Query {
-                    package: QueryPkg {
-                        name: pkg.name.clone(),
-                        ecosystem: eco.clone(),
-                    },
-                    version: pkg.version.clone(),
+            .flat_map(|img| {
+                let packages = effective_packages(&img.name, &img.sbom.packages, &sbom_store);
+                packages.into_iter().filter_map(|pkg| {
+                    pkg.ecosystem.map(|eco| Query {
+                        package: QueryPkg {
+                            name: pkg.name,
+                            ecosystem: eco,
+                        },
+                        version: pkg.version,
+                    })
                 })
             })
             .collect();
 
         if queries.is_empty() {
             warn!(
-                "No packages with ecosystem set — add `ecosystem` fields to config/whitelist.toml"
+                "No packages with ecosystem set — \
+                 waiting for Syft to generate SBOMs or add `ecosystem` fields to whitelist.toml"
             );
         } else {
             match fetch_batch(&client, queries).await {
@@ -223,15 +244,9 @@ pub async fn run(tx: broadcast::Sender<Cve>, store: Arc<WhitelistStore>, poll_in
                             new_count += 1;
                         }
                     }
-                    info!(
-                        new = new_count,
-                        total_seen = seen.len(),
-                        "OSV poll complete"
-                    );
+                    info!(new = new_count, total_seen = seen.len(), "OSV poll complete");
                 }
-                Err(e) => {
-                    error!(error = %e, "OSV poll failed");
-                }
+                Err(e) => error!(error = %e, "OSV poll failed"),
             }
         }
 

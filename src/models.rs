@@ -28,14 +28,19 @@ pub struct Cve {
     pub published_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Sbom {
+    /// Fallback packages defined in whitelist.toml.
+    /// Used only when no Syft-generated SBOM exists for this image.
+    #[serde(default)]
     pub packages: Vec<Package>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhitelistedImage {
     pub name: String,
+    /// Static SBOM from whitelist.toml (fallback when Syft hasn't run yet).
+    #[serde(default)]
     pub sbom: Sbom,
 }
 

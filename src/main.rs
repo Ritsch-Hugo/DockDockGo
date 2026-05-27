@@ -3,16 +3,17 @@ mod matcher;
 mod models;
 mod notifier;
 mod poller;
+mod sbom;
 mod store;
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() {
-    // Load .env file if present (ignored in production where env vars are injected directly)
     let _ = dotenvy::dotenv();
 
     tracing_subscriber::fmt()
@@ -23,45 +24,87 @@ async fn main() {
         .json()
         .init();
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3020".to_string());
-    let dashboard_url = std::env::var("DASHBOARD_URL")
-        .ok()
-        .filter(|s| !s.is_empty());
+    // ── Configuration ─────────────────────────────────────────────────────────
+    let port           = std::env::var("PORT").unwrap_or_else(|_| "3020".to_string());
+    let dashboard_url  = std::env::var("DASHBOARD_URL").ok().filter(|s| !s.is_empty());
     let poll_interval: u64 = std::env::var("POLL_INTERVAL_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(60);
-    let whitelist_path =
-        std::env::var("WHITELIST_PATH").unwrap_or_else(|_| "config/whitelist".to_string());
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+    let whitelist_path = std::env::var("WHITELIST_PATH")
+        .unwrap_or_else(|_| "config/whitelist".to_string());
+    // Directory where per-image SBOM JSON files are stored.
+    let sbom_dir       = std::env::var("SBOM_DIR")
+        .unwrap_or_else(|_| "sboms".to_string());
+    // Path/name of the Syft executable.
+    let syft_bin       = std::env::var("SYFT_BIN")
+        .unwrap_or_else(|_| "syft".to_string());
+    // How often (seconds) to regenerate SBOMs for all whitelisted images.
+    // 0 = disabled (generate once on startup for missing images, then stop).
+    let sbom_refresh: u64 = std::env::var("SBOM_REFRESH_INTERVAL_SECS")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(86_400); // 24 h
 
-    info!(service = "cycle-de-vie", "Service starting");
+    info!(service = "cycle-de-vie", "Starting");
 
+    // ── Whitelist ─────────────────────────────────────────────────────────────
     let whitelist = match store::WhitelistStore::load(&whitelist_path) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            error!(error = %e, "Failed to load whitelist");
+            error!(error = %e, path = %whitelist_path, "Failed to load whitelist");
             std::process::exit(1);
         }
     };
+    info!(count = whitelist.images().len(), path = %whitelist_path, "Whitelist loaded");
 
-    info!(count = whitelist.images().len(), "Whitelist loaded");
-    for image in whitelist.images() {
-        info!(image = %image.name, packages = image.sbom.packages.len(), "Registered image");
+    // ── SBOM store ────────────────────────────────────────────────────────────
+    let sbom_store = match sbom::SbomStore::open(&sbom_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            error!(error = %e, dir = %sbom_dir, "Failed to open SBOM store");
+            std::process::exit(1);
+        }
+    };
+    info!(dir = %sbom_dir, "SBOM store ready");
+
+    // ── Channels ──────────────────────────────────────────────────────────────
+    let (cve_tx, cve_rx)   = broadcast::channel(32);
+    let (match_tx, match_rx) = mpsc::channel(32);
+    let notification_store  = notifier::new_store();
+
+    // ── Background tasks ──────────────────────────────────────────────────────
+    // 1. SBOM generation — fills missing SBOMs at startup, then refreshes periodically
+    {
+        let store     = Arc::clone(&whitelist);
+        let sbom_st   = Arc::clone(&sbom_store);
+        let syft      = syft_bin.clone();
+        tokio::spawn(async move {
+            sbom_refresh_loop(store, sbom_st, syft, sbom_refresh).await;
+        });
     }
 
-    let (cve_tx, cve_rx) = broadcast::channel(32);
-    let (match_tx, match_rx) = mpsc::channel(32);
-    let notification_store = notifier::new_store();
+    // 2. OSV poller
+    tokio::spawn(poller::run(
+        cve_tx,
+        Arc::clone(&whitelist),
+        Arc::clone(&sbom_store),
+        poll_interval,
+    ));
 
-    tokio::spawn(poller::run(cve_tx, Arc::clone(&whitelist), poll_interval));
+    // 3. Matcher
     tokio::spawn(matcher::run(cve_rx, Arc::clone(&whitelist), match_tx));
+
+    // 4. Notifier
     tokio::spawn(notifier::run(
         match_rx,
         Arc::clone(&notification_store),
         dashboard_url,
     ));
 
-    let router = http::router(Arc::clone(&whitelist), Arc::clone(&notification_store));
+    // ── HTTP server ───────────────────────────────────────────────────────────
+    let router = http::router(
+        Arc::clone(&whitelist),
+        Arc::clone(&notification_store),
+        Arc::clone(&sbom_store),
+        syft_bin,
+    );
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await.unwrap();
     info!(addr = %addr, "HTTP server listening");
@@ -74,12 +117,49 @@ async fn main() {
     info!("Shutdown complete");
 }
 
+/// On startup: generate SBOMs for images that don't have one yet.
+/// Then, if `interval_secs > 0`, regenerate all SBOMs every `interval_secs`.
+async fn sbom_refresh_loop(
+    whitelist: Arc<store::WhitelistStore>,
+    sbom_store: Arc<sbom::SbomStore>,
+    syft_bin: String,
+    interval_secs: u64,
+) {
+    // Initial pass — only generate missing SBOMs so startup is fast.
+    for img in whitelist.images() {
+        if sbom_store.get(&img.name).is_none() {
+            info!(image = %img.name, "No SBOM found — generating");
+            if let Err(e) = sbom::generate_and_store(&sbom_store, &img.name, &syft_bin).await {
+                warn!(image = %img.name, error = %e, "Initial SBOM generation failed");
+            }
+        } else {
+            info!(image = %img.name, "SBOM already present — skipping initial generation");
+        }
+    }
+
+    if interval_secs == 0 {
+        info!("SBOM_REFRESH_INTERVAL_SECS=0 — periodic refresh disabled");
+        return;
+    }
+
+    // Periodic full refresh
+    loop {
+        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+        info!("Periodic SBOM refresh starting");
+        for img in whitelist.images() {
+            if let Err(e) = sbom::generate_and_store(&sbom_store, &img.name, &syft_bin).await {
+                warn!(image = %img.name, error = %e, "Periodic SBOM refresh failed");
+            }
+        }
+        info!("Periodic SBOM refresh complete");
+    }
+}
+
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+        let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
             _ = sigterm.recv() => {},
@@ -87,9 +167,7 @@ async fn shutdown_signal() {
     }
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to listen for ctrl-c");
+        tokio::signal::ctrl_c().await.expect("ctrl-c handler");
     }
     info!("Shutdown signal received");
 }
