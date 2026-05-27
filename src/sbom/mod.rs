@@ -1,13 +1,17 @@
-//! SBOM generation (via Syft) and file-based storage.
+//! SBOM generation (via Syft) and storage.
 //!
-//! Each whitelisted image gets one JSON file: `SBOM_DIR/<safe_name>.json`.
-//! The store is kept in memory (loaded at startup, refreshed on write) so the
-//! poller never touches the filesystem on the hot path.
+//! `SbomStore` keeps an in-memory cache of all SBOMs for fast read access.
+//! When a `PgPool` is provided the store is backed by PostgreSQL — SBOMs
+//! survive service restarts without re-running Syft.
+//! Without a pool the store falls back to local JSON files (used in tests
+//! and when `DATABASE_URL` is not set).
 
+use crate::db;
 use crate::models::Package;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -89,7 +93,6 @@ fn purl_type_to_ecosystem(t: &str) -> Option<&'static str> {
 }
 
 fn parse_purl_type(purl: &str) -> Option<&str> {
-    // pkg:<type>/... → extract <type>
     purl.strip_prefix("pkg:")
         .and_then(|s| s.split('/').next())
 }
@@ -108,41 +111,137 @@ fn cdx_to_packages(bom: CycloneDxBom) -> Vec<Package> {
                 .and_then(parse_purl_type)
                 .and_then(purl_type_to_ecosystem)
                 .map(str::to_owned);
-            Some(Package {
-                name: c.name,
-                version,
-                ecosystem,
-            })
+            Some(Package { name: c.name, version, ecosystem })
         })
         .collect()
 }
 
 // ── SbomStore ─────────────────────────────────────────────────────────────────
 
-/// Thread-safe, file-backed store.
-/// One `<stem>.json` file per image under `dir/`.
+/// Thread-safe store with an in-memory cache.
+///
+/// - **DB mode** (`pool` is `Some`): SBOMs are loaded from PostgreSQL at
+///   startup and persisted on every write. Survives restarts.
+/// - **File mode** (`pool` is `None`): SBOMs are read/written as JSON files
+///   under `dir`. Used in tests and when `DATABASE_URL` is not set.
 pub struct SbomStore {
+    pool: Option<PgPool>,
     dir: PathBuf,
     cache: RwLock<HashMap<String, StoredSbom>>,
 }
 
 impl SbomStore {
-    /// Open (or create) the store at `dir`, loading any existing files.
+    // ── Constructors ──────────────────────────────────────────────────────────
+
+    /// DB-backed store. Loads all existing SBOMs from PostgreSQL into the
+    /// cache — Syft will only be called for images with no stored SBOM.
+    pub async fn open_with_db(pool: PgPool) -> anyhow::Result<Arc<Self>> {
+        let store = Arc::new(Self {
+            pool: Some(pool.clone()),
+            dir: PathBuf::new(), // unused in DB mode
+            cache: RwLock::new(HashMap::new()),
+        });
+
+        match db::load_all_sboms(&pool).await {
+            Ok(sboms) => {
+                let mut cache = store.cache.write().expect("sbom cache poisoned");
+                let count = sboms.len();
+                for sbom in sboms {
+                    cache.insert(sbom.image.clone(), sbom);
+                }
+                info!(count, "SBOMs loaded from database");
+            }
+            Err(e) => warn!(error = %e, "Failed to load SBOMs from DB — starting with empty cache"),
+        }
+
+        Ok(store)
+    }
+
+    /// File-backed store (fallback / tests). Opens or creates `dir`.
     pub fn open(dir: &str) -> anyhow::Result<Arc<Self>> {
         let path = PathBuf::from(dir);
         std::fs::create_dir_all(&path)
             .with_context(|| format!("cannot create SBOM dir '{dir}'"))?;
 
         let store = Arc::new(Self {
+            pool: None,
             dir: path,
             cache: RwLock::new(HashMap::new()),
         });
-        store.reload_all();
+        store.reload_from_files();
         Ok(store)
     }
 
-    /// Sanitise an image reference into a safe filename stem.
-    /// "ghcr.io/org/img:sha-abc" → "ghcr_io_org_img_sha_abc"
+    // ── Read ──────────────────────────────────────────────────────────────────
+
+    pub fn get(&self, image: &str) -> Option<StoredSbom> {
+        self.cache
+            .read()
+            .expect("sbom cache poisoned")
+            .get(image)
+            .cloned()
+    }
+
+    pub fn list(&self) -> Vec<StoredSbom> {
+        self.cache
+            .read()
+            .expect("sbom cache poisoned")
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    // ── Write ─────────────────────────────────────────────────────────────────
+
+    /// Persist a SBOM (DB upsert or file write) and update the in-memory cache.
+    pub async fn save(&self, sbom: StoredSbom) -> anyhow::Result<()> {
+        if let Some(ref pool) = self.pool {
+            db::upsert_sbom(pool, &sbom).await?;
+            info!(image = %sbom.image, packages = sbom.packages.len(), "SBOM saved to database");
+        } else {
+            let path = self.file_path(&sbom.image);
+            let json = serde_json::to_string_pretty(&sbom)?;
+            std::fs::write(&path, &json)
+                .with_context(|| format!("cannot write SBOM to '{}'", path.display()))?;
+            info!(image = %sbom.image, packages = sbom.packages.len(), path = %path.display(), "SBOM saved to file");
+        }
+
+        self.cache
+            .write()
+            .expect("sbom cache poisoned")
+            .insert(sbom.image.clone(), sbom);
+        Ok(())
+    }
+
+    /// Delete a SBOM (DB or file) and remove it from the cache.
+    /// Returns `true` if it existed.
+    pub async fn delete(&self, image: &str) -> bool {
+        if let Some(ref pool) = self.pool {
+            match db::delete_sbom(pool, image).await {
+                Ok(existed) => {
+                    self.cache.write().expect("sbom cache poisoned").remove(image);
+                    existed
+                }
+                Err(e) => {
+                    warn!(error = %e, image, "Failed to delete SBOM from DB");
+                    false
+                }
+            }
+        } else {
+            let path = self.file_path(image);
+            let existed = path.exists();
+            if existed {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(error = %e, "Failed to delete SBOM file");
+                }
+            }
+            self.cache.write().expect("sbom cache poisoned").remove(image);
+            existed
+        }
+    }
+
+    // ── File-mode internals ───────────────────────────────────────────────────
+
     fn stem(image: &str) -> String {
         image
             .chars()
@@ -154,7 +253,7 @@ impl SbomStore {
         self.dir.join(format!("{}.json", Self::stem(image)))
     }
 
-    fn reload_all(&self) {
+    fn reload_from_files(&self) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
@@ -174,59 +273,7 @@ impl SbomStore {
                 }
             }
         }
-        info!(count = cache.len(), "SBOMs loaded from disk");
-    }
-
-    pub fn get(&self, image: &str) -> Option<StoredSbom> {
-        self.cache
-            .read()
-            .expect("sbom cache poisoned")
-            .get(image)
-            .cloned()
-    }
-
-    pub fn list(&self) -> Vec<StoredSbom> {
-        self.cache
-            .read()
-            .expect("sbom cache poisoned")
-            .values()
-            .cloned()
-            .collect()
-    }
-
-    /// Persist a SBOM to disk and update the in-memory cache.
-    pub fn save(&self, sbom: StoredSbom) -> anyhow::Result<()> {
-        let path = self.file_path(&sbom.image);
-        let json = serde_json::to_string_pretty(&sbom)?;
-        std::fs::write(&path, &json)
-            .with_context(|| format!("cannot write SBOM to '{}'", path.display()))?;
-        info!(
-            image = %sbom.image,
-            packages = sbom.packages.len(),
-            path = %path.display(),
-            "SBOM saved"
-        );
-        self.cache
-            .write()
-            .expect("sbom cache poisoned")
-            .insert(sbom.image.clone(), sbom);
-        Ok(())
-    }
-
-    /// Delete the SBOM for `image` (disk + cache).  Returns `true` if it existed.
-    pub fn delete(&self, image: &str) -> bool {
-        let path = self.file_path(image);
-        let existed = path.exists();
-        if existed {
-            if let Err(e) = std::fs::remove_file(&path) {
-                warn!(error = %e, "Failed to delete SBOM file");
-            }
-        }
-        self.cache
-            .write()
-            .expect("sbom cache poisoned")
-            .remove(image);
-        existed
+        info!(count = cache.len(), "SBOMs loaded from files");
     }
 }
 
@@ -236,8 +283,6 @@ impl SbomStore {
 ///
 /// Uses the `registry:<image>` scheme so Syft pulls directly from the
 /// registry — no Docker daemon or mounted socket required.
-///
-/// `syft_bin` is the executable name/path (default: `"syft"`).
 pub async fn generate_and_store(
     store: &SbomStore,
     image: &str,
@@ -245,7 +290,6 @@ pub async fn generate_and_store(
 ) -> anyhow::Result<StoredSbom> {
     info!(image, syft = syft_bin, "Generating SBOM");
 
-    // Prefer registry: scheme to avoid needing Docker socket
     let image_ref = if image.starts_with("registry:") || image.contains("://") {
         image.to_owned()
     } else {
@@ -283,6 +327,6 @@ pub async fn generate_and_store(
         source: "syft".to_owned(),
         packages,
     };
-    store.save(sbom.clone())?;
+    store.save(sbom.clone()).await?;
     Ok(sbom)
 }

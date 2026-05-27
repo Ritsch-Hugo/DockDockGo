@@ -1,9 +1,8 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use std::collections::HashSet;
+use sqlx::Row;
 
-use crate::models::{MatchResult, Severity};
+use crate::sbom::StoredSbom;
 
 // ── Pool ──────────────────────────────────────────────────────────────────────
 
@@ -15,49 +14,71 @@ pub async fn connect(database_url: &str) -> Result<PgPool> {
     Ok(pool)
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── SBOM helpers ──────────────────────────────────────────────────────────────
 
-/// Load all CVE IDs already present in `cve_alerts`.
-/// Called once at poller startup to pre-populate the `seen` set, so CVEs
-/// already processed before a restart are not re-notified.
-pub async fn load_seen_cve_ids(pool: &PgPool) -> Result<HashSet<String>> {
-    let rows = sqlx::query_scalar::<_, String>("SELECT DISTINCT cve_id FROM cve_alerts")
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().collect())
+/// Load all SBOMs stored in the database. Called once at startup to
+/// pre-populate the in-memory cache — Syft does not need to re-run.
+pub async fn load_all_sboms(pool: &PgPool) -> Result<Vec<StoredSbom>> {
+    let rows = sqlx::query(
+        "SELECT image_name, image_digest, source, packages, generated_at FROM sboms",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let sboms = rows
+        .into_iter()
+        .filter_map(|r| {
+            let packages_val: serde_json::Value = r.try_get("packages").ok()?;
+            let packages = serde_json::from_value(packages_val).ok()?;
+            Some(StoredSbom {
+                image: r.try_get("image_name").ok()?,
+                generated_at: r.try_get("generated_at").ok()?,
+                image_digest: r.try_get("image_digest").ok(),
+                source: r
+                    .try_get::<Option<String>, _>("source")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "syft".to_string()),
+                packages,
+            })
+        })
+        .collect();
+
+    Ok(sboms)
 }
 
-/// Persist one CVE alert for a (cve_id, image_name) pair.
-/// ON CONFLICT DO NOTHING — idempotent, safe to call multiple times.
-pub async fn record_cve_alert(
-    pool: &PgPool,
-    result: &MatchResult,
-    published_at: DateTime<Utc>,
-) -> Result<()> {
-    let severity_str = match result.severity {
-        Severity::Critical => "critical",
-        Severity::High => "high",
-        Severity::Medium => "medium",
-        Severity::Low => "low",
-    };
-    let packages_json = serde_json::to_value(&result.matched_packages)?;
+/// Insert or update a SBOM. Uses UPSERT on image_name so re-generating
+/// a SBOM for the same image simply overwrites the previous row.
+pub async fn upsert_sbom(pool: &PgPool, sbom: &StoredSbom) -> Result<()> {
+    let packages_json = serde_json::to_value(&sbom.packages)?;
 
     sqlx::query(
         r#"
-        INSERT INTO cve_alerts
-            (cve_id, image_name, severity, description, affected_packages, published_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (cve_id, image_name) DO NOTHING
+        INSERT INTO sboms (image_name, image_digest, source, packages, generated_at)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (image_name) DO UPDATE SET
+            image_digest = EXCLUDED.image_digest,
+            source       = EXCLUDED.source,
+            packages     = EXCLUDED.packages,
+            generated_at = EXCLUDED.generated_at
         "#,
     )
-    .bind(&result.cve_id)
-    .bind(&result.image_name)
-    .bind(severity_str)
-    .bind(&result.description)
+    .bind(&sbom.image)
+    .bind(&sbom.image_digest)
+    .bind(&sbom.source)
     .bind(packages_json)
-    .bind(published_at)
+    .bind(sbom.generated_at)
     .execute(pool)
     .await?;
 
     Ok(())
+}
+
+/// Delete the SBOM for `image_name`. Returns `true` if a row was deleted.
+pub async fn delete_sbom(pool: &PgPool, image: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM sboms WHERE image_name = $1")
+        .bind(image)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }

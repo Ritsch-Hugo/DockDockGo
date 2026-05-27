@@ -54,12 +54,12 @@ async fn main() {
                 Some(pool)
             }
             Err(e) => {
-                warn!(error = %e, "Could not connect to PostgreSQL — CVE alerts will not be persisted");
+                warn!(error = %e, "Could not connect to PostgreSQL — falling back to file-based SBOM store");
                 None
             }
         },
         None => {
-            warn!("DATABASE_URL not set — CVE alerts will not be persisted across restarts");
+            warn!("DATABASE_URL not set — SBOMs will be stored as local files (lost on container restart)");
             None
         }
     };
@@ -75,14 +75,23 @@ async fn main() {
     info!(count = whitelist.images().len(), path = %whitelist_path, "Whitelist loaded");
 
     // ── SBOM store ────────────────────────────────────────────────────────────
-    let sbom_store = match sbom::SbomStore::open(&sbom_dir) {
-        Ok(s) => s,
-        Err(e) => {
-            error!(error = %e, dir = %sbom_dir, "Failed to open SBOM store");
-            std::process::exit(1);
-        }
+    let sbom_store = match &db_pool {
+        Some(pool) => match sbom::SbomStore::open_with_db(pool.clone()).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!(error = %e, "Failed to open DB-backed SBOM store");
+                std::process::exit(1);
+            }
+        },
+        None => match sbom::SbomStore::open(&sbom_dir) {
+            Ok(s) => s,
+            Err(e) => {
+                error!(error = %e, dir = %sbom_dir, "Failed to open file-backed SBOM store");
+                std::process::exit(1);
+            }
+        },
     };
-    info!(dir = %sbom_dir, "SBOM store ready");
+    info!("SBOM store ready");
 
     // ── Channels ──────────────────────────────────────────────────────────────
     let (cve_tx, cve_rx)   = broadcast::channel(32);
@@ -106,7 +115,6 @@ async fn main() {
         Arc::clone(&whitelist),
         Arc::clone(&sbom_store),
         poll_interval,
-        db_pool.clone(),
     ));
 
     // 3. Matcher
@@ -117,7 +125,6 @@ async fn main() {
         match_rx,
         Arc::clone(&notification_store),
         dashboard_url,
-        db_pool.clone(),
     ));
 
     // ── HTTP server ───────────────────────────────────────────────────────────
@@ -126,7 +133,6 @@ async fn main() {
         Arc::clone(&notification_store),
         Arc::clone(&sbom_store),
         syft_bin,
-        db_pool,
     );
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await.unwrap();
