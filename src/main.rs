@@ -780,8 +780,18 @@ async fn high_level_decision(
             .unwrap_or_else(|_| "<serialization error>".to_string())
     );
 
+    let hl_timeout_secs: u64 = env::var("HL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(25);
+
+    info!(
+        "HL scanner timeout configuré à {}s (HL_TIMEOUT_SECS), pull_id={}",
+        hl_timeout_secs, pullcontext.pull_id
+    );
+
     let hl_result = tokio::time::timeout(
-        std::time::Duration::from_secs(25),
+        std::time::Duration::from_secs(hl_timeout_secs),
         async {
             let resp = http
                 .post(&high_level_url)
@@ -817,13 +827,13 @@ async fn high_level_decision(
         }
         Err(_elapsed) => {
             warn!(
-                "HL scanner timeout (>25s) pour pull_id={} → PENDING",
-                pullcontext.pull_id
+                "HL scanner timeout (>{}s) pour pull_id={} → PENDING",
+                hl_timeout_secs, pullcontext.pull_id
             );
             return Ok(HighLevelResult {
                 state: "PENDING".to_string(),
-                reasoning_lines: vec!["HL scanner timeout".to_string()],
-                raw_text: "Timeout HL scanner.\nResultat : 50".to_string(),
+                reasoning_lines: vec![format!("HL scanner timeout (>{}s)", hl_timeout_secs)],
+                raw_text: format!("Timeout HL scanner.\nResultat : 50"),
                 score: 50.0,
             });
         }
@@ -890,15 +900,30 @@ fn split_reasoning_lines(text: &str) -> Vec<String> {
 }
 
 fn decision_from_high_level_score(score: f64) -> String {
-    let decision = if score >= 90.0 {
+    // Seuils configurables via variables d'environnement.
+    // HL_ALLOW_THRESHOLD : score >= seuil → ALLOW  (défaut : 90)
+    // HL_DENY_THRESHOLD  : score <  seuil → DENY   (défaut : 30)
+    let allow_threshold: f64 = env::var("HL_ALLOW_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(90.0);
+    let deny_threshold: f64 = env::var("HL_DENY_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30.0);
+
+    let decision = if score >= allow_threshold {
         "ALLOW".to_string()
-    } else if score < 30.0 {
+    } else if score < deny_threshold {
         "DENY".to_string()
     } else {
         "PENDING".to_string()
     };
 
-    debug!("Score {} => décision {}", score, decision);
+    debug!(
+        "Score {} => décision {} (allow≥{}, deny<{})",
+        score, decision, allow_threshold, deny_threshold
+    );
 
     decision
 }
