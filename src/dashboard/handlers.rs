@@ -921,29 +921,30 @@ pub async fn pull_detail(
             };
             if !planned { continue; }
 
+            // Match scanner_type broadly: the DB value may be "scanner-static",
+            // "cve", "trivy", etc. — not necessarily the display label.
             let done_event = scan_events.iter().find(|ev| {
-                ev.scanner_type.as_deref()
-                    .map(|t| t.to_lowercase().contains(scanner_name))
-                    .unwrap_or(false)
-                    && ev.ia_decision_id == Some(ia.id)
+                let t = ev.scanner_type.as_deref().unwrap_or("").to_lowercase();
+                let matches = match *scanner_name {
+                    "statique"   => t.contains("static") || t.contains("cve") || t.contains("trivy") || t.contains("statique"),
+                    "compliance" => t.contains("compliance"),
+                    "dynamique"  => t.contains("dynamic") || t.contains("dynamique"),
+                    _            => false,
+                };
+                matches && ev.ia_decision_id == Some(ia.id)
             });
 
             if let Some(ev) = done_event {
                 let summary = ev.llm_summary.as_deref().unwrap_or("Terminé");
-                let short_summary = if summary.len() > 70 {
-                    format!("{}…", &summary[..70])
-                } else {
-                    summary.to_string()
-                };
                 timeline_html.push_str(&format!(r#"<div class='tl-item'>
   <div class='tl-dot green'></div>
   <div class='tl-label'>Scanner : {name}</div>
   <div class='tl-sub'>{time} · <span style='color:var(--text-success)'>✓ Terminé</span></div>
-  <div class='tl-sub' style='color:var(--text-success);margin-top:2px;font-size:10px'>{summary}</div>
+  <div class='tl-sub' style='color:var(--text-success);margin-top:2px;font-size:10px;word-break:break-word'>{summary}</div>
 </div>"#,
                     name    = scanner_name,
                     time    = format_since(ev.created_at),
-                    summary = html_escape(&short_summary),
+                    summary = html_escape(summary),
                 ));
             } else {
                 timeline_html.push_str(&format!(r#"<div class='tl-item' data-scanner='{name}'>
@@ -1044,7 +1045,7 @@ pub async fn pull_detail(
   .worker-card-failed {{ opacity: 0.5; }}
   .arbiter-card {{ background: rgba(55,138,221,0.08); border: 0.5px solid rgba(55,138,221,0.25); border-radius: var(--radius-md); padding: 12px 14px; margin-top: 8px; }}
   /* ── Timeline ── */
-  .timeline-card {{ background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; position: sticky; top: 20px; }}
+  .timeline-card {{ background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }}
   .timeline {{ position: relative; padding-left: 20px; }}
   .tl-item {{ position: relative; padding-bottom: 14px; }}
   .tl-item::before {{ content: ''; position: absolute; left: -14px; top: 6px; width: 1px; height: 100%; background: var(--border); }}
@@ -1054,7 +1055,7 @@ pub async fn pull_detail(
   .tl-dot.red   {{ background: var(--red); }}
   .tl-dot.amber {{ background: var(--amber); }}
   .tl-label {{ font-size: 12px; font-weight: 500; }}
-  .tl-sub {{ font-size: 11px; color: var(--text-secondary); margin-top: 2px; line-height: 1.5; }}
+  .tl-sub {{ font-size: 11px; color: var(--text-secondary); margin-top: 2px; line-height: 1.5; word-break: break-word; }}
   /* ── JSON Modal ── */
   .modal-overlay {{ display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }}
   .modal-overlay.open {{ display: flex; }}
@@ -1428,10 +1429,20 @@ function updateTimelineFromIA(data, scanners) {{
   }});
 }}
 
+function scannerMatches(scannerType, label) {{
+  const t = scannerType.toLowerCase();
+  switch (label) {{
+    case 'statique':   return t.includes('static') || t.includes('cve') || t.includes('trivy') || t.includes('statique');
+    case 'compliance': return t.includes('compliance');
+    case 'dynamique':  return t.includes('dynamic') || t.includes('dynamique');
+    default:           return t.includes(label);
+  }}
+}}
+
 function markTimelineScannerDone(scannerType, llmSummary) {{
   if (!scannerType) return;
   document.querySelectorAll('#timeline-container .tl-item[data-scanner]').forEach(item => {{
-    if (!scannerType.toLowerCase().includes(item.dataset.scanner)) return;
+    if (!scannerMatches(scannerType, item.dataset.scanner)) return;
     const dot   = item.querySelector('.tl-dot');
     const label = item.querySelector('.tl-label');
     const sub   = item.querySelector('.tl-sub');
