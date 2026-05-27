@@ -203,6 +203,61 @@ pub async fn rssi_dashboard(State(state): State<AppState>, headers: HeaderMap) -
     let pending_pct = (pending_24h * 100 / total_24h).min(100);
     let deny_pct = (deny_24h * 100 / total_24h).min(100);
 
+    // ── Alertes CVE (cycle-de-vie) ────────────────────────────────────────────
+
+    let cve_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cve_notifications")
+        .fetch_one(db)
+        .await
+        .unwrap_or(0);
+
+    let cve_rows_db = sqlx::query(
+        "SELECT cve_id, image_name, matched_packages::text AS packages, received_at
+         FROM cve_notifications ORDER BY received_at DESC LIMIT 100",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    let mut cve_rows_html = String::new();
+    for row in &cve_rows_db {
+        use sqlx::Row;
+        let cve_id: &str = row.try_get("cve_id").unwrap_or("?");
+        let image: &str = row.try_get("image_name").unwrap_or("?");
+        let packages: &str = row.try_get("packages").unwrap_or("[]");
+        let received_at: chrono::DateTime<chrono::Utc> =
+            row.try_get("received_at").unwrap_or_else(|_| chrono::Utc::now());
+
+        let pkg_display = serde_json::from_str::<Vec<serde_json::Value>>(packages)
+            .ok()
+            .map(|v| {
+                v.iter()
+                    .filter_map(|p| {
+                        let name = p["name"].as_str()?;
+                        let version = p["version"].as_str()?;
+                        Some(format!("{name} {version}"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "—".to_string());
+
+        cve_rows_html.push_str(&format!(
+            "<tr>\
+              <td><code style='font-size:11px'>{cve_id}</code></td>\
+              <td style='font-size:12px'>{image}</td>\
+              <td style='font-size:11px;color:var(--text-secondary)'>{pkg_display}</td>\
+              <td style='font-size:11px;color:var(--text-secondary)'>{}</td>\
+            </tr>",
+            received_at.format("%d/%m %H:%M")
+        ));
+    }
+    if cve_rows_html.is_empty() {
+        cve_rows_html = "<tr><td colspan='4' style='color:var(--text-tertiary);text-align:center;padding:20px'>Aucune alerte CVE</td></tr>".to_string();
+    }
+
+    let cve_badge_display = if cve_count > 0 { "inline" } else { "none" };
+
     // ── Alertes actives (DENY et PENDING récents) ─────────────────────────────
     // FIX: inclure PENDING en plus de DENY dans les alertes actives
 
@@ -528,7 +583,11 @@ pub async fn rssi_dashboard(State(state): State<AppState>, headers: HeaderMap) -
         .replace("{{BL_ROWS}}", &bl_rows_html)
         .replace("{{BL_COUNT}}", &bl_count.to_string())
         // Historique
-        .replace("{{HISTORY_ROWS}}", &history_rows_html);
+        .replace("{{HISTORY_ROWS}}", &history_rows_html)
+        // Alertes CVE
+        .replace("{{CVE_ROWS}}", &cve_rows_html)
+        .replace("{{CVE_COUNT}}", &cve_count.to_string())
+        .replace("{{CVE_BADGE_DISPLAY}}", cve_badge_display);
 
     Html(html).into_response()
 }

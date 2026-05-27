@@ -104,6 +104,7 @@
   <div class="nav-item" onclick="showPage('cache', this)"><div class="nav-dot green"></div>Cache</div>
   <div class="nav-section">Sécurité</div>
   <div class="nav-item" onclick="showPage('lists', this)"><div class="nav-dot red"></div>White / Blacklist</div>
+  <div class="nav-item" onclick="showPage('cve', this)"><div class="nav-dot red"></div>Alertes CVE <span id="cve-nav-count" style="margin-left:auto;font-size:10px;background:var(--red);color:#fff;padding:1px 6px;border-radius:10px;display:{{CVE_BADGE_DISPLAY}}">{{CVE_COUNT}}</span></div>
   <div class="nav-item" onclick="showPage('history', this)"><div class="nav-dot"></div>Historique</div>
   <div class="nav-item" onclick="showPage('search', this)"><div class="nav-dot"></div>Recherche</div>
   <div class="sidebar-footer">
@@ -131,6 +132,7 @@
     <div class="metric-card"><div class="metric-label">Bloqués aujourd'hui</div><div class="metric-value red" id="metric-deny">{{BLOQUES_TODAY}}</div></div>
     <div class="metric-card"><div class="metric-label">Digests en quarantaine</div><div class="metric-value amber" id="metric-quarantine">{{EN_QUARANTAINE}}</div></div>
     <div class="metric-card"><div class="metric-label">Digests en cache</div><div class="metric-value green" id="metric-cache">{{EN_CACHE}}</div></div>
+    <div class="metric-card" style="cursor:pointer" onclick="showPage('cve', document.querySelector('[onclick*=\"showPage(\\\'cve\\\'\"]'))"><div class="metric-label">Alertes CVE</div><div class="metric-value red" id="metric-cve">{{CVE_COUNT}}</div></div>
   </div>
   <div class="two-col">
     <div class="card">
@@ -303,6 +305,22 @@
       </table>
     </div>
     <div id="search-empty" style="color:var(--text-tertiary);font-size:12px;display:none">Aucun résultat</div>
+  </div>
+</div>
+
+<!-- PAGE: cve -->
+<div id="page-cve" class="hidden">
+  <div class="topbar">
+    <div class="page-title">Alertes CVE</div>
+    <span class="badge badge-red" id="cve-count-badge">{{CVE_COUNT}} alertes</span>
+  </div>
+  <div class="card">
+    <input type="text" id="cve-filter" placeholder="Filtrer par CVE ID ou image..." oninput="filterTable('cve-tbody', this.value)"
+      style="width:100%;padding:7px 10px;border:0.5px solid var(--border-md);border-radius:var(--radius-md);font-size:12px;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font);outline:none;margin-bottom:12px">
+    <table class="table">
+      <thead><tr><th>CVE ID</th><th>Image</th><th>Package(s) affecté(s)</th><th>Reçu le</th></tr></thead>
+      <tbody id="cve-tbody">{{CVE_ROWS}}</tbody>
+    </table>
   </div>
 </div>
 
