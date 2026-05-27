@@ -1713,25 +1713,31 @@ fn create_llm_symlinks(
                 let link_dir = format!("{}/blobs/sha256", tag_dir);
                 let _ = std::fs::create_dir_all(&link_dir);
                 let link = format!("{}/{}", link_dir, hex);
-                if !std::path::Path::new(&link).exists() {
-                    // ../../../blobs/sha256/{hex} remonte de {tag}/blobs/sha256/ à {repo}/
-                    let _ = std::os::unix::fs::symlink(
-                        format!("../../../blobs/sha256/{}", hex),
-                        &link,
-                    );
+                // Use symlink_metadata (does NOT follow symlinks) so dangling symlinks
+                // are detected and removed before recreation — exists() returns false
+                // for dangling symlinks, silently leaving them broken.
+                if std::path::Path::new(&link).symlink_metadata().is_ok() {
+                    let _ = std::fs::remove_file(&link);
                 }
+                // ../../../blobs/sha256/{hex} remonte de {tag}/blobs/sha256/ à {repo}/
+                let _ = std::os::unix::fs::symlink(
+                    format!("../../../blobs/sha256/{}", hex),
+                    &link,
+                );
             }
             _ => {
                 let link_dir = format!("{}/manifests", tag_dir);
                 let _ = std::fs::create_dir_all(&link_dir);
                 let link = format!("{}/{}.json", link_dir, hex);
-                if !std::path::Path::new(&link).exists() {
-                    // ../../manifests/sha256/{hex}.json remonte de {tag}/manifests/ à {repo}/
-                    let _ = std::os::unix::fs::symlink(
-                        format!("../../manifests/sha256/{}.json", hex),
-                        &link,
-                    );
+                // Same fix: always recreate to replace any dangling symlinks
+                if std::path::Path::new(&link).symlink_metadata().is_ok() {
+                    let _ = std::fs::remove_file(&link);
                 }
+                // ../../manifests/sha256/{hex}.json remonte de {tag}/manifests/ à {repo}/
+                let _ = std::os::unix::fs::symlink(
+                    format!("../../manifests/sha256/{}.json", hex),
+                    &link,
+                );
             }
         }
     }
