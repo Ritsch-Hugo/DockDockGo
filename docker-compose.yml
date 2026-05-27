@@ -1,0 +1,182 @@
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: docdockgo_admin
+      POSTGRES_PASSWORD: docdockgo
+      POSTGRES_DB: docdockgo
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docdockgo_admin -d docdockgo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── iptables 443 → 8443 ──────────────────────────────────────────────────────
+
+  iptables-redirect:
+    image: alpine
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    command: >
+      sh -c "apk add -q iptables &&
+             iptables -t nat -C PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null ||
+             iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8443"
+    restart: "no"
+    logging:
+      driver: none
+
+  # ── Proxy ────────────────────────────────────────────────────────────────────
+
+  proxy:
+    image: ghcr.io/ritsch-hugo/docdockgo-proxy:sha-62a8df5
+    env_file: proxy/.env
+    network_mode: host
+    environment:
+      DATABASE_URL: postgres://docdockgo_admin:docdockgo@localhost:5432/docdockgo
+      ORCH_URL: http://localhost:3000/v1/decision
+    volumes:
+      - ./proxy/.env:/app/.env:ro
+      - ./proxy/certs-mitm:/app/certs-mitm:ro
+      - ./proxy/registry_whitelist.json:/app/registry_whitelist.json:ro
+      - quarantaine:/app/quarantaine
+      - cache:/app/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      orchestrateur:
+        condition: service_started
+
+  # ── Orchestrateur ────────────────────────────────────────────────────────────
+
+  orchestrateur:
+    image: ghcr.io/ritsch-hugo/docdockgo-orchestrateur:sha-731fbad
+    env_file: orchestrateur/.env
+    environment:
+      DATABASE_URL: postgres://docdockgo_admin:docdockgo@postgres:5432/docdockgo
+      HIGH_LEVEL_URL: http://host-gateway:4000/v1/high-level
+      LLM_DECISION_URL: http://host-gateway:3005/v1/decision
+      QUARANTINE_BASE: /app/quarantaine
+      CACHE_BASE: /app/cache
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    ports:
+      - "3000:3000"
+    volumes:
+      - quarantaine:/app/quarantaine
+      - cache:/app/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      scanner-haut-niveau:
+        condition: service_started
+      llm-decision:
+        condition: service_started
+
+  # ── Scanners ─────────────────────────────────────────────────────────────────
+
+  trivy-db-init:
+    image: aquasec/trivy:0.70.0
+    network_mode: host
+    command: image --download-db-only
+    volumes:
+      - trivy-db:/root/.cache/trivy
+    restart: "no"
+    logging:
+      driver: none
+
+  scanner-haut-niveau:
+    image: ghcr.io/ritsch-hugo/docdockgo-hl-scanner:sha-fa10811
+    env_file: scanner-haut-niveau/.env
+    network_mode: host
+
+  scanner-compliance:
+    image: ghcr.io/ritsch-hugo/scanner-compliance:local-fix
+    env_file: scanner-compliance/.env
+    ports:
+      - "3001:3001"
+    volumes:
+      - quarantaine:/quarantaine
+
+  scanner-static:
+    image: ghcr.io/ritsch-hugo/dockdockgo/scanner-cve:sha-98a57378c49f8f7cc735d7070232a7be4a669030
+    env_file: scanner-static/.env
+    ports:
+      - "3002:3002"
+    volumes:
+      - trivy-db:/root/.cache/trivy
+    depends_on:
+      trivy-db-init:
+        condition: service_completed_successfully
+
+  mcp-tools-server:
+    image: ghcr.io/ritsch-hugo/mcp-tools-server:latest
+    env_file: mcp-tools-server/.env
+    environment:
+      STATIC_SCANNER_URL: http://scanner-static:3002
+      COMPLIANCE_SCANNER_URL: http://scanner-compliance:3001
+    ports:
+      - "3004:3004"
+    volumes:
+      - quarantaine:/quarantaine
+    depends_on:
+      - scanner-static
+      - scanner-compliance
+
+  # ── LLM ─────────────────────────────────────────────────────────────────────
+
+  llm-manager:
+    image: ghcr.io/ritsch-hugo/llm-manager:latest
+    env_file: llm-manager/.env
+    network_mode: host
+
+  llm-decision:
+    image: ghcr.io/ritsch-hugo/llm-decision:latest
+    env_file: llm-decision/.env
+    network_mode: host
+    environment:
+      MANAGER_HOST: localhost
+      MCP_SERVER_URL: http://localhost:3004/mcp
+    volumes:
+      - quarantaine:/quarantaine
+    depends_on:
+      - llm-manager
+      - mcp-tools-server
+
+  # ── Dashboard ────────────────────────────────────────────────────────────────
+
+  dashboard:
+    image: ghcr.io/ritsch-hugo/docdockgo-dashboard:sha-3b22d0d
+    env_file: dashboard/.env
+    network_mode: host
+    environment:
+      DATABASE_URL: postgres://docdockgo_admin:docdockgo@localhost:5432/docdockgo
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Adminer ──────────────────────────────────────────────────────────────────
+
+  adminer:
+    image: adminer:latest
+    profiles: ["tools"]
+    network_mode: host
+    environment:
+      ADMINER_DEFAULT_SERVER: localhost
+    logging:
+      driver: none
+
+volumes:
+  quarantaine:
+  cache:
+  trivy-db:
+  postgres-data:

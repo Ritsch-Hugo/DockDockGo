@@ -1,0 +1,10 @@
+# Secrets — ne pas committer les clés API
+llm-decision/.env
+llm-manager/.env
+scanner-haut-niveau/.env
+
+# Certificats MITM proxy (générés localement)
+proxy/certs-mitm/
+
+# Artefacts runtime
+target/
