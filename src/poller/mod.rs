@@ -20,13 +20,13 @@ struct BatchRequest {
     queries: Vec<Query>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct Query {
     package: QueryPkg,
     version: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct QueryPkg {
     name: String,
     ecosystem: String,
@@ -63,8 +63,6 @@ struct OsvVuln {
     details: Option<String>,
     #[serde(default, deserialize_with = "null_as_empty")]
     severity: Vec<OsvSeverityEntry>,
-    #[serde(default, deserialize_with = "null_as_empty")]
-    affected: Vec<OsvAffected>,
     #[serde(default)]
     published: Option<DateTime<Utc>>,
 }
@@ -74,19 +72,6 @@ struct OsvSeverityEntry {
     #[serde(rename = "type")]
     kind: String,
     score: String,
-}
-
-#[derive(Deserialize)]
-struct OsvAffected {
-    package: OsvAffectedPkg,
-    #[serde(default, deserialize_with = "null_as_empty")]
-    versions: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct OsvAffectedPkg {
-    name: String,
-    ecosystem: String,
 }
 
 // ── Mapping ──────────────────────────────────────────────────────────────────
@@ -109,19 +94,18 @@ fn parse_severity(entries: &[OsvSeverityEntry]) -> Severity {
     Severity::High
 }
 
-fn to_cve(vuln: OsvVuln) -> Cve {
+/// Build a `Cve` from an OSV vuln + the query that triggered it.
+///
+/// The batch endpoint leaves `vuln.affected[].versions` empty, so we use
+/// the original query (package name + version) as the single affected package
+/// instead of trying to parse the empty affected list.
+fn to_cve(vuln: OsvVuln, triggering: &Query) -> Cve {
     let severity = parse_severity(&vuln.severity);
-    let affected_packages: Vec<Package> = vuln
-        .affected
-        .iter()
-        .flat_map(|a| {
-            a.versions.iter().map(|v| Package {
-                name: a.package.name.clone(),
-                version: v.clone(),
-                ecosystem: Some(a.package.ecosystem.clone()),
-            })
-        })
-        .collect();
+    let affected_packages = vec![Package {
+        name: triggering.package.name.clone(),
+        version: triggering.version.clone(),
+        ecosystem: Some(triggering.package.ecosystem.clone()),
+    }];
 
     let description = match (vuln.summary, vuln.details) {
         (Some(s), _) => s,
@@ -140,8 +124,21 @@ fn to_cve(vuln: OsvVuln) -> Cve {
 
 // ── OSV HTTP call ────────────────────────────────────────────────────────────
 
-async fn fetch_batch(client: &Client, queries: Vec<Query>) -> anyhow::Result<Vec<OsvVuln>> {
-    let body = BatchRequest { queries };
+/// Returns `(triggering_query, vuln)` pairs.
+///
+/// The OSV `/querybatch` response returns CVE metadata but leaves the
+/// `affected[].versions` array empty — full affected details are only
+/// available via the individual `/v1/vulns/{id}` endpoint.
+/// We therefore carry the original query alongside each vuln so the caller
+/// can build `affected_packages` from the package that actually triggered
+/// the match rather than from the (empty) `vuln.affected` list.
+async fn fetch_batch(
+    client: &Client,
+    queries: Vec<Query>,
+) -> anyhow::Result<Vec<(Query, OsvVuln)>> {
+    let body = BatchRequest {
+        queries: queries.clone(),
+    };
     let mut delay = Duration::from_secs(2);
 
     for attempt in 1..=MAX_RETRIES {
@@ -152,7 +149,19 @@ async fn fetch_batch(client: &Client, queries: Vec<Query>) -> anyhow::Result<Vec
                     tracing::debug!(body = %text, "OSV response body that failed to parse");
                     anyhow::anyhow!("failed to parse OSV response: {e}")
                 })?;
-                return Ok(batch.results.into_iter().flat_map(|r| r.vulns).collect());
+                // Correlate results[i] with queries[i] — OSV guarantees order.
+                let pairs = batch
+                    .results
+                    .into_iter()
+                    .zip(queries.iter())
+                    .flat_map(|(result, query)| {
+                        result
+                            .vulns
+                            .into_iter()
+                            .map(move |vuln| (query.clone(), vuln))
+                    })
+                    .collect();
+                return Ok(pairs);
             }
             Ok(resp) if resp.status().as_u16() == 429 => {
                 warn!(attempt, "OSV rate limited — backing off");
@@ -206,11 +215,11 @@ pub async fn run(tx: broadcast::Sender<Cve>, sbom_store: Arc<SbomStore>, poll_in
             warn!("No SBOMs with ecosystem data — waiting for Syft scans to complete");
         } else {
             match fetch_batch(&client, queries).await {
-                Ok(vulns) => {
+                Ok(pairs) => {
                     let mut new_count = 0u32;
-                    for vuln in vulns {
+                    for (query, vuln) in pairs {
                         if seen.insert(vuln.id.clone()) {
-                            let cve = to_cve(vuln);
+                            let cve = to_cve(vuln, &query);
                             info!(cve_id = %cve.id, severity = ?cve.severity, "New CVE from OSV");
                             let _ = tx.send(cve);
                             new_count += 1;
