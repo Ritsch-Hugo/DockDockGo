@@ -5,6 +5,7 @@ mod models;
 mod notifier;
 mod poller;
 mod sbom;
+mod watcher;
 
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -93,6 +94,17 @@ async fn main() {
         Arc::clone(&notification_store),
         dashboard_url,
     ));
+
+    // 4. Whitelist watcher — listens on pg channel 'whitelist_new' and
+    //    generates a Syft SBOM whenever a new image is whitelisted.
+    //    Only started when a DB connection is available.
+    if let Some(pool) = db_pool {
+        tokio::spawn(watcher::run(
+            pool,
+            Arc::clone(&sbom_store),
+            syft_bin.clone(),
+        ));
+    }
 
     // ── HTTP server ───────────────────────────────────────────────────────────
     let router = http::router(
