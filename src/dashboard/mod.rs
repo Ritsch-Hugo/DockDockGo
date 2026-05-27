@@ -2,12 +2,15 @@ pub mod handlers;
 pub mod store;
 
 use crate::auth::AppState;
-use axum::{routing::{get, post, delete}, Router};
+use axum::{
+    routing::{delete, get, post},
+    Router,
+};
 
 pub fn router() -> Router<AppState> {
     Router::<AppState>::new()
-        .route("/dev",    get(handlers::dev_dashboard))
-        .route("/rssi",   get(handlers::rssi_dashboard))
+        .route("/dev", get(handlers::dev_dashboard))
+        .route("/rssi", get(handlers::rssi_dashboard))
         .route("/events", get(handlers::dashboard_events_stream))
         .route("/pull/:uuid", get(handlers::pull_detail))
         .route("/api/search", get(handlers::search_pulls))

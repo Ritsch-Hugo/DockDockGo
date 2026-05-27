@@ -14,11 +14,14 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 //use dotenvy::dotenv;
 
-
 #[derive(Clone)]
 pub struct AppState {
     pub oidc_ctx: OidcState,
-    pub db: sqlx::PgPool, // Ton pool PostgreSQL
+    pub db: sqlx::PgPool,
+    /// Base URL of the cycle-de-vie service, e.g. "http://cycle-de-vie:3020".
+    /// Set via CYCLE_DE_VIE_URL. If absent, SBOM generation is not triggered.
+    pub cdv_url: Option<String>,
+    pub http_client: reqwest::Client,
 }
 
 #[derive(Clone, Default)]
@@ -37,12 +40,8 @@ pub async fn build_oidc_client() -> CoreClient {
         .await
         .expect("Echec de la decouverte OIDC Zitadel");
 
-    CoreClient::from_provider_metadata(
-        provider_metadata,
-        ClientId::new(client_id),
-        None,
-    )
-    .set_redirect_uri(RedirectUrl::new(redirect_uri).expect("Redirect URI invalide"))
+    CoreClient::from_provider_metadata(provider_metadata, ClientId::new(client_id), None)
+        .set_redirect_uri(RedirectUrl::new(redirect_uri).expect("Redirect URI invalide"))
 }
 
 pub async fn login_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -69,6 +68,7 @@ pub async fn login_handler(State(state): State<AppState>) -> impl IntoResponse {
 #[derive(Debug, Deserialize)]
 pub struct CallbackParams {
     pub code: String,
+    #[allow(dead_code)]
     pub state: String,
 }
 
@@ -76,7 +76,7 @@ pub struct CallbackParams {
 struct ZitadelClaims {
     sub: String,
     preferred_username: Option<String>,
-    name: Option<String>,   
+    name: Option<String>,
     nickname: Option<String>,
     #[serde(rename = "role")]
     role: Option<String>,
@@ -88,7 +88,6 @@ pub async fn callback_handler(
     State(app_state): State<AppState>,
     Query(params): Query<CallbackParams>,
 ) -> impl IntoResponse {
-
     let oidc_state = &app_state.oidc_ctx;
     let db_pool = &app_state.db;
     let client = build_oidc_client().await;
@@ -168,7 +167,8 @@ pub async fn callback_handler(
         .collect();
 
     // 2. Synchro DB
-    let username = claims.preferred_username
+    let username = claims
+        .preferred_username
         .as_ref()
         .or(claims.name.as_ref())
         .or(claims.nickname.as_ref())
@@ -176,7 +176,7 @@ pub async fn callback_handler(
         .unwrap_or("unknown");
 
     match sqlx::query(
-            r#"
+        r#"
             INSERT INTO users (sub, username, role, allowed_ips, last_login)
             VALUES ($1, $2, $3, $4, NOW())
             ON CONFLICT (sub) DO UPDATE SET 
@@ -184,16 +184,18 @@ pub async fn callback_handler(
                 role = EXCLUDED.role,
                 allowed_ips = EXCLUDED.allowed_ips,
                 last_login = NOW()
-            "#
-        )
-        .bind(&claims.sub)
-        .bind(username)
-        .bind(&role) // <--- AJOUTE LE '&' ICI pour emprunter la valeur
-        .bind(&allowed_ips[..])
-        .execute(db_pool).await {
-            Ok(_) => println!("[DB] User {} synchronisé", username),
-            Err(e) => eprintln!("[DB] Erreur de synchro : {}", e),
-        }
+            "#,
+    )
+    .bind(&claims.sub)
+    .bind(username)
+    .bind(&role) // <--- AJOUTE LE '&' ICI pour emprunter la valeur
+    .bind(&allowed_ips[..])
+    .execute(db_pool)
+    .await
+    {
+        Ok(_) => println!("[DB] User {} synchronisé", username),
+        Err(e) => eprintln!("[DB] Erreur de synchro : {}", e),
+    }
 
     // --- FIN AJOUT BASE DE DONNÉES ---
 
@@ -202,9 +204,12 @@ pub async fn callback_handler(
     // Cookie rôle (8h)
     headers.append(
         header::SET_COOKIE,
-        format!("role={}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800", role)
-            .parse()
-            .unwrap(),
+        format!(
+            "role={}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800",
+            role
+        )
+        .parse()
+        .unwrap(),
     );
 
     // Cookie id_token pour le logout (même durée que le rôle)
@@ -219,8 +224,11 @@ pub async fn callback_handler(
         .unwrap(),
     );
     headers.append(
-    header::SET_COOKIE,
-    format!("sub={}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800", claims.sub)
+        header::SET_COOKIE,
+        format!(
+            "sub={}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800",
+            claims.sub
+        )
         .parse()
         .unwrap(),
     );
@@ -258,8 +266,8 @@ pub async fn logout(headers: HeaderMap) -> Response {
     );
 
     let issuer = std::env::var("ZITADEL_ISSUER").unwrap_or_default();
-    let post_logout_uri = std::env::var("POST_LOGOUT_REDIRECT_URI")
-        .unwrap_or_else(|_| "/logged-out".to_string());
+    let post_logout_uri =
+        std::env::var("POST_LOGOUT_REDIRECT_URI").unwrap_or_else(|_| "/logged-out".to_string());
 
     let end_session_url = if id_token_hint.is_empty() {
         "/logged-out".to_string()
@@ -275,7 +283,8 @@ pub async fn logout(headers: HeaderMap) -> Response {
 
 // GET /logged-out — Zitadel redirige ici après destruction de la session SSO.
 pub async fn logged_out_handler() -> impl IntoResponse {
-    Html(r#"<!DOCTYPE html>
+    Html(
+        r#"<!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
@@ -295,7 +304,8 @@ pub async fn logged_out_handler() -> impl IntoResponse {
     <div class="sub">Redirection vers la page de connexion…</div>
   </div>
 </body>
-</html>"#)
+</html>"#,
+    )
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

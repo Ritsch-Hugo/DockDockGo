@@ -1,20 +1,21 @@
+use crate::auth::{extract_role_from_cookie, AppState};
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Redirect, Response, sse::{Event, Sse}},
+    http::{header, HeaderMap, StatusCode},
+    response::{
+        sse::{Event, Sse},
+        Html, IntoResponse, Redirect, Response,
+    },
 };
-use crate::auth::{extract_role_from_cookie, AppState};
 use futures::stream;
-use std::convert::Infallible;
 use sqlx::postgres::PgListener;
 use sqlx::types::chrono;
+use std::convert::Infallible;
+use urlencoding;
 
 // ─── Dashboard Dev ────────────────────────────────────────────────────────────
 
-pub async fn dev_dashboard(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn dev_dashboard(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match extract_role_from_cookie(&headers).as_deref() {
         Some("dev") => (),
         _ => return Redirect::to("/").into_response(),
@@ -31,7 +32,11 @@ pub async fn dev_dashboard(
     let user = match sqlx::query!(
         "SELECT username, allowed_ips FROM users WHERE sub = $1",
         sub
-    ).fetch_optional(db).await.unwrap_or(None) {
+    )
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None)
+    {
         Some(u) => u,
         None => return Redirect::to("/").into_response(),
     };
@@ -59,7 +64,10 @@ pub async fn dev_dashboard(
          WHERE scan_completed = false AND ip_client = ANY($1)
          ORDER BY started_at DESC LIMIT 50",
         &allowed_ips[..]
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let active_count = active_pulls.len();
     let mut active_rows_html = String::new();
@@ -98,7 +106,10 @@ pub async fn dev_dashboard(
          WHERE scan_completed = true AND ip_client = ANY($1)
          ORDER BY started_at DESC LIMIT 100",
         &allowed_ips[..]
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let history_count = history.len();
     let mut history_rows_html = String::new();
@@ -146,10 +157,7 @@ pub async fn dev_dashboard(
 
 // ─── Dashboard RSSI ───────────────────────────────────────────────────────────
 
-pub async fn rssi_dashboard(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn rssi_dashboard(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match extract_role_from_cookie(&headers).as_deref() {
         Some("rssi") => (),
         _ => return Redirect::to("/").into_response(),
@@ -159,21 +167,25 @@ pub async fn rssi_dashboard(
 
     // ── Métriques vue globale ─────────────────────────────────────────────────
 
-    let pulls_actifs: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM pulls WHERE scan_completed = false"
-    ).fetch_one(db).await.unwrap_or(0);
+    let pulls_actifs: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pulls WHERE scan_completed = false")
+            .fetch_one(db)
+            .await
+            .unwrap_or(0);
 
     let bloques_today: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pulls WHERE decision_final = 'DENY' AND started_at >= NOW() - INTERVAL '24 hours'"
     ).fetch_one(db).await.unwrap_or(0);
 
-    let en_quarantaine: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM quarantine"
-    ).fetch_one(db).await.unwrap_or(0);
+    let en_quarantaine: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM quarantine")
+        .fetch_one(db)
+        .await
+        .unwrap_or(0);
 
-    let en_cache: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM cache"
-    ).fetch_one(db).await.unwrap_or(0);
+    let en_cache: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cache")
+        .fetch_one(db)
+        .await
+        .unwrap_or(0);
 
     let allow_24h: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pulls WHERE decision_final = 'ALLOW' AND started_at >= NOW() - INTERVAL '24 hours'"
@@ -199,7 +211,10 @@ pub async fn rssi_dashboard(
         "SELECT uuid, repository, tag, ip_client, registry, started_at, decision_final
          FROM pulls WHERE decision_final IN ('DENY', 'PENDING')
          ORDER BY started_at DESC LIMIT 5"
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let mut alerts_html = String::new();
     for a in &alerts {
@@ -229,7 +244,8 @@ pub async fn rssi_dashboard(
         ));
     }
     if alerts_html.is_empty() {
-        alerts_html = "<div style='color:var(--text-tertiary);font-size:12px'>Aucune alerte</div>".to_string();
+        alerts_html = "<div style='color:var(--text-tertiary);font-size:12px'>Aucune alerte</div>"
+            .to_string();
     }
 
     // ── Pulls actifs (vue globale + page pulls) ───────────────────────────────
@@ -239,7 +255,10 @@ pub async fn rssi_dashboard(
                 decision_final, scan_completed, started_at
          FROM pulls WHERE scan_completed = false
          ORDER BY started_at DESC LIMIT 50"
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     // FIX: ajout de data-uuid sur les lignes de la vue globale pour rendre cliquables
     let mut overview_pulls_html = String::new();
@@ -304,7 +323,10 @@ pub async fn rssi_dashboard(
     let quarantine_items = sqlx::query!(
         "SELECT id, registry, repository, digest, type, file_path, size_bytes, added_at
          FROM quarantine ORDER BY added_at DESC LIMIT 50"
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let mut quarantine_rows_html = String::new();
     for q in &quarantine_items {
@@ -339,7 +361,10 @@ pub async fn rssi_dashboard(
     let cache_items = sqlx::query!(
         "SELECT id, registry, repository, digest, type, size_bytes, added_at
          FROM cache ORDER BY added_at DESC LIMIT 50"
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let mut cache_rows_html = String::new();
     for c in &cache_items {
@@ -372,7 +397,10 @@ pub async fn rssi_dashboard(
 
     let wl_items = sqlx::query!(
         "SELECT id, registry, repository, tag, added_at FROM whitelist ORDER BY added_at DESC"
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let wl_count = wl_items.len();
     let mut wl_rows_html = String::new();
@@ -398,7 +426,10 @@ pub async fn rssi_dashboard(
 
     let bl_items = sqlx::query!(
         "SELECT id, registry, repository, tag, added_at FROM blacklist ORDER BY added_at DESC"
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let bl_count = bl_items.len();
     let mut bl_rows_html = String::new();
@@ -430,7 +461,10 @@ pub async fn rssi_dashboard(
          FROM pulls
          WHERE scan_completed = true
          ORDER BY started_at DESC LIMIT 100"
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let mut history_rows_html = String::new();
     for h in &history {
@@ -503,7 +537,7 @@ pub async fn rssi_dashboard(
 // ─── SSE ──────────────────────────────────────────────────────────────────────
 
 pub async fn dashboard_events_stream(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
     if extract_role_from_cookie(&headers).is_none() {
@@ -537,9 +571,9 @@ pub async fn dashboard_events_stream(
 fn decision_badge(decision: &str) -> &'static str {
     match decision {
         "ALLOW" => "badge-green",
-        "DENY"  => "badge-red",
+        "DENY" => "badge-red",
         "ERROR" => "badge-red",
-        _       => "badge-amber",
+        _ => "badge-amber",
     }
 }
 
@@ -554,12 +588,19 @@ fn format_size(bytes: i64) -> String {
 }
 
 fn format_since(ts: Option<chrono::DateTime<chrono::Utc>>) -> String {
-    let Some(ts) = ts else { return "—".to_string() };
+    let Some(ts) = ts else {
+        return "—".to_string();
+    };
     let secs = (chrono::Utc::now() - ts).num_seconds();
-    if secs < 60 { format!("il y a {}s", secs) }
-    else if secs < 3600 { format!("il y a {}min", secs / 60) }
-    else if secs < 86400 { format!("il y a {}h", secs / 3600) }
-    else { format!("il y a {}j", secs / 86400) }
+    if secs < 60 {
+        format!("il y a {}s", secs)
+    } else if secs < 3600 {
+        format!("il y a {}min", secs / 60)
+    } else if secs < 86400 {
+        format!("il y a {}h", secs / 3600)
+    } else {
+        format!("il y a {}j", secs / 86400)
+    }
 }
 
 fn format_datetime(ts: Option<chrono::DateTime<chrono::Utc>>) -> String {
@@ -590,7 +631,11 @@ pub async fn pull_detail(
                 started_at, last_activity, scan_completed, decision_final
          FROM pulls WHERE uuid = $1",
         uuid_parsed
-    ).fetch_optional(db).await.unwrap_or(None) {
+    )
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None)
+    {
         Some(p) => p,
         None => return (StatusCode::NOT_FOUND, "Pull introuvable").into_response(),
     };
@@ -599,7 +644,10 @@ pub async fn pull_detail(
         "SELECT id, digest_value, digest_type, digest_algo, received_at
          FROM pull_digests WHERE pull_id = $1 ORDER BY received_at ASC",
         uuid_parsed
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let ia_decisions = sqlx::query!(
         "SELECT id, created_at, decision, scan_reasoning,
@@ -608,14 +656,20 @@ pub async fn pull_detail(
                 decision_metadata, alternatives
         FROM ia_decisions WHERE pull_id = $1 ORDER BY created_at ASC",
         uuid_parsed
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let scan_events = sqlx::query!(
         "SELECT id, scanner_type, response_scanner, created_at, ia_decision_id,
                 llm_summary, executed
          FROM scan_events WHERE pull_id = $1 ORDER BY created_at ASC",
         uuid_parsed
-    ).fetch_all(db).await.unwrap_or_default();
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     let decision = pull.decision_final.as_deref().unwrap_or("PENDING");
     let badge = decision_badge(decision);
@@ -646,14 +700,27 @@ pub async fn pull_detail(
         let score = ia.vulnerability_score.unwrap_or(0.0);
         let vuln_score = ia.vulnerability_score.unwrap_or(0.0);
         let confidence = ia.confidence.unwrap_or(0.0);
-        let score_color = if score > 0.75 { "var(--text-success)" } else if score > 0.4 { "var(--text-warning)" } else { "var(--text-danger)" };
-        let vuln_color  = if vuln_score > 7.0 { "var(--text-danger)" } else if vuln_score > 4.0 { "var(--text-warning)" } else { "var(--text-success)" };
+        let score_color = if score > 0.75 {
+            "var(--text-success)"
+        } else if score > 0.4 {
+            "var(--text-warning)"
+        } else {
+            "var(--text-danger)"
+        };
+        let vuln_color = if vuln_score > 7.0 {
+            "var(--text-danger)"
+        } else if vuln_score > 4.0 {
+            "var(--text-warning)"
+        } else {
+            "var(--text-success)"
+        };
 
         let planned_count = [ia.static_scan, ia.compliance_scan, ia.dynamic_scan]
             .iter()
             .filter(|b| b.unwrap_or(false))
             .count();
-        let done_count = scan_events.iter()
+        let done_count = scan_events
+            .iter()
             .filter(|ev| ev.ia_decision_id == Some(ia.id))
             .count();
         let scan_done = planned_count > 0 && done_count >= planned_count;
@@ -664,28 +731,46 @@ pub async fn pull_detail(
         };
         let ia_badge = match decision_str {
             "ALLOW" => "badge-green",
-            "DENY"  => "badge-red",
+            "DENY" => "badge-red",
             "EN COURS" => "badge-gray",
             _ => "badge-amber",
         };
 
         let scanners: Vec<&str> = [
-            if ia.static_scan.unwrap_or(false)     { Some("statique") }   else { None },
-            if ia.compliance_scan.unwrap_or(false)  { Some("compliance") } else { None },
-            if ia.dynamic_scan.unwrap_or(false)     { Some("dynamique") }  else { None },
-        ].iter().filter_map(|x| *x).collect();
+            if ia.static_scan.unwrap_or(false) {
+                Some("statique")
+            } else {
+                None
+            },
+            if ia.compliance_scan.unwrap_or(false) {
+                Some("compliance")
+            } else {
+                None
+            },
+            if ia.dynamic_scan.unwrap_or(false) {
+                Some("dynamique")
+            } else {
+                None
+            },
+        ]
+        .iter()
+        .filter_map(|x| *x)
+        .collect();
 
         let scanners_chips: String = if scanners.is_empty() {
             "<span style='color:var(--text-tertiary);font-size:11px'>aucun</span>".to_string()
         } else {
-            scanners.iter().map(|s| format!("<span class='chip chip-blue'>{}</span>", s)).collect()
+            scanners
+                .iter()
+                .map(|s| format!("<span class='chip chip-blue'>{}</span>", s))
+                .collect()
         };
 
         let rationale_html = markdown_to_html(ia.rationale.as_deref().unwrap_or("—"));
-        let reasoning_dec  = "—";
+        let reasoning_dec = "—";
 
-        let workers_html     = build_workers_html(ia.scan_reasoning.as_ref());
-        let arbiter_html     = build_arbiter_html(ia.scan_reasoning.as_ref());
+        let workers_html = build_workers_html(ia.scan_reasoning.as_ref());
+        let arbiter_html = build_arbiter_html(ia.scan_reasoning.as_ref());
         let alternatives_html = build_alternatives_html(ia.alternatives.as_ref());
         let dec_workers_html = build_decision_workers_html(ia.decision_metadata.as_ref());
         let dec_arbiter_html = build_decision_arbiter_html(ia.decision_metadata.as_ref());
@@ -700,7 +785,10 @@ pub async fn pull_detail(
         };
 
         let alternatives_tab = if ia.alternatives.is_some() {
-            format!("<button class='ia-tab' onclick=\"switchTab('{}','alt')\">Alternatives</button>", ia.id)
+            format!(
+                "<button class='ia-tab' onclick=\"switchTab('{}','alt')\">Alternatives</button>",
+                ia.id
+            )
         } else {
             String::new()
         };
@@ -784,10 +872,10 @@ pub async fn pull_detail(
     let mut events_html = String::new();
     for ev in &scan_events {
         let scanner_type = ev.scanner_type.as_deref().unwrap_or("?");
-        let executed     = ev.executed.unwrap_or(false);
-        let resp         = ev.response_scanner.as_ref();
-        let llm_summary  = ev.llm_summary.as_deref().unwrap_or("");
-        let raw_json     = resp
+        let executed = ev.executed.unwrap_or(false);
+        let resp = ev.response_scanner.as_ref();
+        let llm_summary = ev.llm_summary.as_deref().unwrap_or("");
+        let raw_json = resp
             .map(|v| serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string()))
             .unwrap_or_default();
 
@@ -817,17 +905,23 @@ pub async fn pull_detail(
                 ))
             }
         } else {
-            ("<span style='color:var(--text-tertiary);font-size:11px'>—</span>".to_string(), String::new())
+            (
+                "<span style='color:var(--text-tertiary);font-size:11px'>—</span>".to_string(),
+                String::new(),
+            )
         };
 
         let llm_html = if !llm_summary.is_empty() {
-            format!("<div class='ev-llm-summary'>🤖 {}</div>", html_escape(llm_summary))
+            format!(
+                "<div class='ev-llm-summary'>🤖 {}</div>",
+                html_escape(llm_summary)
+            )
         } else {
             String::new()
         };
 
-        let ev_id      = ev.id;
-        let json_attr  = html_escape(&raw_json);
+        let ev_id = ev.id;
+        let json_attr = html_escape(&raw_json);
 
         events_html.push_str(&format!(r#"
 <div class='ev-card' id='ev-{ev_id}'>
@@ -868,13 +962,20 @@ pub async fn pull_detail(
     let mut timeline_html = String::new();
     for ia in &ia_decisions {
         let score = ia.vulnerability_score.unwrap_or(0.0);
-        let score_color = if score > 0.75 { "var(--text-success)" } else if score > 0.4 { "var(--text-warning)" } else { "var(--text-danger)" };
+        let score_color = if score > 0.75 {
+            "var(--text-success)"
+        } else if score > 0.4 {
+            "var(--text-warning)"
+        } else {
+            "var(--text-danger)"
+        };
 
         let planned_count = [ia.static_scan, ia.compliance_scan, ia.dynamic_scan]
             .iter()
             .filter(|b| b.unwrap_or(false))
             .count();
-        let done_count = scan_events.iter()
+        let done_count = scan_events
+            .iter()
             .filter(|ev| ev.ia_decision_id == Some(ia.id))
             .count();
         let scan_done = planned_count > 0 && done_count >= planned_count;
@@ -885,17 +986,32 @@ pub async fn pull_detail(
             "EN COURS"
         };
         let ia_badge = match decision_str {
-            "ALLOW"    => "badge-green",
-            "DENY"     => "badge-red",
+            "ALLOW" => "badge-green",
+            "DENY" => "badge-red",
             "EN COURS" => "badge-gray",
-            _          => "badge-amber",
+            _ => "badge-amber",
         };
 
         let scanners: Vec<&str> = [
-            if ia.static_scan.unwrap_or(false)    { Some("statique") }   else { None },
-            if ia.compliance_scan.unwrap_or(false) { Some("compliance") } else { None },
-            if ia.dynamic_scan.unwrap_or(false)    { Some("dynamique") }  else { None },
-        ].iter().filter_map(|x| *x).collect();
+            if ia.static_scan.unwrap_or(false) {
+                Some("statique")
+            } else {
+                None
+            },
+            if ia.compliance_scan.unwrap_or(false) {
+                Some("compliance")
+            } else {
+                None
+            },
+            if ia.dynamic_scan.unwrap_or(false) {
+                Some("dynamique")
+            } else {
+                None
+            },
+        ]
+        .iter()
+        .filter_map(|x| *x)
+        .collect();
 
         timeline_html.push_str(&format!(r#"<div class='tl-item'>
   <div class='tl-dot blue'></div>
@@ -914,22 +1030,29 @@ pub async fn pull_detail(
 
         for scanner_name in &["statique", "compliance", "dynamique"] {
             let planned = match *scanner_name {
-                "statique"   => ia.static_scan.unwrap_or(false),
+                "statique" => ia.static_scan.unwrap_or(false),
                 "compliance" => ia.compliance_scan.unwrap_or(false),
-                "dynamique"  => ia.dynamic_scan.unwrap_or(false),
-                _            => false,
+                "dynamique" => ia.dynamic_scan.unwrap_or(false),
+                _ => false,
             };
-            if !planned { continue; }
+            if !planned {
+                continue;
+            }
 
             // Match scanner_type broadly: the DB value may be "scanner-static",
             // "cve", "trivy", etc. — not necessarily the display label.
             let done_event = scan_events.iter().find(|ev| {
                 let t = ev.scanner_type.as_deref().unwrap_or("").to_lowercase();
                 let matches = match *scanner_name {
-                    "statique"   => t.contains("static") || t.contains("cve") || t.contains("trivy") || t.contains("statique"),
+                    "statique" => {
+                        t.contains("static")
+                            || t.contains("cve")
+                            || t.contains("trivy")
+                            || t.contains("statique")
+                    }
                     "compliance" => t.contains("compliance"),
-                    "dynamique"  => t.contains("dynamic") || t.contains("dynamique"),
-                    _            => false,
+                    "dynamique" => t.contains("dynamic") || t.contains("dynamique"),
+                    _ => false,
                 };
                 matches && ev.ia_decision_id == Some(ia.id)
             });
@@ -947,7 +1070,8 @@ pub async fn pull_detail(
                     summary = html_escape(summary),
                 ));
             } else {
-                timeline_html.push_str(&format!(r#"<div class='tl-item' data-scanner='{name}'>
+                timeline_html.push_str(&format!(
+                    r#"<div class='tl-item' data-scanner='{name}'>
   <div class='tl-dot' style='background:var(--border-md)'></div>
   <div class='tl-label' style='color:var(--text-tertiary)'>Scanner : {name}</div>
   <div class='tl-sub' style='color:var(--text-tertiary)'>En attente...</div>
@@ -960,11 +1084,11 @@ pub async fn pull_detail(
 
     // Décision finale
     let final_decision = pull.decision_final.as_deref().unwrap_or("PENDING");
-    let final_badge    = decision_badge(final_decision);
-    let final_dot      = match final_decision {
+    let final_badge = decision_badge(final_decision);
+    let final_dot = match final_decision {
         "ALLOW" => "green",
-        "DENY"  => "red",
-        _       => "amber",
+        "DENY" => "red",
+        _ => "amber",
     };
     timeline_html.push_str(&format!(r#"<div class='tl-item' id='tl-final'>
   <div class='tl-dot {final_dot}'></div>
@@ -981,7 +1105,8 @@ pub async fn pull_detail(
     }
 
     // ── HTML final ────────────────────────────────────────────────────────────
-    let html = format!(r#"<!DOCTYPE html>
+    let html = format!(
+        r#"<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -1466,32 +1591,35 @@ connectSSE();
 </script>
 </body>
 </html>"#,
-        short       = &uuid[..8],
-        repo        = pull.repository,
-        tag         = pull.tag.as_deref().unwrap_or("latest"),
-        uuid_full   = pull.uuid,
-        ip          = pull.ip_client,
-        registry    = pull.registry,
-        os          = pull.os.as_deref().unwrap_or("?"),
-        arch        = pull.arch.as_deref().unwrap_or("?"),
+        short = &uuid[..8],
+        repo = pull.repository,
+        tag = pull.tag.as_deref().unwrap_or("latest"),
+        uuid_full = pull.uuid,
+        ip = pull.ip_client,
+        registry = pull.registry,
+        os = pull.os.as_deref().unwrap_or("?"),
+        arch = pull.arch.as_deref().unwrap_or("?"),
         client_type = pull.client_type.as_deref().unwrap_or("?"),
-        started     = format_datetime(pull.started_at),
-        last_act    = format_datetime(pull.last_activity),
-        completed   = if pull.scan_completed.unwrap_or(false) { "Oui" } else { "Non" },
-        badge       = badge,
-        decision    = decision,
-        nb_digests  = digests.len(),
-        digests     = digests_html,
-        nb_ia       = ia_decisions.len(),
-        ia_cards    = ia_cards_html,
-        nb_events   = scan_events.len(),
-        events      = events_html,
-        timeline    = timeline_html,
+        started = format_datetime(pull.started_at),
+        last_act = format_datetime(pull.last_activity),
+        completed = if pull.scan_completed.unwrap_or(false) {
+            "Oui"
+        } else {
+            "Non"
+        },
+        badge = badge,
+        decision = decision,
+        nb_digests = digests.len(),
+        digests = digests_html,
+        nb_ia = ia_decisions.len(),
+        ia_cards = ia_cards_html,
+        nb_events = scan_events.len(),
+        events = events_html,
+        timeline = timeline_html,
     );
 
     Html(html).into_response()
 }
-
 
 // ─── API recherche pulls (autocomplétion) ─────────────────────────────────────
 
@@ -1504,7 +1632,10 @@ pub async fn search_pulls(
         return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!([]))).into_response();
     }
 
-    let raw_q = params.get("q").map(|s| s.to_lowercase()).unwrap_or_default();
+    let raw_q = params
+        .get("q")
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
     if raw_q.len() < 2 {
         return (StatusCode::OK, axum::Json(serde_json::json!([]))).into_response();
     }
@@ -1521,14 +1652,19 @@ pub async fn search_pulls(
     .await
     .unwrap_or_default();
 
-    let json: Vec<serde_json::Value> = results.iter().map(|r| serde_json::json!({
-        "uuid": r.uuid.to_string(),
-        "repository": r.repository,
-        "tag": r.tag.as_deref().unwrap_or("latest"),
-        "ip_client": r.ip_client,
-        "decision": r.decision_final.as_deref().unwrap_or("PENDING"),
-        "started_at": format_datetime(r.started_at),
-    })).collect();
+    let json: Vec<serde_json::Value> = results
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "uuid": r.uuid.to_string(),
+                "repository": r.repository,
+                "tag": r.tag.as_deref().unwrap_or("latest"),
+                "ip_client": r.ip_client,
+                "decision": r.decision_final.as_deref().unwrap_or("PENDING"),
+                "started_at": format_datetime(r.started_at),
+            })
+        })
+        .collect();
 
     (StatusCode::OK, axum::Json(serde_json::json!(json))).into_response()
 }
@@ -1548,7 +1684,11 @@ pub async fn api_add_whitelist(
     axum::Json(body): axum::Json<ListAddForm>,
 ) -> impl IntoResponse {
     if extract_role_from_cookie(&headers).as_deref() != Some("rssi") {
-        return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({"error": "Non autorisé"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": "Non autorisé"})),
+        )
+            .into_response();
     }
 
     let exists: bool = sqlx::query_scalar!(
@@ -1558,16 +1698,60 @@ pub async fn api_add_whitelist(
     .fetch_one(&state.db).await.unwrap_or(Some(false)).unwrap_or(false);
 
     if exists {
-        return (StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": "Déjà présent en whitelist"}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(serde_json::json!({"error": "Déjà présent en whitelist"})),
+        )
+            .into_response();
     }
 
     let id = uuid::Uuid::new_v4();
     match sqlx::query!(
         "INSERT INTO whitelist (id, registry, repository, tag) VALUES ($1, $2, $3, $4)",
-        id, body.registry, body.repository, body.tag
-    ).execute(&state.db).await {
-        Ok(_) => (StatusCode::CREATED, axum::Json(serde_json::json!({"id": id.to_string(), "ok": true}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        id,
+        body.registry,
+        body.repository,
+        body.tag
+    )
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => {
+            // Trigger SBOM generation in cycle-de-vie (fire-and-forget)
+            if let Some(ref cdv_url) = state.cdv_url {
+                let image_ref = match &body.tag {
+                    Some(tag) => format!("{}/{}:{}", body.registry, body.repository, tag),
+                    None => format!("{}/{}", body.registry, body.repository),
+                };
+                let url = format!(
+                    "{}/sbom/refresh?image={}",
+                    cdv_url,
+                    urlencoding::encode(&image_ref)
+                );
+                let client = state.http_client.clone();
+                tokio::spawn(async move {
+                    match client.post(&url).send().await {
+                        Ok(r) => println!(
+                            "[cycle-de-vie] SBOM refresh triggered for {image_ref}: {}",
+                            r.status()
+                        ),
+                        Err(e) => eprintln!(
+                            "[cycle-de-vie] Failed to trigger SBOM refresh for {image_ref}: {e}"
+                        ),
+                    }
+                });
+            }
+            (
+                StatusCode::CREATED,
+                axum::Json(serde_json::json!({"id": id.to_string(), "ok": true})),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -1577,19 +1761,41 @@ pub async fn api_remove_whitelist(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     if extract_role_from_cookie(&headers).as_deref() != Some("rssi") {
-        return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({"error": "Non autorisé"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": "Non autorisé"})),
+        )
+            .into_response();
     }
 
     let uuid_parsed: uuid::Uuid = match id.parse() {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": "UUID invalide"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": "UUID invalide"})),
+            )
+                .into_response()
+        }
     };
 
     match sqlx::query!("DELETE FROM whitelist WHERE id = $1", uuid_parsed)
-        .execute(&state.db).await {
-        Ok(r) if r.rows_affected() > 0 => (StatusCode::OK, axum::Json(serde_json::json!({"ok": true}))).into_response(),
-        Ok(_) => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "Entrée introuvable"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        .execute(&state.db)
+        .await
+    {
+        Ok(r) if r.rows_affected() > 0 => {
+            (StatusCode::OK, axum::Json(serde_json::json!({"ok": true}))).into_response()
+        }
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error": "Entrée introuvable"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -1601,7 +1807,11 @@ pub async fn api_add_blacklist(
     axum::Json(body): axum::Json<ListAddForm>,
 ) -> impl IntoResponse {
     if extract_role_from_cookie(&headers).as_deref() != Some("rssi") {
-        return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({"error": "Non autorisé"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": "Non autorisé"})),
+        )
+            .into_response();
     }
 
     let exists: bool = sqlx::query_scalar!(
@@ -1611,16 +1821,34 @@ pub async fn api_add_blacklist(
     .fetch_one(&state.db).await.unwrap_or(Some(false)).unwrap_or(false);
 
     if exists {
-        return (StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": "Déjà présent en blacklist"}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(serde_json::json!({"error": "Déjà présent en blacklist"})),
+        )
+            .into_response();
     }
 
     let id = uuid::Uuid::new_v4();
     match sqlx::query!(
         "INSERT INTO blacklist (id, registry, repository, tag) VALUES ($1, $2, $3, $4)",
-        id, body.registry, body.repository, body.tag
-    ).execute(&state.db).await {
-        Ok(_) => (StatusCode::CREATED, axum::Json(serde_json::json!({"id": id.to_string(), "ok": true}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        id,
+        body.registry,
+        body.repository,
+        body.tag
+    )
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({"id": id.to_string(), "ok": true})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -1630,19 +1858,41 @@ pub async fn api_remove_blacklist(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     if extract_role_from_cookie(&headers).as_deref() != Some("rssi") {
-        return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({"error": "Non autorisé"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": "Non autorisé"})),
+        )
+            .into_response();
     }
 
     let uuid_parsed: uuid::Uuid = match id.parse() {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": "UUID invalide"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": "UUID invalide"})),
+            )
+                .into_response()
+        }
     };
 
     match sqlx::query!("DELETE FROM blacklist WHERE id = $1", uuid_parsed)
-        .execute(&state.db).await {
-        Ok(r) if r.rows_affected() > 0 => (StatusCode::OK, axum::Json(serde_json::json!({"ok": true}))).into_response(),
-        Ok(_) => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "Entrée introuvable"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        .execute(&state.db)
+        .await
+    {
+        Ok(r) if r.rows_affected() > 0 => {
+            (StatusCode::OK, axum::Json(serde_json::json!({"ok": true}))).into_response()
+        }
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error": "Entrée introuvable"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -1654,23 +1904,35 @@ pub async fn api_delete_cache(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     if extract_role_from_cookie(&headers).as_deref() != Some("rssi") {
-        return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({"error": "Non autorisé"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": "Non autorisé"})),
+        )
+            .into_response();
     }
 
     let uuid_parsed: uuid::Uuid = match id.parse() {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": "UUID invalide"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": "UUID invalide"})),
+            )
+                .into_response()
+        }
     };
 
-    let row = sqlx::query!(
-        "SELECT file_path FROM cache WHERE id = $1",
-        uuid_parsed
-    ).fetch_optional(&state.db).await.unwrap_or(None);
+    let row = sqlx::query!("SELECT file_path FROM cache WHERE id = $1", uuid_parsed)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
 
     let file_path = row.and_then(|r| r.file_path);
 
     match sqlx::query!("DELETE FROM cache WHERE id = $1", uuid_parsed)
-        .execute(&state.db).await {
+        .execute(&state.db)
+        .await
+    {
         Ok(r) if r.rows_affected() > 0 => {
             if let Some(path) = file_path {
                 if let Err(e) = std::fs::remove_file(&path) {
@@ -1679,8 +1941,16 @@ pub async fn api_delete_cache(
             }
             (StatusCode::OK, axum::Json(serde_json::json!({"ok": true}))).into_response()
         }
-        Ok(_) => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "Entrée introuvable"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error": "Entrée introuvable"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 pub async fn search_pulls_dev(
@@ -1694,18 +1964,23 @@ pub async fn search_pulls_dev(
 
     let sub = match crate::auth::extract_cookie(&headers, "sub") {
         Some(s) => s,
-        None => return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!([]))).into_response(),
+        None => {
+            return (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!([]))).into_response()
+        }
     };
 
-    let allowed_ips: Vec<String> = sqlx::query_scalar!(
-        "SELECT allowed_ips FROM users WHERE sub = $1",
-        sub
-    )
-    .fetch_optional(&state.db).await.unwrap_or(None)
-    .unwrap_or_default()
-    .unwrap_or_default();
+    let allowed_ips: Vec<String> =
+        sqlx::query_scalar!("SELECT allowed_ips FROM users WHERE sub = $1", sub)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default()
+            .unwrap_or_default();
 
-    let q = params.get("q").map(|s| format!("%{}%", s.to_lowercase())).unwrap_or_default();
+    let q = params
+        .get("q")
+        .map(|s| format!("%{}%", s.to_lowercase()))
+        .unwrap_or_default();
     if q.len() < 3 || allowed_ips.is_empty() {
         return (StatusCode::OK, axum::Json(serde_json::json!([]))).into_response();
     }
@@ -1723,41 +1998,58 @@ pub async fn search_pulls_dev(
     .await
     .unwrap_or_default();
 
-    let json: Vec<serde_json::Value> = results.iter().map(|r| serde_json::json!({
-        "uuid": r.uuid.to_string(),
-        "repository": r.repository,
-        "tag": r.tag.as_deref().unwrap_or("latest"),
-        "ip_client": r.ip_client,
-        "decision": r.decision_final.as_deref().unwrap_or("PENDING"),
-        "started_at": format_datetime(r.started_at),
-    })).collect();
+    let json: Vec<serde_json::Value> = results
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "uuid": r.uuid.to_string(),
+                "repository": r.repository,
+                "tag": r.tag.as_deref().unwrap_or("latest"),
+                "ip_client": r.ip_client,
+                "decision": r.decision_final.as_deref().unwrap_or("PENDING"),
+                "started_at": format_datetime(r.started_at),
+            })
+        })
+        .collect();
 
     (StatusCode::OK, axum::Json(serde_json::json!(json))).into_response()
 }
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
-     .replace('\'', "&#39;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn build_workers_html(scan_reasoning: Option<&serde_json::Value>) -> String {
-    let Some(val) = scan_reasoning else { return String::new(); };
+    let Some(val) = scan_reasoning else {
+        return String::new();
+    };
     let workers = match val.get("workers").and_then(|w| w.as_array()) {
         Some(w) => w,
         None => return String::new(),
     };
     let mut html = String::new();
     for w in workers {
-        let model   = w.get("model").and_then(|v| v.as_str()).unwrap_or("?");
-        let status  = w.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-        let score   = w.get("vulnerability_score").and_then(|v| v.as_f64());
-        let conf    = w.get("confidence").and_then(|v| v.as_f64());
-        let reason  = w.get("reasoning").and_then(|v| v.as_str()).unwrap_or("—");
-        let is_ok   = status == "ok";
-        let score_color = score.map(|s| if s > 7.0 { "var(--text-danger)" } else if s > 4.0 { "var(--text-warning)" } else { "var(--text-success)" }).unwrap_or("var(--text-tertiary)");
+        let model = w.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+        let status = w.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let score = w.get("vulnerability_score").and_then(|v| v.as_f64());
+        let conf = w.get("confidence").and_then(|v| v.as_f64());
+        let reason = w.get("reasoning").and_then(|v| v.as_str()).unwrap_or("—");
+        let is_ok = status == "ok";
+        let score_color = score
+            .map(|s| {
+                if s > 7.0 {
+                    "var(--text-danger)"
+                } else if s > 4.0 {
+                    "var(--text-warning)"
+                } else {
+                    "var(--text-success)"
+                }
+            })
+            .unwrap_or("var(--text-tertiary)");
 
         html.push_str(&format!(r#"
 <div class="worker-card {cls}">
@@ -1793,17 +2085,35 @@ fn build_workers_html(scan_reasoning: Option<&serde_json::Value>) -> String {
 }
 
 fn build_arbiter_html(scan_reasoning: Option<&serde_json::Value>) -> String {
-    let Some(val) = scan_reasoning else { return String::new(); };
+    let Some(val) = scan_reasoning else {
+        return String::new();
+    };
     let arbiter = match val.get("arbiter") {
         Some(a) => a,
         None => return String::new(),
     };
-    let model   = arbiter.get("model").and_then(|v| v.as_str()).unwrap_or("?");
-    let score   = arbiter.get("vulnerability_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let conf    = arbiter.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let reason  = arbiter.get("reasoning").and_then(|v| v.as_str()).unwrap_or("—");
-    let score_color = if score > 7.0 { "var(--text-danger)" } else if score > 4.0 { "var(--text-warning)" } else { "var(--text-success)" };
-    format!(r#"<div class="arbiter-card">
+    let model = arbiter.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+    let score = arbiter
+        .get("vulnerability_score")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let conf = arbiter
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let reason = arbiter
+        .get("reasoning")
+        .and_then(|v| v.as_str())
+        .unwrap_or("—");
+    let score_color = if score > 7.0 {
+        "var(--text-danger)"
+    } else if score > 4.0 {
+        "var(--text-warning)"
+    } else {
+        "var(--text-success)"
+    };
+    format!(
+        r#"<div class="arbiter-card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span style="font-size:11px;font-weight:700;color:var(--text-primary)">⚖️ Arbitre</span>
         <span style="font-size:11px;font-family:var(--font-mono);color:var(--text-tertiary)">{model}</span>
@@ -1816,11 +2126,11 @@ fn build_arbiter_html(scan_reasoning: Option<&serde_json::Value>) -> String {
       </div>
       <div class="md-text">{reasoning}</div>
     </div>"#,
-        model       = html_escape(model),
+        model = html_escape(model),
         score_color = score_color,
-        score       = score,
-        conf_pct    = (conf * 100.0) as i32,
-        reasoning   = markdown_to_html(reason),
+        score = score,
+        conf_pct = (conf * 100.0) as i32,
+        reasoning = markdown_to_html(reason),
     )
 }
 
@@ -1834,9 +2144,12 @@ fn build_alternatives_html(alternatives: Option<&serde_json::Value>) -> String {
     };
     let mut html = "<div style='display:flex;flex-direction:column;gap:8px'>".to_string();
     for alt in arr {
-        let image  = alt.get("image").and_then(|v| v.as_str()).unwrap_or("?");
+        let image = alt.get("image").and_then(|v| v.as_str()).unwrap_or("?");
         let reason = alt.get("reason").and_then(|v| v.as_str()).unwrap_or("—");
-        let conf   = alt.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let conf = alt
+            .get("confidence")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         html.push_str(&format!(r#"
 <div style="background:var(--bg-secondary);border:0.5px solid var(--border);border-radius:var(--radius-md);padding:10px 12px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
@@ -1855,28 +2168,50 @@ fn build_alternatives_html(alternatives: Option<&serde_json::Value>) -> String {
 }
 
 fn build_decision_workers_html(decision_metadata: Option<&serde_json::Value>) -> String {
-    let Some(val) = decision_metadata else { return String::new(); };
+    let Some(val) = decision_metadata else {
+        return String::new();
+    };
     let workers = match val.get("workers").and_then(|w| w.as_array()) {
         Some(w) => w,
         None => return String::new(),
     };
     let mut html = String::new();
     for w in workers {
-        let model   = w.get("model").and_then(|v| v.as_str()).unwrap_or("?");
-        let status  = w.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-        let reason  = w.get("reasoning").and_then(|v| v.as_str()).unwrap_or("—");
-        let conf    = w.get("confidence").and_then(|v| v.as_f64());
-        let is_ok   = status == "ok";
+        let model = w.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+        let status = w.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let reason = w.get("reasoning").and_then(|v| v.as_str()).unwrap_or("—");
+        let conf = w.get("confidence").and_then(|v| v.as_f64());
+        let is_ok = status == "ok";
 
-        let static_scan     = w.get("run_static_scan").and_then(|v| v.as_bool()).unwrap_or(false);
-        let compliance_scan = w.get("run_compliance_scan").and_then(|v| v.as_bool()).unwrap_or(false);
-        let dynamic_scan    = w.get("run_dynamic_scan").and_then(|v| v.as_bool()).unwrap_or(false);
+        let static_scan = w
+            .get("run_static_scan")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let compliance_scan = w
+            .get("run_compliance_scan")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let dynamic_scan = w
+            .get("run_dynamic_scan")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let scanners_decided: Vec<&str> = [
             if static_scan { Some("statique") } else { None },
-            if compliance_scan { Some("compliance") } else { None },
-            if dynamic_scan { Some("dynamique") } else { None },
-        ].iter().filter_map(|x| *x).collect();
+            if compliance_scan {
+                Some("compliance")
+            } else {
+                None
+            },
+            if dynamic_scan {
+                Some("dynamique")
+            } else {
+                None
+            },
+        ]
+        .iter()
+        .filter_map(|x| *x)
+        .collect();
 
         html.push_str(&format!(r#"
 <div class="worker-card {cls}">
@@ -1913,21 +2248,27 @@ fn build_decision_workers_html(decision_metadata: Option<&serde_json::Value>) ->
 }
 
 fn build_decision_arbiter_html(decision_metadata: Option<&serde_json::Value>) -> String {
-    let Some(val) = decision_metadata else { return String::new(); };
+    let Some(val) = decision_metadata else {
+        return String::new();
+    };
     let arbiter = match val.get("arbiter") {
         Some(a) => a,
         None => return String::new(),
     };
-    let model  = arbiter.get("model").and_then(|v| v.as_str()).unwrap_or("?");
-    let reason = arbiter.get("reasoning").and_then(|v| v.as_str()).unwrap_or("—");
-    format!(r#"<div class="arbiter-card">
+    let model = arbiter.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+    let reason = arbiter
+        .get("reasoning")
+        .and_then(|v| v.as_str())
+        .unwrap_or("—");
+    format!(
+        r#"<div class="arbiter-card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span style="font-size:11px;font-weight:700;color:var(--text-primary)">⚖️ Arbitre — choix des scanners</span>
         <span style="font-size:11px;font-family:var(--font-mono);color:var(--text-tertiary)">{model}</span>
       </div>
       <div class="md-text">{reasoning}</div>
     </div>"#,
-        model     = html_escape(model),
+        model = html_escape(model),
         reasoning = markdown_to_html(reason),
     )
 }
@@ -1937,8 +2278,11 @@ fn build_decision_arbiter_html(decision_metadata: Option<&serde_json::Value>) ->
 /// Wraps paired `marker` occurrences with HTML open/close tags.
 fn toggle_wrap(s: &str, marker: &str, open_tag: &str, close_tag: &str) -> String {
     let parts: Vec<&str> = s.split(marker).collect();
-    if parts.len() <= 1 { return s.to_string(); }
-    let mut out = String::with_capacity(s.len() + parts.len() * (open_tag.len() + close_tag.len()) / 2);
+    if parts.len() <= 1 {
+        return s.to_string();
+    }
+    let mut out =
+        String::with_capacity(s.len() + parts.len() * (open_tag.len() + close_tag.len()) / 2);
     for (i, part) in parts.iter().enumerate() {
         out.push_str(part);
         if i < parts.len() - 1 {
@@ -1946,7 +2290,9 @@ fn toggle_wrap(s: &str, marker: &str, open_tag: &str, close_tag: &str) -> String
         }
     }
     // Odd number of markers → last open tag is unclosed
-    if parts.len() % 2 == 0 { out.push_str(close_tag); }
+    if parts.len().is_multiple_of(2) {
+        out.push_str(close_tag);
+    }
     out
 }
 
@@ -1954,13 +2300,13 @@ fn toggle_wrap(s: &str, marker: &str, open_tag: &str, close_tag: &str) -> String
 fn apply_inline_md(s: &str) -> String {
     // ** must run before * to avoid consuming doubled chars
     let s = toggle_wrap(s, "**", "<strong>", "</strong>");
-    let s = toggle_wrap(&s, "*",  "<em>",      "</em>");
+    let s = toggle_wrap(&s, "*", "<em>", "</em>");
     toggle_wrap(&s, "`", "<code class='inline-code'>", "</code>")
 }
 
 /// Converts a markdown block (headings, lists, paragraphs) to safe HTML.
 fn markdown_to_html(raw: &str) -> String {
-    let mut html   = String::with_capacity(raw.len() * 2);
+    let mut html = String::with_capacity(raw.len() * 2);
     let mut in_list = false;
     let mut ordered = false;
 
@@ -1968,33 +2314,51 @@ fn markdown_to_html(raw: &str) -> String {
         let line = raw_line.trim();
 
         // Ordered list: line starts with digit(s) + ". "
-        let is_ordered = line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
-            && line.find(". ")
-                   .map(|p| line[..p].chars().all(|c| c.is_ascii_digit()))
-                   .unwrap_or(false);
+        let is_ordered = line
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+            && line
+                .find(". ")
+                .map(|p| line[..p].chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false);
         // Bullet list: line starts with "* " or "- " (with 1–3 trailing spaces)
-        let is_bullet = !is_ordered && (
-            line.starts_with("* ") || line.starts_with("- ")
-            || line.starts_with("*  ") || line.starts_with("-  ")
-            || line.starts_with("*   ") || line.starts_with("-   ")
-        );
+        let is_bullet = !is_ordered
+            && (line.starts_with("* ")
+                || line.starts_with("- ")
+                || line.starts_with("*  ")
+                || line.starts_with("-  ")
+                || line.starts_with("*   ")
+                || line.starts_with("-   "));
 
         if is_ordered || is_bullet {
             if !in_list {
-                html.push_str(if is_ordered { "<ol class='md-list'>" } else { "<ul class='md-list'>" });
+                html.push_str(if is_ordered {
+                    "<ol class='md-list'>"
+                } else {
+                    "<ul class='md-list'>"
+                });
                 in_list = true;
                 ordered = is_ordered;
             } else if ordered != is_ordered {
                 html.push_str(if ordered { "</ol>" } else { "</ul>" });
-                html.push_str(if is_ordered { "<ol class='md-list'>" } else { "<ul class='md-list'>" });
+                html.push_str(if is_ordered {
+                    "<ol class='md-list'>"
+                } else {
+                    "<ul class='md-list'>"
+                });
                 ordered = is_ordered;
             }
             let content = if is_ordered {
                 line[line.find(". ").map(|p| p + 2).unwrap_or(0)..].trim()
             } else {
-                line.trim_start_matches(|c| c == '*' || c == '-').trim_start()
+                line.trim_start_matches(['*', '-']).trim_start()
             };
-            html.push_str(&format!("<li>{}</li>", apply_inline_md(&html_escape(content))));
+            html.push_str(&format!(
+                "<li>{}</li>",
+                apply_inline_md(&html_escape(content))
+            ));
         } else {
             if in_list {
                 html.push_str(if ordered { "</ol>" } else { "</ul>" });
@@ -2003,11 +2367,16 @@ fn markdown_to_html(raw: &str) -> String {
             if line.is_empty() {
                 html.push_str("<div class='md-gap'></div>");
             } else {
-                html.push_str(&format!("<p class='md-p'>{}</p>", apply_inline_md(&html_escape(line))));
+                html.push_str(&format!(
+                    "<p class='md-p'>{}</p>",
+                    apply_inline_md(&html_escape(line))
+                ));
             }
         }
     }
-    if in_list { html.push_str(if ordered { "</ol>" } else { "</ul>" }); }
+    if in_list {
+        html.push_str(if ordered { "</ol>" } else { "</ul>" });
+    }
     html
 }
 
@@ -2015,53 +2384,84 @@ fn markdown_to_html(raw: &str) -> String {
 
 /// HL / supply-chain scanner — shows score + formatted markdown analysis.
 fn render_hl_scanner(resp: &serde_json::Value) -> (String, String) {
-    let score    = resp.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0) as i32;
+    let score = resp.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0) as i32;
     let decision = resp.get("decision").and_then(|v| v.as_str()).unwrap_or("?");
     let raw_text = resp.get("raw_text").and_then(|v| v.as_str()).unwrap_or("");
 
     let (badge_cls, score_color) = match decision {
         "ALLOW" => ("badge-green", "var(--text-success)"),
-        "DENY"  => ("badge-red",   "var(--text-danger)"),
-        _       => ("badge-amber", "var(--text-warning)"),
+        "DENY" => ("badge-red", "var(--text-danger)"),
+        _ => ("badge-amber", "var(--text-warning)"),
     };
     let summary = format!(
         "<span class='badge {badge}'>{decision}</span>\
          <span style='font-size:13px;font-weight:700;color:{color}'>{score}/100</span>",
-        badge    = badge_cls,
+        badge = badge_cls,
         decision = html_escape(decision),
-        color    = score_color,
-        score    = score,
+        color = score_color,
+        score = score,
     );
     let body = if raw_text.is_empty() {
-        "<div style='color:var(--text-tertiary);font-size:12px'>Aucun détail disponible</div>".to_string()
+        "<div style='color:var(--text-tertiary);font-size:12px'>Aucun détail disponible</div>"
+            .to_string()
     } else {
-        format!("<div class='md-text' style='padding:4px 0'>{}</div>", markdown_to_html(raw_text))
+        format!(
+            "<div class='md-text' style='padding:4px 0'>{}</div>",
+            markdown_to_html(raw_text)
+        )
     };
     (summary, body)
 }
 
 /// Static / CVE scanner (Trivy) — shows severity counts + CVE list.
 fn render_static_scanner(resp: &serde_json::Value) -> (String, String) {
-    let mut crit = 0usize; let mut high = 0usize;
-    let mut med  = 0usize; let mut low  = 0usize; let mut unk = 0usize;
+    let mut crit = 0usize;
+    let mut high = 0usize;
+    let mut med = 0usize;
+    let mut low = 0usize;
+    let mut unk = 0usize;
     let mut rows = String::new();
 
     if let Some(results) = resp.get("Results").and_then(|v| v.as_array()) {
         for r in results {
             if let Some(vulns) = r.get("Vulnerabilities").and_then(|v| v.as_array()) {
                 for v in vulns {
-                    let sev   = v.get("Severity").and_then(|s| s.as_str()).unwrap_or("UNKNOWN");
-                    let id    = v.get("VulnerabilityID").and_then(|s| s.as_str()).unwrap_or("?");
-                    let pkg   = v.get("PkgName").and_then(|s| s.as_str()).unwrap_or("?");
-                    let ver   = v.get("InstalledVersion").and_then(|s| s.as_str()).unwrap_or("?");
-                    let fix   = v.get("FixedVersion").and_then(|s| s.as_str()).unwrap_or("");
+                    let sev = v
+                        .get("Severity")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("UNKNOWN");
+                    let id = v
+                        .get("VulnerabilityID")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("?");
+                    let pkg = v.get("PkgName").and_then(|s| s.as_str()).unwrap_or("?");
+                    let ver = v
+                        .get("InstalledVersion")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("?");
+                    let fix = v.get("FixedVersion").and_then(|s| s.as_str()).unwrap_or("");
                     let title = v.get("Title").and_then(|s| s.as_str()).unwrap_or("");
                     let (sev_cls, border) = match sev {
-                        "CRITICAL" => { crit += 1; ("sev-critical", "var(--red)") },
-                        "HIGH"     => { high += 1; ("sev-high",     "var(--amber)") },
-                        "MEDIUM"   => { med  += 1; ("sev-medium",   "#fde68a") },
-                        "LOW"      => { low  += 1; ("sev-low",      "#a0c4ff") },
-                        _          => { unk  += 1; ("sev-unknown",  "var(--border-md)") },
+                        "CRITICAL" => {
+                            crit += 1;
+                            ("sev-critical", "var(--red)")
+                        }
+                        "HIGH" => {
+                            high += 1;
+                            ("sev-high", "var(--amber)")
+                        }
+                        "MEDIUM" => {
+                            med += 1;
+                            ("sev-medium", "#fde68a")
+                        }
+                        "LOW" => {
+                            low += 1;
+                            ("sev-low", "#a0c4ff")
+                        }
+                        _ => {
+                            unk += 1;
+                            ("sev-unknown", "var(--border-md)")
+                        }
                     };
                     rows.push_str(&format!(
                         r#"<div class='vuln-row' style='border-left-color:{border}'>
@@ -2095,10 +2495,21 @@ fn render_static_scanner(resp: &serde_json::Value) -> (String, String) {
         "<span style='color:var(--text-success);font-size:12px'>✓ Aucune CVE</span>".to_string()
     } else {
         let mut parts = Vec::new();
-        if crit > 0 { parts.push(format!("<span class='sev-critical'>{} CRITICAL</span>", crit)); }
-        if high > 0 { parts.push(format!("<span class='sev-high'>{} HIGH</span>",     high)); }
-        if med  > 0 { parts.push(format!("<span class='sev-medium'>{} MED</span>",    med));  }
-        if low  > 0 { parts.push(format!("<span class='sev-low'>{} LOW</span>",       low));  }
+        if crit > 0 {
+            parts.push(format!(
+                "<span class='sev-critical'>{} CRITICAL</span>",
+                crit
+            ));
+        }
+        if high > 0 {
+            parts.push(format!("<span class='sev-high'>{} HIGH</span>", high));
+        }
+        if med > 0 {
+            parts.push(format!("<span class='sev-medium'>{} MED</span>", med));
+        }
+        if low > 0 {
+            parts.push(format!("<span class='sev-low'>{} LOW</span>", low));
+        }
         parts.join("<span style='color:var(--border-md);margin:0 3px'>·</span>")
     };
     let body = if rows.is_empty() {
@@ -2111,22 +2522,33 @@ fn render_static_scanner(resp: &serde_json::Value) -> (String, String) {
 
 /// Compliance scanner — shows FAIL/WARN/PASS counts + findings.
 fn render_compliance_scanner(resp: &serde_json::Value) -> (String, String) {
-    let mut fail = 0usize; let mut warn = 0usize;
+    let mut fail = 0usize;
+    let mut warn = 0usize;
     let mut pass = 0usize;
     let mut rows = String::new();
 
     if let Some(findings) = resp.get("findings").and_then(|v| v.as_array()) {
         for f in findings {
-            let status  = f.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = f.get("status").and_then(|v| v.as_str()).unwrap_or("?");
             let rule_id = f.get("rule_id").and_then(|v| v.as_str()).unwrap_or("?");
-            let msg     = f.get("message").and_then(|v| v.as_str()).unwrap_or("—");
+            let msg = f.get("message").and_then(|v| v.as_str()).unwrap_or("—");
             let (border_cls, color) = match status {
-                "FAIL" => { fail += 1; ("finding-fail", "var(--text-danger)")  },
-                "WARN" => { warn += 1; ("finding-warn", "var(--text-warning)") },
-                "PASS" => { pass += 1; ("finding-pass", "var(--text-success)") },
-                _      => ("", "var(--text-tertiary)"),
+                "FAIL" => {
+                    fail += 1;
+                    ("finding-fail", "var(--text-danger)")
+                }
+                "WARN" => {
+                    warn += 1;
+                    ("finding-warn", "var(--text-warning)")
+                }
+                "PASS" => {
+                    pass += 1;
+                    ("finding-pass", "var(--text-success)")
+                }
+                _ => ("", "var(--text-tertiary)"),
             };
-            if status != "PASS" {   // only show non-passing findings in detail
+            if status != "PASS" {
+                // only show non-passing findings in detail
                 rows.push_str(&format!(
                     r#"<div class='finding-row {border}'>
   <div style='display:flex;align-items:center;gap:8px;margin-bottom:2px'>
@@ -2135,20 +2557,35 @@ fn render_compliance_scanner(resp: &serde_json::Value) -> (String, String) {
   </div>
   <div style='font-size:11px;color:var(--text-tertiary)'>{msg}</div>
 </div>"#,
-                    border  = border_cls,
-                    color   = color,
-                    status  = status,
+                    border = border_cls,
+                    color = color,
+                    status = status,
                     rule_id = html_escape(rule_id),
-                    msg     = html_escape(msg),
+                    msg = html_escape(msg),
                 ));
             }
         }
     }
 
     let mut parts = Vec::new();
-    if fail > 0 { parts.push(format!("<span style='color:var(--text-danger)'>{} FAIL</span>",   fail)); }
-    if warn > 0 { parts.push(format!("<span style='color:var(--text-warning)'>{} WARN</span>",  warn)); }
-    if pass > 0 { parts.push(format!("<span style='color:var(--text-success)'>{} PASS</span>",  pass)); }
+    if fail > 0 {
+        parts.push(format!(
+            "<span style='color:var(--text-danger)'>{} FAIL</span>",
+            fail
+        ));
+    }
+    if warn > 0 {
+        parts.push(format!(
+            "<span style='color:var(--text-warning)'>{} WARN</span>",
+            warn
+        ));
+    }
+    if pass > 0 {
+        parts.push(format!(
+            "<span style='color:var(--text-success)'>{} PASS</span>",
+            pass
+        ));
+    }
     let summary = if parts.is_empty() {
         "<span style='color:var(--text-tertiary)'>—</span>".to_string()
     } else {
@@ -2157,7 +2594,10 @@ fn render_compliance_scanner(resp: &serde_json::Value) -> (String, String) {
     let body = if rows.is_empty() {
         format!("<div style='color:var(--text-success);font-size:12px;padding:8px 0'>✓ {} PASS — aucun problème détecté</div>", pass)
     } else {
-        format!("<div style='display:flex;flex-direction:column;gap:4px'>{}</div>", rows)
+        format!(
+            "<div style='display:flex;flex-direction:column;gap:4px'>{}</div>",
+            rows
+        )
     };
     (summary, body)
 }
@@ -2167,9 +2607,10 @@ fn render_compliance_scanner(resp: &serde_json::Value) -> (String, String) {
 pub async fn serve_logo() -> impl IntoResponse {
     static LOGO: &[u8] = include_bytes!("../../template/logo.png");
     (
-        [(header::CONTENT_TYPE, "image/png"),
-         (header::CACHE_CONTROL, "public, max-age=86400")],
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
         LOGO,
     )
 }
-

@@ -1,11 +1,10 @@
+use crate::auth::{AppState, OidcState};
 use axum::extract::DefaultBodyLimit;
+use axum::{extract::State, http::StatusCode, response::IntoResponse};
 use axum::{routing::get, Router};
 use std::net::SocketAddr;
-use tower_http::limit::RequestBodyLimitLayer;
-use crate::auth::{AppState, OidcState};
 use tokio::signal;
-use axum::{extract::State, http::StatusCode, response::IntoResponse};
-
+use tower_http::limit::RequestBodyLimitLayer;
 
 mod auth;
 mod dashboard;
@@ -15,17 +14,23 @@ async fn main() {
     dotenvy::dotenv().ok();
 
     // ── Base de données ───────────────────────────────────────────────────────
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL doit être défini dans le .env");
+    let database_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL doit être défini dans le .env");
 
     let pool = sqlx::PgPool::connect(&database_url)
         .await
         .expect("Echec de connexion à la DB");
 
     // ── État global ───────────────────────────────────────────────────────────
+    let cdv_url = std::env::var("CYCLE_DE_VIE_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
+
     let state = AppState {
         oidc_ctx: OidcState::default(),
         db: pool,
+        cdv_url,
+        http_client: reqwest::Client::new(),
     };
 
     // ── Routeur ───────────────────────────────────────────────────────────────
@@ -44,8 +49,7 @@ async fn main() {
         .layer(RequestBodyLimitLayer::new(1024 * 1024 * 1024));
 
     // ── Adresse d'écoute ──────────────────────────────────────────────────────
-    let listen_addr = std::env::var("LISTEN_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:3010".to_string());
+    let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3010".to_string());
     let addr: SocketAddr = listen_addr.parse().expect("LISTEN_ADDR invalide");
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -55,8 +59,7 @@ async fn main() {
     println!("Dashboard listening on http://{addr}");
 
     // ── Graceful shutdown (SIGTERM + SIGINT) ──────────────────────────────────
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal());
+    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
     // On attend SOIT que le serveur finisse, SOIT que le signal de shutdown soit reçu
     tokio::select! {
@@ -69,17 +72,14 @@ async fn main() {
             println!("Arrêt immédiat forcé par l'utilisateur.");
         },
     }
-    
+
     println!("Serveur arrêté proprement.");
 }
 
 // ── Handler /health ───────────────────────────────────────────────────────────
 async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let db_status = match sqlx::query("SELECT 1")
-        .execute(&state.db)
-        .await
-    {
-        Ok(_)  => "ok",
+    let db_status = match sqlx::query("SELECT 1").execute(&state.db).await {
+        Ok(_) => "ok",
         Err(_) => "error",
     };
 
