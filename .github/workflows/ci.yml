@@ -46,6 +46,11 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # RUSTSEC-2023-0071: timing sidechannel in `rsa` crate pulled in by
+          # sqlx-mysql (sqlx 0.8.x always compiles all backends).
+          # We only use PostgreSQL — MySQL code is never executed.
+          # No upstream fix is available; ignore until sqlx ships a fix.
+          ignore: RUSTSEC-2023-0071
 
       - name: Build release
         run: cargo build --release --locked
