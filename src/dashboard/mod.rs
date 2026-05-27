@@ -17,4 +17,5 @@ pub fn router() -> Router<AppState> {
         .route("/api/blacklist/:id", delete(handlers::api_remove_blacklist))
         .route("/api/cache/:id", delete(handlers::api_delete_cache))
         .route("/api/search/dev", get(handlers::search_pulls_dev))
+        .route("/logo.png", get(handlers::serve_logo))
 }

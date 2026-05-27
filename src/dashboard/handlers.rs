@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response, sse::{Event, Sse}},
 };
 use crate::auth::{extract_role_from_cookie, AppState};
@@ -1825,6 +1825,17 @@ fn build_decision_arbiter_html(decision_metadata: Option<&serde_json::Value>) ->
     </div>"#,
         model = html_escape(model),
         reasoning = html_escape(reason),
+    )
+}
+
+// ─── Logo ─────────────────────────────────────────────────────────────────────
+
+pub async fn serve_logo() -> impl IntoResponse {
+    static LOGO: &[u8] = include_bytes!("../../template/logo.png");
+    (
+        [(header::CONTENT_TYPE, "image/png"),
+         (header::CACHE_CONTROL, "public, max-age=86400")],
+        LOGO,
     )
 }
 

@@ -48,19 +48,33 @@
 
   .logo-block {
     text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-img {
+    width: 80px;
+    height: 80px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 14px rgba(55,138,221,0.55));
   }
 
   .logo-title {
-    font-size: 22px;
-    font-weight: 600;
-    color: var(--text-primary);
+    font-size: 24px;
+    font-weight: 700;
     letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #85b7eb 0%, #20d5a8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .logo-sub {
     font-size: 12px;
     color: var(--text-tertiary);
-    margin-top: 4px;
+    margin-top: 2px;
   }
 
   .login-card {
@@ -148,8 +162,11 @@
 <div class="login-wrapper">
 
   <div class="logo-block">
-    <div class="logo-title">DocDockGo</div>
-    <div class="logo-sub">Security Proxy — Dashboard</div>
+    <img src="/dashboard/logo.png" alt="DocDockGo" class="logo-img">
+    <div>
+      <div class="logo-title">DocDockGo</div>
+      <div class="logo-sub">Security Proxy — Dashboard</div>
+    </div>
   </div>
 
   <div class="login-card">
