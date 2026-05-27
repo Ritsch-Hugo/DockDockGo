@@ -22,7 +22,7 @@ use tracing::info;
 
 const DEFAULT_STATIC_URL: &str = "http://localhost:3002";
 const DEFAULT_COMPLIANCE_URL: &str = "http://localhost:3001";
-const DEFAULT_DYNAMIC_URL: &str = "http://localhost:8080";
+const DEFAULT_DYNAMIC_URL: &str = "http://localhost:3006";
 
 // ============================================================
 // Paramètres des tools (schema JSON auto-généré via JsonSchema)
