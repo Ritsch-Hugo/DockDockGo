@@ -5,67 +5,99 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DocDockGo — Dashboard RSSI</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --bg-primary: #1c1c1a; --bg-secondary: #252523; --bg-tertiary: #161614;
-    --bg-info: #0c447c; --bg-success: #27500a; --bg-warning: #633806; --bg-danger: #791f1f;
-    --text-primary: #e8e6e0; --text-secondary: #a09e97; --text-tertiary: #5f5e5a;
-    --text-info: #85b7eb; --text-success: #c0dd97; --text-warning: #fac775; --text-danger: #f09595;
-    --border: rgba(255,255,255,0.08); --border-md: rgba(255,255,255,0.15);
-    --radius-md: 8px; --radius-lg: 12px;
-    --font: 'Segoe UI', system-ui, sans-serif;
-    --font-mono: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
-    --blue: #378ADD; --green: #639922; --amber: #BA7517; --red: #E24B4A;
+    --bg-base:      #060d18;
+    --bg-primary:   #0b1829;
+    --bg-secondary: #0f2035;
+    --bg-tertiary:  #080f1d;
+    --teal:         #00c8e0;
+    --teal-dim:     #0e7490;
+    --teal-glow:    rgba(0,200,224,0.12);
+    --teal-border:  rgba(0,200,224,0.18);
+    --green:  #10c986;
+    --amber:  #f5a623;
+    --red:    #e85d5d;
+    --blue:   #3d9be8;
+    --bg-success: rgba(16,201,134,0.10);
+    --bg-warning: rgba(245,166,35,0.10);
+    --bg-danger:  rgba(232,93,93,0.10);
+    --bg-info:    rgba(0,200,224,0.10);
+    --text-primary:   #cde4ef;
+    --text-secondary: #5b8aa4;
+    --text-tertiary:  #274059;
+    --text-success:   #2ce8a0;
+    --text-warning:   #fbbf24;
+    --text-danger:    #ff7b7b;
+    --text-info:      #00c8e0;
+    --border:    rgba(0,200,224,0.07);
+    --border-md: rgba(0,200,224,0.16);
+    --radius-sm: 4px;
+    --radius-md: 7px;
+    --radius-lg: 11px;
+    --font:      'Inter', 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
   }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--teal-dim); border-radius: 2px; }
   body { font-family: var(--font); font-size: 14px; color: var(--text-primary); background: var(--bg-tertiary); height: 100vh; overflow: hidden; }
   .shell { display: flex; height: 100vh; }
   .sidebar { width: 210px; min-width: 210px; background: var(--bg-primary); border-right: 0.5px solid var(--border); display: flex; flex-direction: column; padding: 16px 0; }
   .logo { padding: 12px 16px 14px; border-bottom: 0.5px solid var(--border); margin-bottom: 8px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-  .logo-img { width: 56px; height: 56px; object-fit: contain; filter: drop-shadow(0 0 8px rgba(55,138,221,0.45)); }
-  .logo-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; background: linear-gradient(135deg, #85b7eb 0%, #20d5a8 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .logo-img { width: 56px; height: 56px; object-fit: contain; filter: drop-shadow(0 0 10px rgba(0,200,224,0.5)); }
+  .logo-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; background: linear-gradient(135deg, #26d4e8 0%, #00c8e0 60%, #0d9fb5 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
   .logo-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
   .role-badge { display: flex; padding: 8px 16px; margin-bottom: 4px; }
-  .role-label { flex: 1; padding: 5px 0; font-size: 11px; border: 0.5px solid #b5d4f4; border-radius: var(--radius-md); background: var(--bg-info); color: var(--text-info); text-align: center; }
+  .role-label { flex: 1; padding: 5px 0; font-size: 11px; border: 0.5px solid var(--teal-border); border-radius: var(--radius-md); background: var(--bg-info); color: var(--text-info); text-align: center; }
   .nav-section { font-size: 10px; color: var(--text-tertiary); padding: 10px 16px 4px; text-transform: uppercase; letter-spacing: .06em; }
   .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 16px; cursor: pointer; color: var(--text-secondary); font-size: 13px; border-left: 2px solid transparent; transition: all .1s; }
   .nav-item:hover { background: var(--bg-secondary); color: var(--text-primary); }
-  .nav-item.active { background: var(--bg-secondary); color: var(--text-primary); border-left: 2px solid var(--blue); }
+  .nav-item.active { background: var(--teal-glow); color: var(--teal); border-left: 2px solid var(--teal); }
   .nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-md); flex-shrink: 0; }
   .nav-dot.green { background: var(--green); } .nav-dot.red { background: var(--red); }
   .nav-dot.amber { background: var(--amber); } .nav-dot.blue { background: var(--blue); }
   .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 0.5px solid var(--border); }
   .avatar { display: flex; align-items: center; gap: 8px; }
-  .av-circle { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-info); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-info); flex-shrink: 0; }
+  .av-circle { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-info); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text-info); flex-shrink: 0; border: 0.5px solid var(--teal-border); }
   .av-name { font-size: 12px; font-weight: 500; } .av-role { font-size: 10px; color: var(--text-tertiary); }
   .logout-btn { margin-top: 10px; width: 100%; padding: 6px 0; font-size: 11px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-family: var(--font); transition: all .15s; display: block; text-align: center; text-decoration: none; }
   .logout-btn:hover { background: var(--bg-secondary); color: var(--text-primary); }
   .main { flex: 1; overflow-y: auto; padding: 22px 26px; background: var(--bg-tertiary); }
   .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  .page-title { font-size: 18px; font-weight: 500; }
-  .badge { display: inline-flex; align-items: center; font-size: 11px; padding: 3px 8px; border-radius: var(--radius-md); font-weight: 500; }
+  .page-title { font-size: 17px; font-weight: 600; }
+  .badge { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 7px; border-radius: var(--radius-sm); font-weight: 500; }
   .badge-green { background: var(--bg-success); color: var(--text-success); }
   .badge-red { background: var(--bg-danger); color: var(--text-danger); }
   .badge-amber { background: var(--bg-warning); color: var(--text-warning); }
   .badge-blue { background: var(--bg-info); color: var(--text-info); }
   .badge-gray { background: var(--bg-secondary); color: var(--text-secondary); }
-  .metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 18px; }
-  .metric-card { background: var(--bg-secondary); border-radius: var(--radius-md); padding: 12px 14px; }
+  .metrics { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 12px; margin-bottom: 18px; }
+  .metric-card { background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; transition: border-color .15s; }
+  .metric-card:hover { border-color: var(--teal-border); }
+  .metric-card.green { border-left: 3px solid var(--green); }
+  .metric-card.red   { border-left: 3px solid var(--red); }
+  .metric-card.amber { border-left: 3px solid var(--amber); }
+  .metric-card.teal  { border-left: 3px solid var(--teal); }
+  .metric-card.blue  { border-left: 3px solid var(--blue); }
   .metric-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
-  .metric-value { font-size: 24px; font-weight: 500; }
+  .metric-value { font-size: 28px; font-weight: 500; }
   .metric-value.green { color: var(--text-success); } .metric-value.red { color: var(--text-danger); }
   .metric-value.amber { color: var(--text-warning); } .metric-value.blue { color: var(--text-info); }
-  .card { background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 14px; }
-  .section-title { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .card { background: var(--bg-primary); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 14px; transition: border-color .15s; }
+  .card:hover { border-color: var(--teal-border); }
+  .section-title { font-size: 12px; font-weight: 500; color: var(--teal-dim); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.07em; }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
   .table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  .table th { text-align: left; color: var(--text-secondary); font-weight: 500; padding: 0 8px 8px; border-bottom: 0.5px solid var(--border); }
+  .table th { text-align: left; color: var(--text-info); font-weight: 500; padding: 0 8px 8px; border-bottom: 0.5px solid var(--border); text-transform: uppercase; letter-spacing: 0.05em; }
   .table td { padding: 8px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
   .table tr:last-child td { border-bottom: none; }
   .table tr:hover td { background: var(--bg-secondary); }
   .progress-bar { height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; min-width: 80px; border: 0.5px solid var(--border); }
-  .progress-fill { height: 100%; border-radius: 3px; background: var(--blue); }
+  .progress-fill { height: 100%; border-radius: 3px; background: var(--teal); }
   .progress-fill.green { background: var(--green); }
-  .alert-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--border); cursor: pointer; }
+  .alert-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 0.5px solid var(--border); cursor: pointer; transition: background .1s; }
   .alert-row:last-child { border-bottom: none; }
   .alert-row:hover { background: var(--bg-secondary); border-radius: var(--radius-md); padding-left: 6px; }
   .alert-icon { width: 20px; height: 20px; border-radius: 50%; background: var(--bg-danger); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
@@ -75,13 +107,14 @@
   .alert-text { font-size: 12px; line-height: 1.5; } .alert-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
   .btn { padding: 5px 12px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); background: transparent; font-size: 12px; cursor: pointer; color: var(--text-primary); font-family: var(--font); transition: background .1s; }
   .btn:hover { background: var(--bg-secondary); }
-  .btn-danger { border-color: #f09595; color: var(--text-danger); } .btn-danger:hover { background: var(--bg-danger); }
-  .btn-success { border-color: #c0dd97; color: var(--text-success); } .btn-success:hover { background: var(--bg-success); }
+  .btn-danger { border-color: var(--text-danger); color: var(--text-danger); } .btn-danger:hover { background: var(--bg-danger); }
+  .btn-success { border-color: var(--text-success); color: var(--text-success); } .btn-success:hover { background: var(--bg-success); }
   .search-bar { display: flex; gap: 8px; margin-bottom: 14px; }
-  .search-bar input, .search-bar select { padding: 7px 10px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); font-size: 12px; background: var(--bg-primary); color: var(--text-primary); font-family: var(--font); }
+  .search-bar input, .search-bar select { padding: 7px 10px; border: 0.5px solid var(--border-md); border-radius: var(--radius-md); font-size: 12px; background: var(--bg-primary); color: var(--text-primary); font-family: var(--font); transition: border-color .15s; }
   .search-bar input { flex: 1; }
-  .search-bar input:focus, .search-bar select:focus { outline: none; border-color: var(--blue); }
-  .chip { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 7px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-secondary); margin-right: 4px; border: 0.5px solid var(--border); }
+  .search-bar input:focus, .search-bar select:focus { outline: none; border-color: var(--teal); }
+  .chip { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 7px; border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); margin-right: 4px; border: 0.5px solid var(--border); }
+  code, pre, .mono { font-family: var(--font-mono); }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -128,11 +161,11 @@
     </div>
   </div>
   <div class="metrics">
-    <div class="metric-card"><div class="metric-label">Pulls en cours</div><div class="metric-value blue" id="metric-pulls">{{PULLS_ACTIFS}}</div></div>
-    <div class="metric-card"><div class="metric-label">Bloqués aujourd'hui</div><div class="metric-value red" id="metric-deny">{{BLOQUES_TODAY}}</div></div>
-    <div class="metric-card"><div class="metric-label">Digests en quarantaine</div><div class="metric-value amber" id="metric-quarantine">{{EN_QUARANTAINE}}</div></div>
-    <div class="metric-card"><div class="metric-label">Digests en cache</div><div class="metric-value green" id="metric-cache">{{EN_CACHE}}</div></div>
-    <div class="metric-card" style="cursor:pointer" onclick="showPage('cve', document.querySelector('[onclick*=\"showPage(\\\'cve\\\'\"]'))"><div class="metric-label">Alertes CVE</div><div class="metric-value red" id="metric-cve">{{CVE_COUNT}}</div></div>
+    <div class="metric-card blue"><div class="metric-label">Pulls en cours</div><div class="metric-value blue" id="metric-pulls">{{PULLS_ACTIFS}}</div></div>
+    <div class="metric-card red"><div class="metric-label">Bloqués aujourd'hui</div><div class="metric-value red" id="metric-deny">{{BLOQUES_TODAY}}</div></div>
+    <div class="metric-card amber"><div class="metric-label">Digests en quarantaine</div><div class="metric-value amber" id="metric-quarantine">{{EN_QUARANTAINE}}</div></div>
+    <div class="metric-card green"><div class="metric-label">Digests en cache</div><div class="metric-value green" id="metric-cache">{{EN_CACHE}}</div></div>
+    <div class="metric-card teal" style="cursor:pointer" onclick="showPage('cve', document.querySelector('[onclick*=\"showPage(\\\'cve\\\'\"]'))"><div class="metric-label">Alertes CVE</div><div class="metric-value red" id="metric-cve">{{CVE_COUNT}}</div></div>
   </div>
   <div class="two-col">
     <div class="card">
