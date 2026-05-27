@@ -33,7 +33,7 @@ RUN apt-get update \
     libssl3 \
     ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && useradd -m -u 1000 -s /bin/bash appuser
+ && useradd -m -u 10001 -s /bin/sh appuser
 
 WORKDIR /app
 
