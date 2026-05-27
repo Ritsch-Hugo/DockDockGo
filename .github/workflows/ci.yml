@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cycle-de-vie
 
 jobs:
   ci:
@@ -67,10 +66,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ghcr.io requires a fully lowercase image name
+      - name: Set lowercase image name
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=ghcr.io/${OWNER}/cycle-de-vie" >> "$GITHUB_ENV"
+
       - name: Build Docker image
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
 
       - name: Trivy — scan de l'image
+        id: trivy
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -81,8 +87,8 @@ jobs:
           exit-code: '1'
 
       - name: Upload résultats Trivy → GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
 
