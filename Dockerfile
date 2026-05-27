@@ -27,11 +27,13 @@ RUN cargo build --release --all-features
 FROM debian:bookworm-slim
 
 # Installation des librairies runtime nécessaires (SSL pour reqwest)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends \
     libssl3 \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd -m -u 1000 -s /bin/bash appuser
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -m -u 1000 -s /bin/bash appuser
 
 WORKDIR /app
 
