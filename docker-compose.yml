@@ -38,7 +38,7 @@ services:
   # ── Proxy ────────────────────────────────────────────────────────────────────
 
   proxy:
-    image: ghcr.io/ritsch-hugo/docdockgo-proxy:sha-62a8df5
+    image: ghcr.io/ritsch-hugo/docdockgo-proxy:sha-d5787e8
     env_file: proxy/.env
     network_mode: host
     environment:
@@ -59,7 +59,7 @@ services:
   # ── Orchestrateur ────────────────────────────────────────────────────────────
 
   orchestrateur:
-    image: ghcr.io/ritsch-hugo/docdockgo-orchestrateur:sha-5e2d487
+    image: ghcr.io/ritsch-hugo/docdockgo-orchestrateur:sha-b95ac71
     env_file: orchestrateur/.env
     environment:
       DATABASE_URL: postgres://docdockgo_admin:docdockgo@postgres:5432/docdockgo
@@ -67,12 +67,6 @@ services:
       LLM_DECISION_URL: http://host-gateway:3005/v1/decision
       QUARANTINE_BASE: /app/quarantaine
       CACHE_BASE: /app/cache
-      # Timeouts — cohérents avec les autres services
-      HL_TIMEOUT_SECS: "60"
-      LLM_DECISION_TIMEOUT_SECS: "120"
-      # Seuils décision scanner haut-niveau
-      HL_ALLOW_THRESHOLD: "90"
-      HL_DENY_THRESHOLD: "30"
     extra_hosts:
       - "host-gateway:host-gateway"
     ports:
@@ -106,7 +100,7 @@ services:
     network_mode: host
 
   scanner-compliance:
-    image: ghcr.io/ritsch-hugo/scanner-compliance:local-fix
+    image: ghcr.io/ritsch-hugo/scanner-compliance:sha-40da831
     env_file: scanner-compliance/.env
     ports:
       - "3001:3001"
@@ -114,7 +108,7 @@ services:
       - quarantaine:/quarantaine
 
   scanner-static:
-    image: ghcr.io/ritsch-hugo/dockdockgo/scanner-cve:sha-7d6cd63c
+    image: ghcr.io/ritsch-hugo/dockdockgo/scanner-cve:sha-98a57378c49f8f7cc735d7070232a7be4a669030
     env_file: scanner-static/.env
     ports:
       - "3002:3002"
@@ -161,11 +155,14 @@ services:
   # ── Dashboard ────────────────────────────────────────────────────────────────
 
   dashboard:
-    image: ghcr.io/ritsch-hugo/docdockgo-dashboard:sha-3b22d0d
+    image: ghcr.io/ritsch-hugo/docdockgo-dashboard:sha-39c7c71
     env_file: dashboard/.env
     network_mode: host
     environment:
       DATABASE_URL: postgres://docdockgo_admin:docdockgo@localhost:5432/docdockgo
+    volumes:
+      - cache:/app/cache
+      - quarantaine:/app/quarantaine
     depends_on:
       postgres:
         condition: service_healthy
