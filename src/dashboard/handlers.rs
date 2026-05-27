@@ -11,7 +11,6 @@ use futures::stream;
 use sqlx::postgres::PgListener;
 use sqlx::types::chrono;
 use std::convert::Infallible;
-use urlencoding;
 
 // ─── Dashboard Dev ────────────────────────────────────────────────────────────
 
@@ -1717,30 +1716,8 @@ pub async fn api_add_whitelist(
     .await
     {
         Ok(_) => {
-            // Trigger SBOM generation in cycle-de-vie (fire-and-forget)
-            if let Some(ref cdv_url) = state.cdv_url {
-                let image_ref = match &body.tag {
-                    Some(tag) => format!("{}/{}:{}", body.registry, body.repository, tag),
-                    None => format!("{}/{}", body.registry, body.repository),
-                };
-                let url = format!(
-                    "{}/sbom/refresh?image={}",
-                    cdv_url,
-                    urlencoding::encode(&image_ref)
-                );
-                let client = state.http_client.clone();
-                tokio::spawn(async move {
-                    match client.post(&url).send().await {
-                        Ok(r) => println!(
-                            "[cycle-de-vie] SBOM refresh triggered for {image_ref}: {}",
-                            r.status()
-                        ),
-                        Err(e) => eprintln!(
-                            "[cycle-de-vie] Failed to trigger SBOM refresh for {image_ref}: {e}"
-                        ),
-                    }
-                });
-            }
+            // SBOM generation is triggered automatically by the DB trigger
+            // trg_whitelist_new → pg_notify('whitelist_new') → cycle-de-vie watcher
             (
                 StatusCode::CREATED,
                 axum::Json(serde_json::json!({"id": id.to_string(), "ok": true})),

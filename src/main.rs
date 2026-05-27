@@ -22,15 +22,9 @@ async fn main() {
         .expect("Echec de connexion à la DB");
 
     // ── État global ───────────────────────────────────────────────────────────
-    let cdv_url = std::env::var("CYCLE_DE_VIE_URL")
-        .ok()
-        .filter(|s| !s.is_empty());
-
     let state = AppState {
         oidc_ctx: OidcState::default(),
         db: pool,
-        cdv_url,
-        http_client: reqwest::Client::new(),
     };
 
     // ── Routeur ───────────────────────────────────────────────────────────────

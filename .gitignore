@@ -1,2 +1,5 @@
 /target
 guide_dashboard
+# Secrets et certificats — ne jamais committer
+**/.env
+proxy/certs-mitm/

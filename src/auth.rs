@@ -18,10 +18,6 @@ use tokio::sync::Mutex;
 pub struct AppState {
     pub oidc_ctx: OidcState,
     pub db: sqlx::PgPool,
-    /// Base URL of the cycle-de-vie service, e.g. "http://cycle-de-vie:3020".
-    /// Set via CYCLE_DE_VIE_URL. If absent, SBOM generation is not triggered.
-    pub cdv_url: Option<String>,
-    pub http_client: reqwest::Client,
 }
 
 #[derive(Clone, Default)]
