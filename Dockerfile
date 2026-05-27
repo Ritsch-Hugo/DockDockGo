@@ -36,7 +36,6 @@ RUN ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/cycle-de-vie ./
-COPY config/ ./config/
 
 # SBOMs directory — will be populated at runtime; mount a volume to persist
 RUN mkdir -p sboms
@@ -45,9 +44,7 @@ EXPOSE 3020
 
 ENV PORT=3020 \
     POLL_INTERVAL_SECS=60 \
-    WHITELIST_PATH=config/whitelist \
     SBOM_DIR=sboms \
-    SYFT_BIN=syft \
-    SBOM_REFRESH_INTERVAL_SECS=86400
+    SYFT_BIN=syft
 
 CMD ["./cycle-de-vie"]
