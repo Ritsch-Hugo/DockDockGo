@@ -184,9 +184,9 @@ async fn fetch_batch(client: &Client, queries: Vec<Query>) -> anyhow::Result<Vec
 /// Returns the effective package list for an image:
 /// 1. Syft-generated SBOM from `SbomStore` (preferred — real, up-to-date)
 /// 2. Fallback packages from `whitelist.toml`   (static, used before first scan)
-fn effective_packages<'a>(
+fn effective_packages(
     image_name: &str,
-    toml_packages: &'a [crate::models::Package],
+    toml_packages: &[crate::models::Package],
     sbom_store: &SbomStore,
 ) -> Vec<crate::models::Package> {
     if let Some(stored) = sbom_store.get(image_name) {

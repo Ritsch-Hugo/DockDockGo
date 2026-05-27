@@ -275,7 +275,7 @@ impl SbomStore {
         let mut cache = self.cache.write().expect("sbom cache poisoned");
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.extension().map_or(false, |e| e == "json") {
+            if p.extension().is_some_and(|e| e == "json") {
                 match std::fs::read_to_string(&p)
                     .ok()
                     .and_then(|s| serde_json::from_str::<StoredSbom>(&s).ok())

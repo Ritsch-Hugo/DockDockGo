@@ -40,6 +40,8 @@ pub fn router(
         .route("/health", get(health))
         .route("/images", get(get_images))
         .route("/notifications", get(get_notifications))
+        // Whitelist management
+        .route("/whitelist/reload", post(reload_whitelist))
         // SBOM management
         .route("/sbom", get(list_sboms))
         .route("/sbom", delete(delete_sbom))
@@ -139,6 +141,59 @@ async fn refresh_sbom(
     }
 
     (StatusCode::OK, Json(serde_json::Value::Object(results)))
+}
+
+// ── Whitelist handlers ────────────────────────────────────────────────────────
+
+/// POST /whitelist/reload
+///
+/// Re-reads `whitelist.toml` from disk, adds any new images to the live list,
+/// and immediately generates a Syft SBOM for each new image.
+/// Already-whitelisted images are untouched — no duplicate SBOMs.
+///
+/// Response:
+/// ```json
+/// {
+///   "added": ["alpine:3.20"],
+///   "already_present": 3,
+///   "sboms": {
+///     "alpine:3.20": { "status": "ok", "packages": 42 }
+///   }
+/// }
+/// ```
+async fn reload_whitelist(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    let new_images = match state.whitelist.reload() {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    let already_present = state.whitelist.images().len() - new_images.len();
+
+    let mut sboms = serde_json::Map::new();
+    for image in &new_images {
+        let entry = match generate_and_store(&state.sbom_store, image, &state.syft_bin).await {
+            Ok(sbom) => serde_json::json!({
+                "status": "ok",
+                "packages": sbom.packages.len(),
+            }),
+            Err(e) => serde_json::json!({ "status": "error", "error": e.to_string() }),
+        };
+        sboms.insert(image.clone(), entry);
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "added": new_images,
+            "already_present": already_present,
+            "sboms": sboms,
+        })),
+    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
