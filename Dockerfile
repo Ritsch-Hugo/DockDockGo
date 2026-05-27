@@ -20,7 +20,7 @@ FROM alpine:3.21
 
 # Mettre à jour tous les paquets Alpine avant d'installer quoi que ce soit
 # afin d'embarquer les derniers correctifs de sécurité (réduit la surface Trivy)
-RUN apk upgrade --no-cache
+RUN apk update && apk upgrade --no-cache
 
 # ca-certificates : HTTPS vers api.osv.dev
 # wget            : installation de Syft
