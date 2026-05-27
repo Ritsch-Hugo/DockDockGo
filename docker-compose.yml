@@ -155,7 +155,7 @@ services:
   # ── Cycle de vie (surveillance SBOM / CVE) ───────────────────────────────────
 
   cycle-de-vie:
-    image: ghcr.io/ritsch-hugo/cycle-de-vie:cycle-de-vie
+    image: ghcr.io/ritsch-hugo/cycle-de-vie:a0e735ec531a1d19fd3f2d172a0e1b5a294dabd8
     network_mode: host
     environment:
       DATABASE_URL: postgres://docdockgo_admin:docdockgo@localhost:5432/docdockgo
@@ -172,7 +172,7 @@ services:
   # ── Dashboard ────────────────────────────────────────────────────────────────
 
   dashboard:
-    image: ghcr.io/ritsch-hugo/docdockgo-dashboard:sha-f5ec02a
+    image: ghcr.io/ritsch-hugo/docdockgo-dashboard:sha-7574b08
     env_file: dashboard/.env
     network_mode: host
     environment:

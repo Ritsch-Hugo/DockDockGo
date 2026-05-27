@@ -242,3 +242,24 @@ CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.cache  
 CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.quarantine    FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
 CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.users         FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
 CREATE TRIGGER trg_notify_all AFTER INSERT OR DELETE OR UPDATE ON public.sboms         FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();
+
+-- ── CVE notifications (cycle-de-vie → dashboard) ─────────────────────────────
+-- Stocke les alertes CVE poussées par cycle-de-vie via POST /notifications.
+-- Le trigger notifie le canal dashboard_updates pour diffusion SSE instantanée.
+
+CREATE TABLE public.cve_notifications (
+    id uuid NOT NULL,
+    cve_id character varying(100) NOT NULL,
+    image_name character varying(255) NOT NULL,
+    matched_packages jsonb NOT NULL DEFAULT '[]',
+    severity character varying(20),
+    description text,
+    published_at timestamp with time zone,
+    received_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT cve_notifications_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX idx_cve_notifications_received_at ON public.cve_notifications (received_at DESC);
+
+CREATE TRIGGER trg_notify_all AFTER INSERT ON public.cve_notifications
+    FOR EACH ROW EXECUTE FUNCTION public.notify_dashboard_change();

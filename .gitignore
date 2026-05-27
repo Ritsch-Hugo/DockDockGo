@@ -1,3 +1,4 @@
 # Secrets — ne jamais committer
 **/.env
+.env
 proxy/certs-mitm/
