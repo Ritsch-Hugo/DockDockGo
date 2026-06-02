@@ -100,7 +100,7 @@ services:
     network_mode: host
 
   scanner-compliance:
-    image: ghcr.io/ritsch-hugo/scanner-compliance:sha-40da831
+    image: ghcr.io/ritsch-hugo/scanner-compliance:sha-b91531d
     env_file: scanner-compliance/.env
     ports:
       - "3001:3001"
