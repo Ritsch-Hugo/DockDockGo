@@ -9,6 +9,7 @@ use scanner_compliance::models::{RawBlob, ScanRequest, Stage};
 use scanner_compliance::pipeline;
 use scanner_compliance::security::check_json_depth;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -238,6 +239,39 @@ async fn scan_handler(Json(mut req): Json<ScanRequest>) -> impl IntoResponse {
                         "[req:{}] blob not found in quarantine: {}",
                         request_id, &blob.digest
                     );
+                }
+            }
+        }
+    }
+
+    // Step 2: résoudre depuis le manifest les layers que mcp-tools-server ne transmet pas.
+    // Le mcp-tools-server skip les layer blobs gzip dans req.blobs ; ils n'ont donc
+    // aucun digest dans la liste. On parse le manifest pour les ajouter directement
+    // depuis la quarantaine, sinon has_fs reste false et toutes les règles FS sont SKIP.
+    let known: HashSet<String> = req.blobs.iter().map(|b| b.digest.clone()).collect();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&req.manifest_raw) {
+        // Config blob
+        if let Some(digest) = v.get("config").and_then(|c| c.get("digest")).and_then(|d| d.as_str()) {
+            if !known.contains(digest) {
+                let mt = v.get("config").and_then(|c| c.get("mediaType")).and_then(|m| m.as_str()).map(|s| s.to_string());
+                if let Some(path) = find_blob_in_quarantine(&quarantine_base, digest) {
+                    eprintln!("[req:{}] config resolved from manifest+quarantine: {}", request_id, &digest[..digest.len().min(25)]);
+                    req.blobs.push(RawBlob { digest: digest.to_string(), media_type: mt, size: None, path: Some(path), bytes_b64: None });
+                }
+            }
+        }
+        // Layer blobs
+        if let Some(layers) = v.get("layers").and_then(|l| l.as_array()) {
+            for layer in layers {
+                let digest = match layer.get("digest").and_then(|d| d.as_str()) { Some(d) => d.to_string(), None => continue };
+                if known.contains(&digest) { continue; }
+                let mt = layer.get("mediaType").and_then(|m| m.as_str()).map(|s| s.to_string());
+                match find_blob_in_quarantine(&quarantine_base, &digest) {
+                    Some(path) => {
+                        eprintln!("[req:{}] layer resolved from manifest+quarantine: {}", request_id, &digest[..digest.len().min(25)]);
+                        req.blobs.push(RawBlob { digest, media_type: mt, size: None, path: Some(path), bytes_b64: None });
+                    }
+                    None => eprintln!("[req:{}] layer not in quarantine: {}", request_id, &digest[..digest.len().min(25)]),
                 }
             }
         }
