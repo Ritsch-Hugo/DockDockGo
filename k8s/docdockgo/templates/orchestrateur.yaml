@@ -1,0 +1,55 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrateur
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: orchestrateur
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrateur
+  template:
+    metadata:
+      labels:
+        app: orchestrateur
+    spec:
+      containers:
+        - name: orchestrateur
+          image: {{ .Values.orchestrateur.image.repository }}:{{ .Values.orchestrateur.image.tag }}
+          envFrom:
+            - secretRef:
+                name: orchestrateur-env
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: quarantaine
+              mountPath: /app/quarantaine
+            - name: cache
+              mountPath: /app/cache
+      volumes:
+        - name: quarantaine
+          persistentVolumeClaim:
+            claimName: quarantaine
+        - name: cache
+          persistentVolumeClaim:
+            claimName: cache
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrateur
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: orchestrateur
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: orchestrateur
+  ports:
+    - port: 3000
+      targetPort: 3000

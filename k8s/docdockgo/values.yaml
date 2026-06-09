@@ -1,0 +1,148 @@
+# ── Namespace ─────────────────────────────────────────────────────────────────
+namespace: docdockgo
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+# Pour un cluster local (k3s/minikube), quarantaine et cache utilisent hostPath
+# car plusieurs pods y accèdent en RWX (ReadWriteMany).
+# Créer les répertoires sur le nœud avant helm install :
+#   sudo mkdir -p /data/docdockgo/quarantaine /data/docdockgo/cache
+storage:
+  quarantaine:
+    hostPath: /data/docdockgo/quarantaine
+    size: 50Gi
+  cache:
+    hostPath: /data/docdockgo/cache
+    size: 20Gi
+  trivyDb:
+    size: 5Gi
+  postgres:
+    size: 10Gi
+
+# ── PostgreSQL ─────────────────────────────────────────────────────────────────
+postgres:
+  image: postgres:16-alpine
+  credentials:
+    user: docdockgo_admin
+    password: docdockgo  # surcharger dans values-secret.yaml
+    db: docdockgo
+
+# ── Proxy TLS MITM ────────────────────────────────────────────────────────────
+proxy:
+  image:
+    repository: ghcr.io/ritsch-hugo/docdockgo-proxy
+    tag: sha-d5787e8
+  service:
+    nodePort: 443   # port exposé sur le nœud
+  config:
+    maxBlobSize: "2147483648"
+    maxConcurrentPulls: "200"
+    contextTimeout: "360"
+    orchTimeoutSecs: "300"
+    shutdownDrainTimeout: "0"
+    quarantineBase: /app/quarantaine
+    cacheBase: /app/cache
+
+# ── Orchestrateur ─────────────────────────────────────────────────────────────
+orchestrateur:
+  image:
+    repository: ghcr.io/ritsch-hugo/docdockgo-orchestrateur
+    tag: sha-b95ac71
+  config:
+    hlTimeoutSecs: "60"
+    llmDecisionTimeoutSecs: "270"
+    hlAllowThreshold: "90"
+    hlDenyThreshold: "30"
+
+# ── Scanner haut-niveau (Gemini) ───────────────────────────────────────────────
+scannerHautNiveau:
+  image:
+    repository: ghcr.io/ritsch-hugo/docdockgo-hl-scanner
+    tag: sha-fa10811
+  geminiApiKey: ""  # REQUIS — définir dans values-secret.yaml
+
+# ── Scanner compliance ────────────────────────────────────────────────────────
+scannerCompliance:
+  image:
+    repository: ghcr.io/ritsch-hugo/scanner-compliance
+    tag: sha-b91531d
+  config:
+    port: "3001"
+    rateLimitPerSecond: "1"
+    rateLimitBurst: "10"
+
+# ── Scanner static (CVE / Trivy) ──────────────────────────────────────────────
+scannerStatic:
+  image:
+    repository: ghcr.io/ritsch-hugo/dockdockgo/scanner-cve
+    tag: sha-98a57378c49f8f7cc735d7070232a7be4a669030
+  config:
+    port: "3002"
+    rustLog: info
+    rateLimitRps: "10"
+    maxConcurrentScans: "4"
+    trivyTimeoutSecs: "300"
+
+# ── MCP tools server ──────────────────────────────────────────────────────────
+mcpToolsServer:
+  image:
+    repository: ghcr.io/ritsch-hugo/mcp-tools-server
+    tag: latest
+  config:
+    port: "3004"
+    maxConcurrentScans: "10"
+    scannerTimeoutSecs: "300"
+    maxBlobSizeBytes: "524288000"
+    maxRequestBodyBytes: "1048576"
+
+# ── LLM Manager ───────────────────────────────────────────────────────────────
+llmManager:
+  image:
+    repository: ghcr.io/ritsch-hugo/llm-manager
+    tag: latest
+  config:
+    managerPort: "3003"
+    llmBaseUrl: https://openrouter.ai/api
+    worker1: minimax/minimax-m2.7
+    worker2: qwen/qwen3.5-35b-a3b
+    worker3: google/gemma-4-31b-it
+    arbiter: mistralai/mistral-small-2603
+    timeoutSecs: "120"
+  openrouterApiKey: ""  # REQUIS — définir dans values-secret.yaml
+
+# ── LLM Decision ──────────────────────────────────────────────────────────────
+llmDecision:
+  image:
+    repository: ghcr.io/ritsch-hugo/llm-decision
+    tag: latest
+  config:
+    decisionPort: "3005"
+    startupMaxRetries: "24"
+    startupRetryDelaySecs: "5"
+    maxRequestBodyBytes: "1048576"
+
+# ── Cycle de vie (SBOM / CVE surveillance) ────────────────────────────────────
+cycleDeVie:
+  image:
+    repository: ghcr.io/ritsch-hugo/cycle-de-vie
+    tag: a0e735ec531a1d19fd3f2d172a0e1b5a294dabd8
+  config:
+    port: "3020"
+    pollIntervalSecs: "60"
+    sbomDir: /app/sboms
+    syftBin: syft
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+dashboard:
+  image:
+    repository: ghcr.io/ritsch-hugo/docdockgo-dashboard
+    tag: sha-9e92f34
+  service:
+    nodePort: 3010
+  config:
+    listenAddr: "0.0.0.0:3010"
+    allowedIps: "127.0.0.1"  # surcharger avec tes IPs
+  oidc:
+    issuer: ""       # REQUIS — définir dans values-secret.yaml
+    clientId: ""     # REQUIS — définir dans values-secret.yaml
+    redirectUri: "http://localhost:3010/callback"
+    postLogoutRedirectUri: "http://localhost:3010/logged-out"

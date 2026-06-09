@@ -1,0 +1,23 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init-sql
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "docdockgo.labels" . | nindent 4 }}
+data:
+  init.sql: |
+{{ .Files.Get "files/init.sql" | indent 4 }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-whitelist
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "docdockgo.labels" . | nindent 4 }}
+data:
+  registry_whitelist.json: |
+{{ .Files.Get "files/registry_whitelist.json" | indent 4 }}

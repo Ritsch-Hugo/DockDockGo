@@ -1,0 +1,94 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-manager
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: llm-manager
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-manager
+  template:
+    metadata:
+      labels:
+        app: llm-manager
+    spec:
+      containers:
+        - name: llm-manager
+          image: {{ .Values.llmManager.image.repository }}:{{ .Values.llmManager.image.tag }}
+          envFrom:
+            - secretRef:
+                name: llm-manager-env
+          ports:
+            - containerPort: 3003
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-manager
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: llm-manager
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: llm-manager
+  ports:
+    - port: 3003
+      targetPort: 3003
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-decision
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: llm-decision
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-decision
+  template:
+    metadata:
+      labels:
+        app: llm-decision
+    spec:
+      containers:
+        - name: llm-decision
+          image: {{ .Values.llmDecision.image.repository }}:{{ .Values.llmDecision.image.tag }}
+          envFrom:
+            - secretRef:
+                name: llm-decision-env
+          ports:
+            - containerPort: 3005
+          volumeMounts:
+            - name: quarantaine
+              mountPath: /quarantaine
+      volumes:
+        - name: quarantaine
+          persistentVolumeClaim:
+            claimName: quarantaine
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-decision
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: llm-decision
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: llm-decision
+  ports:
+    - port: 3005
+      targetPort: 3005

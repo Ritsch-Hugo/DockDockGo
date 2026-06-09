@@ -1,0 +1,64 @@
+# PersistentVolumes hostPath pour les volumes partagés (RWX, cluster local)
+# Trivy DB et Postgres utilisent le provisionneur local-path (RWO).
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: docdockgo-quarantaine-pv
+  labels:
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ .Values.storage.quarantaine.size }}
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: {{ .Values.storage.quarantaine.hostPath }}
+    type: DirectoryOrCreate
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: quarantaine
+  namespace: {{ .Values.namespace }}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: docdockgo-quarantaine-pv
+  resources:
+    requests:
+      storage: {{ .Values.storage.quarantaine.size }}
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: docdockgo-cache-pv
+  labels:
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: {{ .Values.storage.cache.size }}
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: {{ .Values.storage.cache.hostPath }}
+    type: DirectoryOrCreate
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cache
+  namespace: {{ .Values.namespace }}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: docdockgo-cache-pv
+  resources:
+    requests:
+      storage: {{ .Values.storage.cache.size }}

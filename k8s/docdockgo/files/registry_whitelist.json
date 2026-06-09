@@ -1,0 +1,6 @@
+[
+  "registry-1.docker.io",
+  "ghcr.io",
+  "quay.io",
+  "myregistry.local:5000"
+]

@@ -1,0 +1,57 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: dashboard
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: {{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}
+          envFrom:
+            - secretRef:
+                name: dashboard-env
+          ports:
+            - containerPort: 3010
+          volumeMounts:
+            - name: quarantaine
+              mountPath: /app/quarantaine
+            - name: cache
+              mountPath: /app/cache
+      volumes:
+        - name: quarantaine
+          persistentVolumeClaim:
+            claimName: quarantaine
+        - name: cache
+          persistentVolumeClaim:
+            claimName: cache
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: dashboard
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector:
+    app: dashboard
+  ports:
+    - port: 3010
+      targetPort: 3010
+      nodePort: {{ .Values.dashboard.service.nodePort }}

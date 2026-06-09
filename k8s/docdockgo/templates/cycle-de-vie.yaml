@@ -1,0 +1,25 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cycle-de-vie
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: cycle-de-vie
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cycle-de-vie
+  template:
+    metadata:
+      labels:
+        app: cycle-de-vie
+    spec:
+      containers:
+        - name: cycle-de-vie
+          image: {{ .Values.cycleDeVie.image.repository }}:{{ .Values.cycleDeVie.image.tag }}
+          envFrom:
+            - secretRef:
+                name: cycle-de-vie-env

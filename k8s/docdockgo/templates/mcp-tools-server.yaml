@@ -1,0 +1,50 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-tools-server
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mcp-tools-server
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-tools-server
+  template:
+    metadata:
+      labels:
+        app: mcp-tools-server
+    spec:
+      containers:
+        - name: mcp-tools-server
+          image: {{ .Values.mcpToolsServer.image.repository }}:{{ .Values.mcpToolsServer.image.tag }}
+          envFrom:
+            - secretRef:
+                name: mcp-tools-server-env
+          ports:
+            - containerPort: 3004
+          volumeMounts:
+            - name: quarantaine
+              mountPath: /quarantaine
+      volumes:
+        - name: quarantaine
+          persistentVolumeClaim:
+            claimName: quarantaine
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-tools-server
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mcp-tools-server
+    {{- include "docdockgo.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: mcp-tools-server
+  ports:
+    - port: 3004
+      targetPort: 3004
