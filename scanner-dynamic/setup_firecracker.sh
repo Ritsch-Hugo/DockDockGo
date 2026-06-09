@@ -23,7 +23,7 @@ VMLINUX="$FC_DIR/vmlinux"
 VM_KEY="$FC_DIR/ddg-vm-key"
 MOUNT_DIR="/tmp/ddg-rootfs-mount"
 
-SCANNER_PROJECT="$(find /home -name 'docdockgo-scan-dynamique' \
+SCANNER_PROJECT="$(find -L /home -name 'docdockgo-scan-dynamique' \
                   -type d 2>/dev/null | head -1)"
 
 check_requirements() {
