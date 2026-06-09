@@ -118,12 +118,36 @@ services:
       trivy-db-init:
         condition: service_completed_successfully
 
+  scanner-dynamic:
+    build: ./scanner-dynamic
+    image: dockdockgo-scan-dynamique:1.0.0
+    env_file: scanner-dynamic/.env
+    # privileged requis : KVM (Firecracker) + eBPF + iptables NAT
+    privileged: true
+    # host requis : interface TAP ddg-tap0 créée sur l'hôte par scan_vm.sh
+    network_mode: host
+    devices:
+      - /dev/kvm:/dev/kvm
+    volumes:
+      # Socket Docker hôte : lancer les containers observés + docker load
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Artefacts Firecracker (kernel 5.15 BTF + rootfs Ubuntu VM) — RW requis
+      - /opt/firecracker:/opt/firecracker
+      # Alertes Falco modern_ebpf (driver kernel sur l'hôte)
+      - /var/log/falco.log:/var/log/falco.log
+      # Blobs OCI du proxy — lecture seule
+      - quarantaine:/quarantaine:ro
+    restart: unless-stopped
+
   mcp-tools-server:
     image: ghcr.io/ritsch-hugo/mcp-tools-server:latest
     env_file: mcp-tools-server/.env
     environment:
       STATIC_SCANNER_URL: http://scanner-static:3002
       COMPLIANCE_SCANNER_URL: http://scanner-compliance:3001
+      DYNAMIC_SCANNER_URL: http://host-gateway:3006
+    extra_hosts:
+      - "host-gateway:host-gateway"
     ports:
       - "3004:3004"
     volumes:
@@ -131,6 +155,7 @@ services:
     depends_on:
       - scanner-static
       - scanner-compliance
+      - scanner-dynamic
 
   # ── LLM ─────────────────────────────────────────────────────────────────────
 

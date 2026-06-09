@@ -6,6 +6,8 @@
 
 set -euo pipefail
 
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+
 NAMESPACE="${1:-docdockgo}"
 CERTS_DIR="$(dirname "$0")/../../proxy/certs-mitm"
 

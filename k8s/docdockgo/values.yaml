@@ -32,7 +32,7 @@ proxy:
     repository: ghcr.io/ritsch-hugo/docdockgo-proxy
     tag: sha-d5787e8
   service:
-    nodePort: 443   # port exposé sur le nœud
+    nodePort: 30443  # redirigé depuis 443 via iptables (voir scripts/setup-iptables.sh)
   config:
     maxBlobSize: "2147483648"
     maxConcurrentPulls: "200"
@@ -137,7 +137,7 @@ dashboard:
     repository: ghcr.io/ritsch-hugo/docdockgo-dashboard
     tag: sha-9e92f34
   service:
-    nodePort: 3010
+    nodePort: 30010
   config:
     listenAddr: "0.0.0.0:3010"
     allowedIps: "127.0.0.1"  # surcharger avec tes IPs
