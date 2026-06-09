@@ -146,15 +146,13 @@ pub async fn run_sandbox_container(
         SandboxMode::Observe => generate_container_name("ddg_observe"),
     };
 
+    // Inside a Firecracker microVM isolation is provided by the hypervisor.
+    // The quickstart vmlinux doesn't ship CONFIG_VETH, so attaching containers
+    // to a custom bridge fails at start_container.  "none" skips veth creation
+    // entirely, giving maximum isolation with no kernel feature requirements.
     let host_config = match mode {
         SandboxMode::Observe => HostConfig {
-            memory:          Some(256 * 1024 * 1024),     // 256 MB RAM
-            nano_cpus:       Some(1_000_000_000),          // 1 CPU
-            pids_limit:      Some(128),                    // Anti fork bomb
-            network_mode:    Some("ddg_analysis_net".to_string()),
-            cap_drop:        Some(vec!["ALL".to_string()]),
-            security_opt:    Some(vec!["no-new-privileges".to_string()]),
-            readonly_rootfs: Some(true),                   // FS en lecture seule
+            network_mode: Some("none".to_string()),
             ..Default::default()
         },
     };

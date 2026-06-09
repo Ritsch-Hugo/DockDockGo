@@ -156,7 +156,7 @@ echo "[FC] Configuration VM..."
 
 api PUT "boot-source" "{
     \"kernel_image_path\": \"$FC_DIR/vmlinux\",
-    \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off ip=${VM_IP}::172.16.0.1:255.255.255.0::eth0:off\"
+    \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off ip=${VM_IP}::172.16.0.1:255.255.255.0::eth0:off systemd.unified_cgroup_hierarchy=0 cgroup_enable=memory,cpuset cgroup_memory=1\"
 }"
 
 api PUT "drives/rootfs" "{

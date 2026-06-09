@@ -255,6 +255,7 @@ async fn run_scan_firecracker(image: &str) -> Result<ScanResponse> {
     if !stderr.is_empty() {
         println!("[FC] stderr: {}", stderr);
     }
+    println!("[FC] stdout ({} chars): {}", stdout.len(), &stdout[..stdout.len().min(3000)]);
 
     parse_vm_result(&stdout, image)
 }
@@ -696,8 +697,8 @@ async fn handle_scan(Json(req): Json<ScanRequest>) -> Json<ScanResponse> {
             Json(r)
         }
         Err(e) => {
-            println!("[HTTP] ❌ Erreur : {}", e);
-            Json(error_response(req.image, req.mode, format!("Erreur : {}", e)))
+            println!("[HTTP] ❌ Erreur : {:#}", e);
+            Json(error_response(req.image, req.mode, format!("Erreur : {:#}", e)))
         }
     }
 }
