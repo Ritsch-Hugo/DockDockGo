@@ -1,9 +1,10 @@
 # ═══════════════════════════════════════════════════════════════
-# Dockerfile — DockDockGo Scanner v1.1
+# Dockerfile — DockDockGo Scanner v1.2
 #
 # Modes :
 #   - API HTTP : ddg-scanner --server (port 3006, défaut)
-#   - CLI : ddg-scanner <image> --docker
+#   - CLI image       : ddg-scanner <image> [--docker]
+#   - CLI quarantaine : ddg-scanner --quarantine <chemin> [--docker]
 #
 # Le scanner cherche scan_vm.sh dans :
 #   1. ./scan_vm.sh (workdir = /app) ← on met ici
@@ -35,15 +36,17 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Outils système
+#   skopeo : reconstruction d'image OCI depuis la quarantaine (sans pull)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl wget gnupg ca-certificates \
         iproute2 iptables \
         openssh-client \
         sudo \
         jq \
+        skopeo \
     && rm -rf /var/lib/apt/lists/*
 
-# Docker CLI (pour lancer les containers à observer)
+# Docker CLI (pour lancer les containers à observer + docker load)
 RUN install -m 0755 -d /etc/apt/keyrings && \
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \

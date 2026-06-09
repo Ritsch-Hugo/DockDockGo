@@ -3,13 +3,13 @@ use std::time::{Duration, SystemTime, Instant};
 use std::process::Command;
 use std::path::Path;
 use std::collections::HashMap;
-use std::io::{self, Write};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use axum::{routing::{post, get}, Router, Json};
 use serde::{Deserialize, Serialize};
 
 mod sandbox;
+mod quarantine;
 use sandbox::docker::{
     connect,
     run_sandbox_container,
@@ -21,11 +21,27 @@ use sandbox::docker::{
 };
 
 // ─────────────────────────────────────────────
+// EXPLICATION DU BARÈME (incluse dans chaque réponse)
+// ─────────────────────────────────────────────
+const SCORING_EXPLANATION: &str = "Score 0-100 basé sur la sévérité des règles Falco déclenchées (cappé à 100). \
+Points par règle : CRITICAL 60-75 (modification système, reverse shell, évasion conteneur, cryptominer, fork bomb), \
+HIGH 35-55 (accès fichiers sensibles, mount, anti-forensic), MEDIUM 20-30 (connexions réseau sortantes, gestion paquets), \
+LOW 12-15 (spawn shell, processus). Bonus de fréquence (log2, plafonné à +20) si une règle se répète. \
+Verdict : 0=CLEAN, 1-29=LOW, 30-59=MODERATE (tous autorisés), 60-89=HIGH, 90-100=CRITICAL (bloqués). \
+allowed=false si au moins une règle CRITICAL est déclenchée, quel que soit le score.";
+
+// ─────────────────────────────────────────────
 // STRUCTURES API
 // ─────────────────────────────────────────────
 #[derive(Deserialize)]
 struct ScanRequest {
+    /// Nom d'image classique (ex: "nginx:alpine"). Optionnel si quarantine_path fourni.
+    #[serde(default)]
     image: String,
+    /// Chemin de quarantaine DocDockGo (ex: "/data/quarantaine/library/alpine/3.18").
+    /// Si fourni, l'image est reconstruite depuis les blobs SANS pull.
+    #[serde(default)]
+    quarantine_path: String,
     /// "vm" = Firecracker (défaut), "docker" = sandbox Docker directe
     #[serde(default = "default_mode")]
     mode: String,
@@ -40,43 +56,65 @@ struct ScanResponse {
     verdict:     String,
     allowed:     bool,
     mode:        String,
+    /// Explication concise du barème de scoring (toujours présente).
+    scoring_explanation: String,
     rule_counts: HashMap<String, u32>,
+    /// Logs Falco détaillés (toujours inclus, sans interaction).
     details:     Vec<String>,
+}
+
+/// Construit une ScanResponse en injectant automatiquement l'explication du barème.
+fn build_response(
+    image: String,
+    score: u32,
+    critical: bool,
+    mode: String,
+    rule_counts: HashMap<String, u32>,
+    details: Vec<String>,
+) -> ScanResponse {
+    let verdict = score_to_verdict(score);
+    let allowed = score < 60 && !critical;
+    ScanResponse {
+        image,
+        score,
+        critical,
+        verdict,
+        allowed,
+        mode,
+        scoring_explanation: SCORING_EXPLANATION.to_string(),
+        rule_counts,
+        details,
+    }
+}
+
+/// Réponse d'erreur standardisée (barème inclus pour cohérence).
+fn error_response(image: String, mode: String, msg: String) -> ScanResponse {
+    ScanResponse {
+        image,
+        score:       100,
+        critical:    true,
+        verdict:     "ERROR".to_string(),
+        allowed:     false,
+        mode,
+        scoring_explanation: SCORING_EXPLANATION.to_string(),
+        rule_counts: HashMap::new(),
+        details:     vec![msg],
+    }
 }
 
 // ─────────────────────────────────────────────
 // VÉRIFICATION BINAIRE DANS LE ROOTFS
-//
-// Compare le hash MD5 du binaire courant avec celui
-// embarqué dans le rootfs Firecracker via mount loop.
-//
-// Logique de sélection du binaire de référence :
-//   1. /usr/local/bin/ddg-scanner  (si on est dans le container Docker)
-//   2. target/x86_64-unknown-linux-musl/release/...  (si on est sur l'hôte)
-//
-// Utilise un chemin de mount unique (timestamp) pour éviter
-// tout conflit avec un mount précédent qui aurait mal été nettoyé.
 // ─────────────────────────────────────────────
 
-/// Calcule le hash MD5 d'un fichier via md5sum.
-/// Retourne None si le fichier est inaccessible.
 fn md5_of_file(path: &str) -> Option<String> {
-    let output = Command::new("md5sum")
-        .arg(path)
-        .output()
-        .ok()?;
+    let output = Command::new("md5sum").arg(path).output().ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     stdout.split_whitespace().next().map(|s| s.to_string())
 }
 
-/// Vérifie si le binaire dans le rootfs Firecracker est à jour.
-/// Monte le rootfs en lecture seule, compare les hashs MD5, démonte.
-/// Affiche un avertissement avec la commande exacte si obsolète.
-/// Ne bloque pas le démarrage en cas d'erreur.
 fn check_rootfs_binary_version() {
     let rootfs = "/opt/firecracker/ddg-rootfs.ext4";
 
-    // Chemin unique avec timestamp pour éviter conflits entre runs
     let mount_point = format!(
         "/tmp/ddg-check-{}",
         SystemTime::now()
@@ -86,21 +124,16 @@ fn check_rootfs_binary_version() {
     );
     let binary_in_vm = format!("{}/usr/local/bin/ddg-scanner", mount_point);
 
-    // Binaire de référence :
-    //   - dans le container Docker : /usr/local/bin/ddg-scanner
-    //   - sur l'hôte : binaire musl compilé localement
     let current_binary = if Path::new("/usr/local/bin/ddg-scanner").exists() {
         "/usr/local/bin/ddg-scanner"
     } else {
         "target/x86_64-unknown-linux-musl/release/docdockgo-scan-dynamique"
     };
 
-    // Rootfs absent → déjà signalé par check_environment()
     if !Path::new(rootfs).exists() {
         return;
     }
 
-    // Binaire de référence absent
     if !Path::new(current_binary).exists() {
         println!("[!] Binaire musl absent ({}) — impossible de vérifier", current_binary);
         println!("    Compilez avec : cargo build --release --target x86_64-unknown-linux-musl");
@@ -115,10 +148,8 @@ fn check_rootfs_binary_version() {
         }
     };
 
-    // Crée le point de montage temporaire
     let _ = std::fs::create_dir_all(&mount_point);
 
-    // Monte le rootfs en lecture seule
     let mount_ok = Command::new("sudo")
         .args(["mount", "-o", "loop", rootfs, &mount_point])
         .output()
@@ -126,14 +157,12 @@ fn check_rootfs_binary_version() {
         .unwrap_or(false);
 
     if !mount_ok {
-        // Pas root, device busy, ou autre erreur → skip silencieux
         let _ = std::fs::remove_dir(&mount_point);
         return;
     }
 
     let hash_rootfs = md5_of_file(&binary_in_vm);
 
-    // Démonte proprement dans tous les cas
     let _ = Command::new("sudo").args(["umount", &mount_point]).status();
     let _ = std::fs::remove_dir(&mount_point);
 
@@ -161,10 +190,7 @@ fn check_rootfs_binary_version() {
 fn check_environment() {
     let mut issues = false;
 
-    match Command::new("systemctl")
-        .args(["is-active", "falco-ddg"])
-        .output()
-    {
+    match Command::new("systemctl").args(["is-active", "falco-ddg"]).output() {
         Ok(output) => {
             let status = String::from_utf8_lossy(&output.stdout);
             if !status.trim().contains("active") {
@@ -197,7 +223,11 @@ fn check_environment() {
         println!("[✓] KVM disponible");
     }
 
-    // Vérification version binaire dans le rootfs
+    match Command::new("skopeo").arg("--version").output() {
+        Ok(o) if o.status.success() => println!("[✓] skopeo présent"),
+        _ => println!("[!] skopeo absent → reconstruction quarantaine indisponible (apt install skopeo)"),
+    }
+
     check_rootfs_binary_version();
 
     if issues {
@@ -230,7 +260,6 @@ async fn run_scan_firecracker(image: &str) -> Result<ScanResponse> {
 }
 
 fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
-    // Strip codes ANSI avant parsing JSON
     let clean: String = output
         .lines()
         .map(|line| {
@@ -251,7 +280,6 @@ fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Cherche le JSON ligne par ligne
     for line in clean.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('{') && trimmed.ends_with('}') {
@@ -261,7 +289,6 @@ fn parse_vm_result(output: &str, _image: &str) -> Result<ScanResponse> {
         }
     }
 
-    // Fallback : cherche entre { et }
     if let Some(start) = clean.find('{') {
         if let Some(end) = clean.rfind('}') {
             let json_str = &clean[start..=end];
@@ -317,9 +344,7 @@ async fn run_scan_docker(image: &str) -> Result<ScanResponse> {
     let _ = std::fs::write("/var/log/falco.log", "");
     let start_time = SystemTime::now();
 
-    let container_name = run_sandbox_container(
-        &docker, image, SandboxMode::Observe
-    ).await?;
+    let container_name = run_sandbox_container(&docker, image, SandboxMode::Observe).await?;
     println!("[+] Container : {}", container_name);
 
     let container_id = match docker.inspect_container(&container_name, None).await {
@@ -338,19 +363,14 @@ async fn run_scan_docker(image: &str) -> Result<ScanResponse> {
     cleanup_container(&docker, &container_name).await;
     wait_container_removal(&docker, &container_name).await;
 
-    let verdict = score_to_verdict(score);
-    let allowed = score < 60 && !critical;
-
-    Ok(ScanResponse {
-        image:   image.to_string(),
+    Ok(build_response(
+        image.to_string(),
         score,
         critical,
-        verdict,
-        allowed,
-        mode:    "docker".to_string(),
+        "docker".to_string(),
         rule_counts,
-        details: details.values().flatten().cloned().collect(),
-    })
+        details.values().flatten().cloned().collect(),
+    ))
 }
 
 async fn run_scan_pipeline(image: &str, mode: &str) -> Result<ScanResponse> {
@@ -572,7 +592,7 @@ async fn monitor_container(
 }
 
 // ─────────────────────────────────────────────
-// AFFICHAGE SCORE (CLI)
+// AFFICHAGE SCORE (CLI) — détails toujours affichés
 // ─────────────────────────────────────────────
 fn print_score_legend(response: &ScanResponse) {
     println!("\n========== SCORE : {}/100 [mode: {}] ==========",
@@ -586,19 +606,32 @@ fn print_score_legend(response: &ScanResponse) {
         _       => ("💀 CRITIQUE", "Image hautement malveillante."),
     };
 
-    println!("  Niveau  : {}", label);
-    println!("  Verdict : {}", desc);
+    println!("  Niveau   : {}", label);
+    println!("  Verdict  : {}", desc);
+    println!("  Autorisé : {}", response.allowed);
 
     if response.critical {
         println!("  ⚠️  FLAG CRITIQUE détecté !");
     }
 
+    // Barème
+    println!("\n  📊 Barème : {}", response.scoring_explanation);
+
+    // Règles déclenchées
     if !response.rule_counts.is_empty() {
         println!("\n  Règles déclenchées :");
         let mut sorted: Vec<_> = response.rule_counts.iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(a.1));
         for (rule, count) in sorted {
             println!("    • {} × {}", rule, count);
+        }
+    }
+
+    // Détails Falco — TOUJOURS affichés (plus de prompt interactif)
+    if !response.details.is_empty() {
+        println!("\n  📋 Détails Falco :");
+        for (i, d) in response.details.iter().enumerate() {
+            println!("    {}. {}", i + 1, d);
         }
     }
 
@@ -609,6 +642,48 @@ fn print_score_legend(response: &ScanResponse) {
 // HANDLER HTTP
 // ─────────────────────────────────────────────
 async fn handle_scan(Json(req): Json<ScanRequest>) -> Json<ScanResponse> {
+    // ── Cas 1 : quarantine_path fourni → reconstruction SANS pull ──
+    if !req.quarantine_path.is_empty() {
+        println!("\n[HTTP] Scan quarantaine : {} (mode: {})",
+                 req.quarantine_path, req.mode);
+
+        let reconstructed = match quarantine::reconstruct_from_quarantine(&req.quarantine_path) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("[HTTP] ❌ Reconstruction échouée : {}", e);
+                return Json(error_response(
+                    req.quarantine_path,
+                    req.mode,
+                    format!("Reconstruction échouée : {}", e),
+                ));
+            }
+        };
+
+        let image_tag = reconstructed.image_tag.clone();
+        println!("[HTTP] Image reconstruite (sans pull) : {}", image_tag);
+
+        let result = run_scan_pipeline(&image_tag, &req.mode).await;
+        reconstructed.cleanup();
+        println!("[HTTP] Nettoyage terminé (tmp + image supprimés)");
+
+        return match result {
+            Ok(mut r) => {
+                r.image = req.quarantine_path.clone();
+                if r.allowed {
+                    println!("[HTTP] ✅ {} — score: {}", r.image, r.score);
+                } else {
+                    println!("[HTTP] ❌ {} BLOQUÉE — score: {}", r.image, r.score);
+                }
+                Json(r)
+            }
+            Err(e) => {
+                println!("[HTTP] ❌ Erreur scan : {}", e);
+                Json(error_response(req.quarantine_path, req.mode, format!("Erreur : {}", e)))
+            }
+        };
+    }
+
+    // ── Cas 2 : scan par nom d'image (comportement historique) ──
     println!("\n[HTTP] Scan : {} (mode: {})", req.image, req.mode);
 
     match run_scan_pipeline(&req.image, &req.mode).await {
@@ -622,16 +697,7 @@ async fn handle_scan(Json(req): Json<ScanRequest>) -> Json<ScanResponse> {
         }
         Err(e) => {
             println!("[HTTP] ❌ Erreur : {}", e);
-            Json(ScanResponse {
-                image:       req.image,
-                score:       100,
-                critical:    true,
-                verdict:     "ERROR".to_string(),
-                allowed:     false,
-                mode:        req.mode,
-                rule_counts: HashMap::new(),
-                details:     vec![format!("Erreur : {}", e)],
-            })
+            Json(error_response(req.image, req.mode, format!("Erreur : {}", e)))
         }
     }
 }
@@ -651,24 +717,10 @@ async fn start_api_server() -> Result<()> {
     Ok(())
 }
 
+/// Scan CLI — affiche tout automatiquement (plus de prompt).
 async fn run_cli_scan(image: &str, mode: &str) -> Result<()> {
     let response = run_scan_pipeline(image, mode).await?;
     print_score_legend(&response);
-
-    print!("Voir les détails Falco ? (y/n) : ");
-    io::stdout().flush().unwrap();
-
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer).unwrap();
-
-    if answer.trim().eq_ignore_ascii_case("y") {
-        println!("\n===== DÉTAILS =====");
-        for (i, d) in response.details.iter().enumerate() {
-            println!("  {}. {}", i + 1, d);
-        }
-        println!("===================\n");
-    }
-
     println!("========== END OF SCAN ==========\n");
     Ok(())
 }
@@ -689,6 +741,26 @@ async fn main() -> Result<()> {
         Some("--server") => {
             start_api_server().await?;
         }
+        Some("--quarantine") => {
+            if let Some(qpath) = args.get(2) {
+                let mode = if args.contains(&"--docker".to_string()) {
+                    "docker"
+                } else {
+                    "vm"
+                };
+                println!("[+] Quarantaine : {} | Mode : {}", qpath, mode);
+
+                let reconstructed = quarantine::reconstruct_from_quarantine(qpath)?;
+                let image_tag = reconstructed.image_tag.clone();
+                println!("[+] Image reconstruite (sans pull) : {}", image_tag);
+
+                let result = run_cli_scan(&image_tag, mode).await;
+                reconstructed.cleanup();
+                result?;
+            } else {
+                println!("Usage: cargo run -- --quarantine <chemin> [--docker]");
+            }
+        }
         Some(image) => {
             let mode = if args.contains(&"--docker".to_string()) {
                 "docker"
@@ -700,13 +772,14 @@ async fn main() -> Result<()> {
         }
         None => {
             println!("Usage:");
-            println!("  cargo run -- <image>           → scan via Firecracker VM");
-            println!("  cargo run -- <image> --docker  → scan via Docker direct");
-            println!("  cargo run -- --server          → HTTP server");
+            println!("  cargo run -- <image>                  → scan via Firecracker VM");
+            println!("  cargo run -- <image> --docker         → scan via Docker direct");
+            println!("  cargo run -- --quarantine <chemin>    → scan depuis quarantaine (sans pull)");
+            println!("  cargo run -- --server                 → HTTP server");
             println!("\nExemples :");
             println!("  cargo run -- nginx:latest");
-            println!("  cargo run -- dockdockgo-evil");
-            println!("  cargo run -- python:3.11-slim --docker");
+            println!("  cargo run -- --quarantine /data/quarantaine/library/alpine/3.18");
+            println!("  cargo run -- --server");
         }
     }
 

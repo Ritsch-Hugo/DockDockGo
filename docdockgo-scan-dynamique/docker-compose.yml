@@ -1,27 +1,39 @@
-version: '3.8'
-
 # ═══════════════════════════════════════════════════════════════
-# docker-compose.yml — DockDockGo Scanner
+# docker-compose.yml — DockDockGo Scanner Dynamique
 #
 # Lance le scanner DockDockGo en container Docker.
 #
-# Deux modes disponibles via l'API HTTP :
-#   - mode "docker" : scan rapide sur l'hôte via Docker socket
-#   - mode "vm"     : scan isolé dans une microVM Firecracker
+# TROIS façons de scanner via l'API HTTP (POST /scan) :
+#   1. {"image": "nginx:alpine", "mode": "docker"}        → pull + scan rapide
+#   2. {"image": "nginx:alpine", "mode": "vm"}            → pull + scan isolé VM
+#   3. {"quarantine_path": "/quarantaine/library/alpine/3.18", "mode": "vm"}
+#        → reconstruction depuis blobs OCI SANS pull (intégration proxy)
+#
+# Deux moteurs d'isolation :
+#   - mode "docker" : scan rapide, container sur l'hôte (~10s)
+#   - mode "vm"     : scan isolé en microVM Firecracker (~30-45s)
 #
 # Accès hôte REQUIS (justifiés ci-dessous) :
-#   - /dev/kvm           → Firecracker (virtualisation KVM)
-#   - /var/run/docker.sock → lancer les containers observés
-#   - /opt/firecracker    → kernel 5.15 BTF + rootfs Ubuntu VM
-#   - /var/log/falco.log  → alertes Falco (driver sur l'hôte)
-#   - network: host       → interface TAP ddg-tap0 (réseau VM)
-#   - privileged: true    → KVM + eBPF + iptables NAT
+#   - /dev/kvm             → Firecracker (virtualisation KVM)
+#   - /var/run/docker.sock → lancer les containers observés + docker load
+#   - /opt/firecracker     → kernel 5.15 BTF + rootfs Ubuntu VM
+#   - /var/log/falco.log   → alertes Falco (driver sur l'hôte)
+#   - quarantaine          → blobs OCI du proxy (mode quarantine_path)
+#   - network: host        → interface TAP ddg-tap0 (réseau VM)
+#   - privileged: true     → KVM + eBPF + iptables NAT
 #
 # Usage :
-#   docker-compose up -d
+#   QUARANTINE_PATH=/chemin/proxy/quarantaine docker-compose up -d
+#
+#   # Scan classique (mode docker)
 #   curl -X POST http://localhost:3006/scan \
 #     -H "Content-Type: application/json" \
 #     -d '{"image": "nginx:alpine", "mode": "docker"}'
+#
+#   # Scan depuis quarantaine (sans pull, mode VM)
+#   curl -X POST http://localhost:3006/scan \
+#     -H "Content-Type: application/json" \
+#     -d '{"quarantine_path": "/quarantaine/library/alpine/3.18", "mode": "vm"}'
 # ═══════════════════════════════════════════════════════════════
 
 services:
@@ -42,7 +54,7 @@ services:
       - /dev/kvm:/dev/kvm
 
     volumes:
-      # Socket Docker hôte : pour lancer les containers à observer
+      # Socket Docker hôte : lancer les containers à observer + docker load
       - /var/run/docker.sock:/var/run/docker.sock
 
       # Artefacts Firecracker (kernel + rootfs)
@@ -51,6 +63,12 @@ services:
 
       # Log Falco hôte : alertes générées par Falco modern_ebpf
       - /var/log/falco.log:/var/log/falco.log
+
+      # Quarantaine du proxy (mode quarantine_path)
+      # Lecture seule : le scanner lit les blobs, ne les modifie jamais.
+      # Le chemin DANS le container doit correspondre au quarantine_path envoyé.
+      # Défaut : ./quarantaine sur l'hôte → /quarantaine dans le container
+      - ${QUARANTINE_PATH:-./quarantaine}:/quarantaine:ro
 
     restart: unless-stopped
 

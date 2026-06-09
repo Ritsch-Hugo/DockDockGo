@@ -106,6 +106,7 @@ transfer_local_image() {
 
     docker save "$image" -o "$tar_path"
     echo "[FC] Export : $(du -sh "$tar_path" | cut -f1) ✓"
+    vm_ssh "rm -rf /tmp/ddg-image.tar" 2>/dev/null || true
 
     scp \
         -o StrictHostKeyChecking=no \
