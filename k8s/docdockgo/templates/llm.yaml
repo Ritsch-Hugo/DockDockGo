@@ -72,6 +72,16 @@ spec:
           volumeMounts:
             - name: quarantaine
               mountPath: /quarantaine
+        - name: mcp-tools-server
+          image: {{ .Values.mcpToolsServer.image.repository }}:{{ .Values.mcpToolsServer.image.tag }}
+          envFrom:
+            - secretRef:
+                name: mcp-tools-server-env
+          ports:
+            - containerPort: 3004
+          volumeMounts:
+            - name: quarantaine
+              mountPath: /quarantaine
       volumes:
         - name: quarantaine
           persistentVolumeClaim:

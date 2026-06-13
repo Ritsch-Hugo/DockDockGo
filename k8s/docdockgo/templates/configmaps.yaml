@@ -2,6 +2,26 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: proxy-dotenv
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "docdockgo.labels" . | nindent 4 }}
+data:
+  .env: |
+    DATABASE_URL={{ include "docdockgo.databaseUrl" . }}
+    MAX_BLOB_SIZE={{ .Values.proxy.config.maxBlobSize }}
+    MAX_CONCURRENT_PULLS={{ .Values.proxy.config.maxConcurrentPulls }}
+    CONTEXT_TIMEOUT={{ .Values.proxy.config.contextTimeout }}
+    ORCH_URL=http://orchestrateur:3000/v1/decision
+    ORCH_TIMEOUT_SECS={{ .Values.proxy.config.orchTimeoutSecs }}
+    SHUTDOWN_DRAIN_TIMEOUT_SECS={{ .Values.proxy.config.shutdownDrainTimeout }}
+    QUARANTINE_BASE={{ .Values.proxy.config.quarantineBase }}
+    CACHE_BASE={{ .Values.proxy.config.cacheBase }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: db-init-sql
   namespace: {{ .Values.namespace }}
   labels:
