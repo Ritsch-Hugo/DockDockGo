@@ -7,12 +7,14 @@ set -euo pipefail
 
 add_rule() {
   local dport=$1 toport=$2
+  # PREROUTING uniquement — intercepte les clients externes (vm_antoine, etc.)
+  # Ne pas ajouter de règle OUTPUT : elle casserait containerd et les process hôtes
   iptables -t nat -C PREROUTING -p tcp --dport "$dport" -j REDIRECT --to-port "$toport" 2>/dev/null \
     || iptables -t nat -A PREROUTING -p tcp --dport "$dport" -j REDIRECT --to-port "$toport"
-  # Pour les connexions locales (même machine)
-  iptables -t nat -C OUTPUT -p tcp --dport "$dport" -j REDIRECT --to-port "$toport" 2>/dev/null \
-    || iptables -t nat -A OUTPUT -p tcp --dport "$dport" -j REDIRECT --to-port "$toport"
-  echo "443→$toport : OK"
+  # Exception : le réseau pods k8s (10.42.0.0/16) passe directement sans interception
+  iptables -t nat -C PREROUTING -s 10.42.0.0/16 -p tcp --dport "$dport" -j ACCEPT 2>/dev/null \
+    || iptables -t nat -I PREROUTING 1 -s 10.42.0.0/16 -p tcp --dport "$dport" -j ACCEPT
+  echo "$dport→$toport : OK"
 }
 
 add_rule 443 30443

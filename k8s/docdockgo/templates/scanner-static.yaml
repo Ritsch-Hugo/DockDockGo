@@ -30,7 +30,7 @@ spec:
       containers:
         - name: trivy-db-init
           image: aquasec/trivy:0.70.0
-          args: ["image", "--download-db-only"]
+          args: ["image", "--download-db-only", "--db-repository", "ghcr.io/aquasecurity/trivy-db"]
           volumeMounts:
             - name: trivy-db
               mountPath: /root/.cache/trivy
