@@ -46,7 +46,7 @@
 | Port | Usage |
 |---|---|
 | 443/tcp | Interception des pulls Docker/Podman (redirigé vers le proxy) |
-| 3010/tcp | Dashboard web (redirigé vers le NodePort) |
+| 30010/tcp | Dashboard web (redirigé vers le NodePort) |
 | 6443/tcp | API Kubernetes (optionnel, pour kubectl distant) |
 
 ---
@@ -74,7 +74,7 @@ curl -sfL https://get.k3s.io | sh -
 Vérifier que le nœud est prêt :
 
 ```bash
-sudo kubectl get nodes
+kubectl get nodes
 # NAME   STATUS   ROLES           AGE   VERSION
 # ...    Ready    control-plane   ...   v1.35.x+k3s1
 ```
@@ -114,8 +114,8 @@ Les registres par défaut sont : `registry-1.docker.io`, `ghcr.io`, `quay.io`.
 ### 5.1 Créer le dossier des certificats
 
 ```bash
-mkdir -p ../../proxy/certs-mitm
-cd ../../proxy/certs-mitm
+mkdir -p ../proxy/certs-mitm
+cd ../proxy/certs-mitm
 ```
 
 ### 5.2 Générer la CA racine
@@ -174,7 +174,7 @@ quay.io.key
 Revenir dans `k8s/` :
 
 ```bash
-cd ../../k8s
+cd ../k8s
 ```
 
 ---
@@ -302,17 +302,9 @@ trivy-db-init-...                      0/1     Completed   0
 
 ## 10. Configuration iptables
 
-Le proxy écoute sur le NodePort 30443. Il faut rediriger les ports système 443 (Docker/Podman) et 3010 (dashboard) vers ces NodePorts.
+Le proxy écoute sur le NodePort 30443. Il faut rediriger les ports système 443 (Docker/Podman) et 3010 (dashboard) vers ce NodePort.
 
-### 10.1 Corriger le script pour sudo
-
-Le script `setup-iptables.sh` utilise `kubectl` en interne. Quand il est exécuté avec `sudo`, il ne trouve pas le kubeconfig automatiquement. Passer la variable explicitement :
-
-```bash
-sudo KUBECONFIG=/home/<votre-user>/.kube/config bash scripts/setup-iptables.sh
-```
-
-### 10.2 Appliquer les règles
+### 10.1 Appliquer les règles
 
 ```bash
 sudo KUBECONFIG=$HOME/.kube/config bash scripts/setup-iptables.sh
@@ -322,17 +314,8 @@ Ce script :
 - Récupère automatiquement l'IP courante du pod proxy
 - Ajoute une règle DNAT `443 → <ip-pod>:8443` (clients externes uniquement)
 - Exclut le réseau pods k3s `10.42.0.0/16` pour éviter les boucles
-- Redirige `3010 → 30010` pour le dashboard (trafic externe)
 
-### 10.3 Ajouter la règle OUTPUT pour localhost
-
-Sans cette règle, `http://localhost:3010` ne fonctionne pas depuis la machine k3s elle-même (la règle PREROUTING ne s'applique pas au trafic local) :
-
-```bash
-sudo iptables -t nat -A OUTPUT -p tcp --dport 3010 -j REDIRECT --to-port 30010
-```
-
-### 10.4 Rendre les règles persistantes au reboot
+### 10.2 Rendre les règles persistantes au reboot
 
 ```bash
 sudo apt install iptables-persistent -y
@@ -349,6 +332,8 @@ Sur **chaque machine** qui effectuera des `docker pull` ou `podman pull` via Doc
 
 ### Ubuntu / Debian
 
+Mettre le certificat CA sur la machine client pour que celle ci fasse confiance au proxy
+
 ```bash
 sudo cp myca.crt /usr/local/share/ca-certificates/docdockgo-ca.crt
 sudo update-ca-certificates
@@ -358,23 +343,15 @@ sudo systemctl restart docker   # si Docker
 ### Configurer Docker pour passer par le proxy
 
 Pointer Docker vers le proxy en ajoutant l'IP du nœud k3s dans `/etc/hosts` :
+Le fichier doit ressembler a ça : 
 
 ```bash
-echo "<ip-noeud-k3s>  registry-1.docker.io" | sudo tee -a /etc/hosts
-echo "<ip-noeud-k3s>  ghcr.io" | sudo tee -a /etc/hosts
-echo "<ip-noeud-k3s>  quay.io" | sudo tee -a /etc/hosts
+<ip-noeud-k3s> registry-1.docker.io
+<ip-noeud-k3s> ghcr.io
+<ip-noeud-k3s> quay.io
+...
 ```
 
-Ou configurer le proxy HTTPS dans le service Docker :
-
-```bash
-sudo mkdir -p /etc/systemd/system/docker.service.d
-cat | sudo tee /etc/systemd/system/docker.service.d/proxy.conf <<EOF
-[Service]
-Environment="HTTPS_PROXY=https://<ip-noeud-k3s>:443"
-EOF
-sudo systemctl daemon-reload && sudo systemctl restart docker
-```
 
 ### Enregistrer le premier utilisateur
 
@@ -382,7 +359,7 @@ L'accès au dashboard est géré via OIDC (Zitadel, Keycloak…). La table `user
 
 Se connecter une première fois sur `http://localhost:3010` depuis le nœud k3s pour déclencher la création du compte en base.
 
-Pour mettre à jour les IPs autorisées d'un utilisateur après son premier login :
+Pour mettre à jour les IPs autorisées d'un utilisateur **après son premier login** :
 
 ```bash
 kubectl exec -n docdockgo postgres-0 -- psql -U docdockgo_admin -d docdockgo \
@@ -435,7 +412,7 @@ llm-decision en écoute sur http://0.0.0.0:3005
 
 ### Accéder au dashboard
 
-Ouvrir `http://localhost:3010` dans un navigateur depuis le nœud k3s.
+Ouvrir `http://localhost:30010` dans un navigateur depuis le nœud k3s.
 
 Le dashboard est accessible sans port-forward grâce à la règle iptables OUTPUT ajoutée à l'étape 10.3.
 
