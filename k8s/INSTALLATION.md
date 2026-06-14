@@ -87,6 +87,8 @@ sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown $(id -u):$(id -g) ~/.kube/config
 ```
 
+> **Important** : cette étape est indispensable. Sans elle, `kubectl` ne fonctionnera pas sans `sudo`, et les scripts qui utilisent `kubectl` en `sudo` échoueront avec `connection refused` sur `localhost:8080`.
+
 ### Helm
 
 ```bash
@@ -99,7 +101,7 @@ curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 ```bash
 git clone <url-du-dépôt> DocDockGo
-cd DocDockGo/Test/k8s
+cd DocDockGo/k8s
 ```
 
 ---
@@ -131,7 +133,6 @@ Répéter pour chaque registre (`registry-1.docker.io`, `ghcr.io`, `quay.io`) :
 ```bash
 REGISTRY="registry-1.docker.io"
 
-# Fichier de config openssl
 cat > ${REGISTRY}.cnf <<EOF
 [req]
 default_bits = 4096
@@ -150,7 +151,6 @@ subjectAltName = @alt_names
 DNS.1 = ${REGISTRY}
 EOF
 
-# Clé + CSR + signature
 openssl genrsa -out ${REGISTRY}.key 4096
 openssl req -new -key ${REGISTRY}.key -out ${REGISTRY}.csr -config ${REGISTRY}.cnf
 openssl x509 -req -in ${REGISTRY}.csr -CA myca.crt -CAkey myca.key \
@@ -171,17 +171,15 @@ quay.io.crt
 quay.io.key
 ```
 
-Revenir dans `Test/k8s/` :
+Revenir dans `k8s/` :
 
 ```bash
-cd ../../Test/k8s
+cd ../../k8s
 ```
 
 ---
 
 ## 6. Création du Secret Kubernetes des certificats
-
-Ce script lit le dossier `certs-mitm` et crée le Secret `proxy-certs` dans le namespace `docdockgo` :
 
 ```bash
 kubectl create namespace docdockgo --dry-run=client -o yaml | kubectl apply -f -
@@ -208,10 +206,15 @@ sudo chown -R 10001:10001 /data/docdockgo/quarantaine /data/docdockgo/cache
 
 ## 8. Configuration des valeurs secrètes
 
-Créer le fichier `values-secret.yaml` (jamais commité, déjà dans `.gitignore`) :
+Copier le fichier exemple et le remplir :
 
 ```bash
-cat > values-secret.yaml <<'EOF'
+cp docdockgo/values-secret.yaml.example values-secret.yaml
+```
+
+Éditer `values-secret.yaml` :
+
+```yaml
 postgres:
   credentials:
     password: <mot-de-passe-fort>
@@ -229,25 +232,38 @@ dashboard:
   oidc:
     issuer: "<url-issuer-oidc>"
     clientId: "<client-id-oidc>"
-    redirectUri: "http://<ip-noeud>:3010/callback"
-    postLogoutRedirectUri: "http://<ip-noeud>:3010/logged-out"
-EOF
+    redirectUri: "http://localhost:3010/callback"
+    postLogoutRedirectUri: "http://localhost:3010/logged-out"
 ```
+
+> **Note** : les `redirectUri` utilisent `localhost:3010` — ne pas mettre d'IP réseau ici. Vérifier que les mêmes URIs sont configurées dans votre IdP (Zitadel, Keycloak…).
+
+> **Sécurité** : `values-secret.yaml` est dans `.gitignore`. Ne jamais le committer.
 
 ---
 
 ## 9. Déploiement Helm
 
-```bash
-cd Test/k8s   # si pas déjà dans ce dossier
+### 9.1 Premier déploiement
 
+```bash
 helm install docdockgo ./docdockgo \
   -n docdockgo \
   -f docdockgo/values.yaml \
   -f values-secret.yaml
 ```
 
-Attendre que tous les pods soient prêts (le job `trivy-db-init` peut prendre 2-5 minutes) :
+> **Si le release existe déjà** (erreur `cannot re-use a name that is still in use`), utiliser `upgrade` à la place :
+> ```bash
+> helm upgrade docdockgo ./docdockgo \
+>   -n docdockgo \
+>   -f docdockgo/values.yaml \
+>   -f values-secret.yaml
+> ```
+
+### 9.2 Attendre que tous les pods soient prêts
+
+Le job `trivy-db-init` télécharge la base de données Trivy — cela peut prendre 2 à 5 minutes selon la connexion.
 
 ```bash
 kubectl get pods -n docdockgo -w
@@ -271,32 +287,59 @@ scanner-static-...                     1/1     Running     0
 trivy-db-init-...                      0/1     Completed   0
 ```
 
+> **Si `scanner-static` reste en `Pending`** : le PVC `trivy-db` est peut-être bloqué en `Terminating`. Forcer la suppression puis redémarrer :
+> ```bash
+> kubectl patch pvc trivy-db -n docdockgo -p '{"metadata":{"finalizers":null}}'
+> kubectl rollout restart deployment/scanner-static -n docdockgo
+> ```
+
+> **Rappel** : par défaut kubectl cible le namespace `default`. Toujours ajouter `-n docdockgo` ou définir le namespace par défaut une fois pour toutes :
+> ```bash
+> kubectl config set-context --current --namespace=docdockgo
+> ```
+
 ---
 
 ## 10. Configuration iptables
 
 Le proxy écoute sur le NodePort 30443. Il faut rediriger les ports système 443 (Docker/Podman) et 3010 (dashboard) vers ces NodePorts.
 
-### 10.1 Appliquer les règles
+### 10.1 Corriger le script pour sudo
+
+Le script `setup-iptables.sh` utilise `kubectl` en interne. Quand il est exécuté avec `sudo`, il ne trouve pas le kubeconfig automatiquement. Passer la variable explicitement :
 
 ```bash
-sudo bash scripts/setup-iptables.sh
+sudo KUBECONFIG=/home/<votre-user>/.kube/config bash scripts/setup-iptables.sh
+```
+
+### 10.2 Appliquer les règles
+
+```bash
+sudo KUBECONFIG=$HOME/.kube/config bash scripts/setup-iptables.sh
 ```
 
 Ce script :
 - Récupère automatiquement l'IP courante du pod proxy
 - Ajoute une règle DNAT `443 → <ip-pod>:8443` (clients externes uniquement)
 - Exclut le réseau pods k3s `10.42.0.0/16` pour éviter les boucles
-- Redirige `3010 → 30010` pour le dashboard
+- Redirige `3010 → 30010` pour le dashboard (trafic externe)
 
-### 10.2 Rendre les règles persistantes au reboot
+### 10.3 Ajouter la règle OUTPUT pour localhost
+
+Sans cette règle, `http://localhost:3010` ne fonctionne pas depuis la machine k3s elle-même (la règle PREROUTING ne s'applique pas au trafic local) :
+
+```bash
+sudo iptables -t nat -A OUTPUT -p tcp --dport 3010 -j REDIRECT --to-port 30010
+```
+
+### 10.4 Rendre les règles persistantes au reboot
 
 ```bash
 sudo apt install iptables-persistent -y
 sudo netfilter-persistent save
 ```
 
-> **Important** : si le pod proxy redémarre, son IP change. Relancer `sudo bash scripts/setup-iptables.sh` puis `sudo netfilter-persistent save`.
+> **Important** : si le pod proxy redémarre, son IP change. Relancer les étapes 10.1 et 10.4.
 
 ---
 
@@ -307,33 +350,24 @@ Sur **chaque machine** qui effectuera des `docker pull` ou `podman pull` via Doc
 ### Ubuntu / Debian
 
 ```bash
-# Copier myca.crt depuis le nœud k3s (ou le dépôt)
 sudo cp myca.crt /usr/local/share/ca-certificates/docdockgo-ca.crt
 sudo update-ca-certificates
 sudo systemctl restart docker   # si Docker
 ```
 
-### Configurer le registre Docker pour utiliser le proxy
+### Configurer Docker pour passer par le proxy
 
-Créer ou modifier `/etc/docker/daemon.json` :
-
-```json
-{
-  "insecure-registries": [],
-  "registry-mirrors": []
-}
-```
-
-Pointer Docker vers le proxy en configurant `/etc/hosts` ou le DNS pour que `registry-1.docker.io` resolve vers l'IP du nœud k3s :
+Pointer Docker vers le proxy en ajoutant l'IP du nœud k3s dans `/etc/hosts` :
 
 ```bash
 echo "<ip-noeud-k3s>  registry-1.docker.io" | sudo tee -a /etc/hosts
+echo "<ip-noeud-k3s>  ghcr.io" | sudo tee -a /etc/hosts
+echo "<ip-noeud-k3s>  quay.io" | sudo tee -a /etc/hosts
 ```
 
-Alternativement, configurer les clients pour utiliser le proxy HTTPS :
+Ou configurer le proxy HTTPS dans le service Docker :
 
 ```bash
-# Pour Docker
 sudo mkdir -p /etc/systemd/system/docker.service.d
 cat | sudo tee /etc/systemd/system/docker.service.d/proxy.conf <<EOF
 [Service]
@@ -342,13 +376,17 @@ EOF
 sudo systemctl daemon-reload && sudo systemctl restart docker
 ```
 
-### Ajouter l'IP du client dans la base DocDockGo
+### Enregistrer le premier utilisateur
 
-Le proxy n'autorise que les IPs enregistrées dans la table `users`. Se connecter à PostgreSQL depuis le nœud k3s :
+L'accès au dashboard est géré via OIDC (Zitadel, Keycloak…). La table `users` est alimentée automatiquement lors du premier login OIDC — **il n'est pas nécessaire d'insérer manuellement un utilisateur**.
+
+Se connecter une première fois sur `http://localhost:3010` depuis le nœud k3s pour déclencher la création du compte en base.
+
+Pour mettre à jour les IPs autorisées d'un utilisateur après son premier login :
 
 ```bash
 kubectl exec -n docdockgo postgres-0 -- psql -U docdockgo_admin -d docdockgo \
-  -c "INSERT INTO users (ip, label) VALUES ('<ip-client>', 'nom-machine') ON CONFLICT DO NOTHING;"
+  -c "UPDATE users SET allowed_ips = ARRAY['<ip-client>'] WHERE username = '<username>';"
 ```
 
 ---
@@ -395,6 +433,18 @@ llm-decision en écoute sur http://0.0.0.0:3005
 
 ## 13. Utilisation
 
+### Accéder au dashboard
+
+Ouvrir `http://localhost:3010` dans un navigateur depuis le nœud k3s.
+
+Le dashboard est accessible sans port-forward grâce à la règle iptables OUTPUT ajoutée à l'étape 10.3.
+
+Le dashboard affiche :
+- Historique des pulls (ALLOW / DENY / PENDING)
+- Détail des scans par image (score LLM, findings compliance, CVEs)
+- Whitelist / blacklist
+- Statistiques
+
 ### Effectuer un pull sécurisé
 
 Depuis un client configuré :
@@ -419,16 +469,6 @@ podman pull alpine:latest
 3. **Image DENY** :
    - `403 Image refusée` — l'image est blacklistée, les pulls ultérieurs seront refusés directement
 
-### Consulter le dashboard
-
-Ouvrir `http://<ip-noeud>:3010` dans un navigateur depuis une IP autorisée.
-
-Le dashboard affiche :
-- Historique des pulls (ALLOW / DENY / PENDING)
-- Détail des scans par image (score LLM, findings compliance, CVEs)
-- Whitelist / blacklist
-- Statistiques
-
 ### Consulter les décisions en base
 
 ```bash
@@ -448,17 +488,32 @@ kubectl exec -n docdockgo postgres-0 -- psql -U docdockgo_admin -d docdockgo \
   -c "DELETE FROM blacklist WHERE registry='registry-1.docker.io' AND repository='library/alpine';"
 ```
 
+### Accéder à la base de données (Adminer ou psql)
+
+PostgreSQL est exposé en ClusterIP uniquement. Pour y accéder depuis l'extérieur du cluster, utiliser un port-forward :
+
+```bash
+kubectl port-forward -n docdockgo svc/postgres 5432:5432
+```
+
+Puis se connecter avec :
+- Serveur : `127.0.0.1`
+- Port : `5432`
+- Utilisateur : `docdockgo_admin`
+- Mot de passe : (celui défini dans `values-secret.yaml`)
+- Base de données : `docdockgo`
+
 ---
 
 ## 14. Ajouter un nouveau registre
 
-Exemple : ajouter `quay.io` si absent.
+Exemple : ajouter `mon-registre.example.com`.
 
 ### 14.1 Générer le certificat
 
 ```bash
 cd proxy/certs-mitm
-REGISTRY="quay.io"
+REGISTRY="mon-registre.example.com"
 
 cat > ${REGISTRY}.cnf <<EOF
 [req]
@@ -487,21 +542,21 @@ openssl x509 -req -in ${REGISTRY}.csr -CA myca.crt -CAkey myca.key \
 
 ### 14.2 Ajouter au whitelist du proxy
 
-Éditer `Test/k8s/docdockgo/files/registry_whitelist.json` :
+Éditer `k8s/docdockgo/files/registry_whitelist.json` :
 
 ```json
 [
   "registry-1.docker.io",
   "ghcr.io",
   "quay.io",
-  "mon-nouveau-registre.example.com"
+  "mon-registre.example.com"
 ]
 ```
 
 ### 14.3 Mettre à jour le Secret et redéployer
 
 ```bash
-cd Test/k8s
+cd k8s
 bash scripts/create-certs-secret.sh docdockgo
 
 helm upgrade docdockgo ./docdockgo \
@@ -517,14 +572,13 @@ helm upgrade docdockgo ./docdockgo \
 ### Mettre à jour les règles iptables après redémarrage du pod proxy
 
 ```bash
-sudo bash Test/k8s/scripts/setup-iptables.sh
+sudo KUBECONFIG=$HOME/.kube/config bash scripts/setup-iptables.sh
 sudo netfilter-persistent save
 ```
 
 ### Mettre à jour le chart Helm
 
 ```bash
-cd Test/k8s
 helm upgrade docdockgo ./docdockgo \
   -n docdockgo \
   -f docdockgo/values.yaml \
