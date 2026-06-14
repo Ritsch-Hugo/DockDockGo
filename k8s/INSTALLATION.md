@@ -232,11 +232,11 @@ dashboard:
   oidc:
     issuer: "<url-issuer-oidc>"
     clientId: "<client-id-oidc>"
-    redirectUri: "http://localhost:3010/callback"
-    postLogoutRedirectUri: "http://localhost:3010/logged-out"
+    redirectUri: "http://localhost:30010/callback"
+    postLogoutRedirectUri: "http://localhost:30010/logged-out"
 ```
 
-> **Note** : les `redirectUri` utilisent `localhost:3010` — ne pas mettre d'IP réseau ici. Vérifier que les mêmes URIs sont configurées dans votre IdP (Zitadel, Keycloak…).
+> **Note** : les `redirectUri` utilisent `localhost:3010` — ne pas mettre d'IP réseau ici. Vérifier que les mêmes URIs sont configurées dans votre IdP (Zitadel).
 
 > **Sécurité** : `values-secret.yaml` est dans `.gitignore`. Ne jamais le committer.
 
@@ -322,7 +322,7 @@ sudo apt install iptables-persistent -y
 sudo netfilter-persistent save
 ```
 
-> **Important** : si le pod proxy redémarre, son IP change. Relancer les étapes 10.1 et 10.4.
+> **Important** : si le pod proxy redémarre, son IP change. Relancer les étapes 10.1 et 10.2.
 
 ---
 
@@ -357,7 +357,7 @@ Le fichier doit ressembler a ça :
 
 L'accès au dashboard est géré via OIDC (Zitadel, Keycloak…). La table `users` est alimentée automatiquement lors du premier login OIDC — **il n'est pas nécessaire d'insérer manuellement un utilisateur**.
 
-Se connecter une première fois sur `http://localhost:3010` depuis le nœud k3s pour déclencher la création du compte en base.
+Se connecter une première fois sur `http://localhost:30010` depuis le nœud k3s pour déclencher la création du compte en base.
 
 Pour mettre à jour les IPs autorisées d'un utilisateur **après son premier login** :
 
@@ -413,8 +413,6 @@ llm-decision en écoute sur http://0.0.0.0:3005
 ### Accéder au dashboard
 
 Ouvrir `http://localhost:30010` dans un navigateur depuis le nœud k3s.
-
-Le dashboard est accessible sans port-forward grâce à la règle iptables OUTPUT ajoutée à l'étape 10.3.
 
 Le dashboard affiche :
 - Historique des pulls (ALLOW / DENY / PENDING)
