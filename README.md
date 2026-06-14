@@ -1,4 +1,10 @@
-# DocDockGo — Environnement de test
+# DocDockGo — Environnement de test (docker compose)
+
+
+### Pour le Deployment en production via Kubernetes veuillez suivre le fichier INSTALLATION.md dans le dossier k8s/
+
+
+
 
 ## Prérequis
 
