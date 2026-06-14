@@ -5,6 +5,8 @@
 # Ré-exécuter après un redémarrage du pod proxy (l'IP change).
 
 set -euo pipefail
+export KUBECONFIG="${KUBECONFIG:-/home/camille/.kube/config}"
+KUBECONFIG="${KUBECONFIG:-/home/camille/.kube/config}"
 
 NAMESPACE="docdockgo"
 
