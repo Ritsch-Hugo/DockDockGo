@@ -38,7 +38,9 @@ Avant de commencer, obtenir :
 
 ## 4. Variables d'environnement
 
-Il faut ajouter manuellement les variables d'environement pour chaques services directement dans leurs dossier. Il y a aussi le .env global present a la racine. Chaques dossiers qui doivent contenir leur fichier .env on un .env.exemple pour aider à remplir. La documentation des exemples .env se trouve aussi dans le fichier exemple_var_env.md.
+Il faut ajouter manuellement les variables d’environnement pour chaque service, directement dans leur dossier respectif. Un fichier .env global est également présent à la racine du projet.
+
+Chaque dossier nécessitant un fichier .env contient un .env.exemple pour guider la configuration.
 
 ---
 
@@ -181,13 +183,18 @@ Le fichier doit ressembler a ça :
 
 L'accès au dashboard est géré via OIDC (Zitadel, Keycloak…). La table `users` est alimentée automatiquement lors du premier login OIDC — **il n'est pas nécessaire d'insérer manuellement un utilisateur**.
 
-Se connecter une première fois sur `http://localhost:3010` depuis le nœud k3s pour déclencher la création du compte en base.
+Se connecter une première fois sur `http://localhost:3010` pour déclencher la création du compte en base.
 
 Pour mettre à jour les IPs autorisées d'un utilisateur **après son premier login** :
 
 ```bash
-kubectl exec -n docdockgo postgres-0 -- psql -U docdockgo_admin -d docdockgo \
-  -c "UPDATE users SET allowed_ips = ARRAY['<ip-client>'] WHERE username = '<username>';"
+#login
+psql -U docdockgo_admin -d docdockgo -h localhost
+
+#Ajouter l'ip souhaitée en whitelist
+UPDATE users
+SET allowed_ips = allowed_ips || ARRAY['192.168.1.27']
+WHERE username = 'rssi';
 ```
 
 ### 8.4 Lancer un pull
