@@ -38,10 +38,13 @@ Avant de commencer, obtenir :
 
 Il faut ajouter manuellement les variables d'environement pour chaques services directement dans leurs dossier. Il y a aussi le .env global present a la racine. Chaques dossiers qui doivent contenir leur fichier .env on un .env.exemple pour aider à remplir. La documentation des exemples .env se trouve aussi dans le fichier exemple_var_env.md.
 
+---
+
 ## 5. Génération des certificats TLS MITM
 
 Le proxy effectue du TLS MITM : il faut une CA personnelle et un certificat par registre intercepté.  
 Les registres par défaut sont : `registry-1.docker.io`, `ghcr.io`, `quay.io`.
+
 
 ### 5.1 Créer le dossier des certificats
 
@@ -105,19 +108,21 @@ quay.io.key
 ---
 
 
-## 6. Démarrer les services
+## 6. Démarrage / Arrêt
+
+### 6.1 Démarrer les services 
 
 ```bash
 docker compose up -d
 ```
 
-## 7. Arrêter les services
+### 6.2 Arrêter les services
 
 ```bash
 docker compose down
 ```
 
-## 8. Suivre les logs en live
+### 6.3 Suivre les logs en live
 
 ```bash
 docker compose logs -f
@@ -127,7 +132,7 @@ docker compose logs -f proxy
 
 ---
 
-## 9. Services et ports
+## 7. Services et ports
 
 | Service            | Port  | Rôle                                      |
 |--------------------|-------|-------------------------------------------|
@@ -143,13 +148,11 @@ docker compose logs -f proxy
 
 ---
 
-## 10. Tester un pull Docker via le proxy
+## 8. Tester un pull Docker via le proxy
 
-## 10.1 Confiance en le CA sur les clients
+### 8.1 Confiance en le CA sur les clients
 
 Sur **chaque machine** qui effectuera des `docker pull` ou `podman pull` via DocDockGo :
-
-### Ubuntu / Debian
 
 Mettre le certificat CA sur la machine client pour que celle ci fasse confiance au proxy
 
@@ -159,7 +162,7 @@ sudo update-ca-certificates
 sudo systemctl restart docker   # si Docker
 ```
 
-### 10.2 Configurer Docker pour passer par le proxy
+### 8.2 Configurer Docker pour passer par le proxy
 
 Pointer Docker vers le proxy en ajoutant l'IP du nœud k3s dans `/etc/hosts` :
 Le fichier doit ressembler a ça : 
@@ -172,7 +175,7 @@ Le fichier doit ressembler a ça :
 ```
 
 
-### 10.3 Enregistrer le premier utilisateur
+### 8.3 Enregistrer le premier utilisateur
 
 L'accès au dashboard est géré via OIDC (Zitadel, Keycloak…). La table `users` est alimentée automatiquement lors du premier login OIDC — **il n'est pas nécessaire d'insérer manuellement un utilisateur**.
 
@@ -185,7 +188,7 @@ kubectl exec -n docdockgo postgres-0 -- psql -U docdockgo_admin -d docdockgo \
   -c "UPDATE users SET allowed_ips = ARRAY['<ip-client>'] WHERE username = '<username>';"
 ```
 
-### 10.4 Lancer un pull
+### 8.4 Lancer un pull
 
 ```bash
 docker pull hello-world
@@ -198,7 +201,7 @@ docker compose logs -f proxy orchestrateur llm-decision
 ```
 ---
 
-## 11. Registries supportés
+## 9. Registries supportés
 
 Définis dans `proxy/registry_whitelist.json` et couverts par les certificats dans `proxy/certs-mitm/` :
 
