@@ -40,7 +40,7 @@ Avant de commencer, obtenir :
 
 Il faut ajouter manuellement les variables d’environnement pour chaque service, directement dans leur dossier respectif. Un fichier .env global est également présent à la racine du projet.
 
-Chaque dossier nécessitant un fichier .env contient un .env.exemple pour guider la configuration.
+Chaque dossier nécessitant un fichier .env contient un .env.example pour guider la configuration.
 
 ---
 
