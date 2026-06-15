@@ -4,6 +4,8 @@
 ### Pour le Deployment en production via Kubernetes veuillez suivre le fichier INSTALLATION.md dans le dossier k8s/
 
 
+---
+
 
 ## 1. Prérequis
 
@@ -168,9 +170,9 @@ Pointer Docker vers le proxy en ajoutant l'IP du nœud k3s dans `/etc/hosts` :
 Le fichier doit ressembler a ça : 
 
 ```bash
-<ip-noeud-k3s> registry-1.docker.io
-<ip-noeud-k3s> ghcr.io
-<ip-noeud-k3s> quay.io
+<ip-proxy> registry-1.docker.io
+<ip-proxy> ghcr.io
+<ip-proxy> quay.io
 ...
 ```
 
